@@ -53,3 +53,13 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# TASKING Build Output
+TriCore Debug (TASKING)/
+*.o
+*.src
+*.d
+*.elf
+*.hex
+*.map
+*.siz
