@@ -4,6 +4,7 @@
 #include "Ifx_Cfg_Ssw.h"
 #include "IfxPort.h"
 #include "IfxStm.h"
+#include "Uart.h"
 
 IFX_ALIGN(4) IfxCpu_syncEvent cpuSyncEvent = 0;
 
@@ -17,6 +18,9 @@ int core0_main(void)
     IfxCpu_enableInterrupts();
     IfxScuWdt_disableCpuWatchdog(IfxScuWdt_getCpuWatchdogPassword());
     IfxScuWdt_disableSafetyWatchdog(IfxScuWdt_getSafetyWatchdogPassword());
+
+    Uart_init();
+    Uart_println("CPU0 started");
 
     IfxPort_setPinMode(BLINKY_LED_PORT, BLINKY_LED_PIN, IfxPort_Mode_outputPushPullGeneral);
 
