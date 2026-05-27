@@ -39,9 +39,12 @@
 #define BLINKY_LED_OFF      IfxPort_State_high
 
 extern IfxCpu_syncEvent cpuSyncEvent;
+extern volatile uint32 g_ledPhase;  /* 0 = CPU0–3 active, 1 = CPU4–5 active */
 
 void core2_main(void)
 {
+    uint32 i;
+
     IfxCpu_enableInterrupts();
 
     /* !!WATCHDOG2 IS DISABLED HERE!!
@@ -59,11 +62,34 @@ void core2_main(void)
     IfxPort_setPinMode(BLINKY_LED_PORT, BLINKY_LED_PIN,
                        IfxPort_Mode_outputPushPullGeneral);
 
+    /* 300 ms grace at the start of phase 0 creates a visible dark gap and
+     * aligns this core's 1300 ms blink cycle (grace + ON + OFF =
+     * 300 + 500 + 500 ms) with CPU0's phase 0 duration (also 1300 ms).
+     * Without the alignment the core re-asserts LED_ON briefly before
+     * phase 1 is set — creating a visible glitch flash. */
     while(1)
     {
-        IfxPort_setPinState(BLINKY_LED_PORT, BLINKY_LED_PIN, BLINKY_LED_ON);
-        IfxStm_waitTicks(&MODULE_STM2, 50000000u);
-        IfxPort_setPinState(BLINKY_LED_PORT, BLINKY_LED_PIN, BLINKY_LED_OFF);
-        IfxStm_waitTicks(&MODULE_STM2, 50000000u);
+        if (g_ledPhase == 0u)
+        {
+            /* 300 ms grace — align with CPU0's phase boundary */
+            for (i = 0u; i < 30u && g_ledPhase == 0u; i++)
+                IfxStm_waitTicks(&MODULE_STM2, 1000000u);
+
+            /* ON half — exit the loop early if the phase flips */
+            IfxPort_setPinState(BLINKY_LED_PORT, BLINKY_LED_PIN, BLINKY_LED_ON);
+            for (i = 0u; i < 50u && g_ledPhase == 0u; i++)
+                IfxStm_waitTicks(&MODULE_STM2, 1000000u);   /* 10 ms per sub-tick */
+
+            /* OFF half — exit the loop early if the phase flips */
+            IfxPort_setPinState(BLINKY_LED_PORT, BLINKY_LED_PIN, BLINKY_LED_OFF);
+            for (i = 0u; i < 50u && g_ledPhase == 0u; i++)
+                IfxStm_waitTicks(&MODULE_STM2, 1000000u);
+        }
+        else
+        {
+            /* CPU4–5 window — release LED, poll every 10 ms */
+            IfxPort_setPinState(BLINKY_LED_PORT, BLINKY_LED_PIN, BLINKY_LED_OFF);
+            IfxStm_waitTicks(&MODULE_STM2, 1000000u);
+        }
     }
 }

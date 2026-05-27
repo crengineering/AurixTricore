@@ -67,6 +67,14 @@ Set in the TASKING compiler preprocessing symbols. Without it, `IfxPort.c` takes
 
 ---
 
+## Git Workflow Rules
+
+**Never run `git commit` or `git push` unless the user explicitly asks.**
+Make code changes, describe what was done, and wait. Only commit/push when
+the user gives a direct instruction such as "commit", "push", or "commit and push".
+
+---
+
 ## Commit Message Style Guide
 
 This project follows **Conventional Commits** (`type(scope): description`).

@@ -77,12 +77,14 @@ Blinky_TC300/
 ├── Libraries/
 │   ├── iLLD/               # Infineon Low-Level Driver (auto-generated)
 │   └── Infra/              # Startup software (SSW)
-├── Cpu0_Main.c             # Core 0 main program (Blinky)
-├── Cpu1_Main.c             # Cores 1–5 (watchdog disable, sync)
-├── Cpu2_Main.c
-├── Cpu3_Main.c
-├── Cpu4_Main.c
-└── Cpu5_Main.c
+├── Cpu0_Main.c             # Core 0 — phase master, blinks D306 (P20.11)
+├── Cpu1_Main.c             # Core 1 — blinks D307 (P20.12), shared with CPU5
+├── Cpu2_Main.c             # Core 2 — blinks D308 (P20.13)
+├── Cpu3_Main.c             # Core 3 — blinks D309 (P20.14)
+├── Cpu4_Main.c             # Core 4 — borrows D306 (P20.11) during phase 1
+├── Cpu5_Main.c             # Core 5 — borrows D307 (P20.12) during phase 1
+├── Uart.h                  # UART helper API (ASCLIN0 / X109)
+└── Uart.c                  # Blocking UART init + print via ASCLIN0
 ```
 
 ---
@@ -91,14 +93,42 @@ Blinky_TC300/
 
 ### LED Mapping
 
-| LED | Pin | Active |
-|---|---|---|
-| D306 | P20.11 | LOW (active-low) |
-| D307 | P20.12 | LOW (active-low) |
-| D308 | P20.13 | LOW (active-low) |
-| D309 | P20.14 | LOW (active-low) |
+The TC399 TriBoard has four user LEDs (D306–D309). All six cores are given LED
+health indication via a **time-division multiplexing** scheme: CPU0–3 blink their
+own dedicated (or borrowed) LED during phase 0; CPU4–5 borrow two of the same
+LEDs during phase 1.
 
-This Blinky program uses **D306 (P20.11)**.
+| LED | Pin | Phase 0 owner | Phase 1 owner |
+|---|---|---|---|
+| D306 | P20.11 | CPU0 (dedicated) | CPU4 (borrowed) |
+| D307 | P20.12 | CPU1 (dedicated) | CPU5 (borrowed) |
+| D308 | P20.13 | CPU2 (dedicated) | — (off) |
+| D309 | P20.14 | CPU3 (dedicated) | — (off) |
+
+All LEDs are **active-low** (pin LOW = LED on).
+
+### Blink Pattern
+
+One full cycle lasts **1 800 ms** and repeats continuously:
+
+```
+|← 500 ms →|←── 300 ms ──→|← 500 ms →|← 500 ms →|
+  CPU4+5 ON    all dark      CPU0–3 ON   all dark
+  (D306+D307)  (pause)       (D306–D309)
+```
+
+| Window | Duration | Visible |
+|---|---|---|
+| Phase 1 — CPU4+5 ON | 500 ms | D306 + D307 lit |
+| Grace pause (all dark) | 300 ms | All 4 LEDs off (visible gap between groups) |
+| Phase 0 ON — CPU0–3 | 500 ms | D306 + D307 + D308 + D309 lit |
+| Phase 0 OFF — CPU0–3 | 500 ms | All 4 LEDs off |
+
+**Pin-sharing rules** — only the active owner writes to a shared pin; the idle
+core polls `g_ledPhase` without touching GPIO. CPU0 is the phase timing master
+and writes `g_ledPhase` (declared `volatile uint32`). The 300 ms grace period
+ensures the phase-1 cores finish their LED_OFF handover write before the
+phase-0 cores assert LED_ON on the shared pins.
 
 ### Key Findings
 
@@ -137,46 +167,22 @@ IfxScuWdt_disableCpuWatchdog(IfxScuWdt_getCpuWatchdogPassword());
 IfxScuWdt_disableSafetyWatchdog(IfxScuWdt_getSafetyWatchdogPassword());
 ```
 
----
+### UART Debug Output
 
-## Full Source Code (Cpu0_Main.c)
+A blocking UART wrapper (`Uart.h` / `Uart.c`) is provided for runtime debug output
+over **ASCLIN0**, routed to the onboard **X109 USB-to-UART** connector.
 
-```c
-#include "Ifx_Types.h"
-#include "IfxCpu.h"
-#include "IfxScuWdt.h"
-#include "Ifx_Cfg_Ssw.h"
-#include "IfxPort.h"
-#include "IfxStm.h"
+| Setting | Value |
+|---|---|
+| Peripheral | ASCLIN0 |
+| TX pin | P14.0 (`IfxAsclin0_TX_P14_0_OUT`) |
+| RX pin | P14.1 (`IfxAsclin0_RXA_P14_1_IN`) |
+| Connector | X109 (appears as a COM port on the PC) |
+| Baud rate | 115 200, 8N1, no flow control |
 
-IFX_ALIGN(4) IfxCpu_syncEvent cpuSyncEvent = 0;
-
-#define BLINKY_LED_PORT     &MODULE_P20
-#define BLINKY_LED_PIN      11u                  /* P20.11 = D306 (blue) */
-#define BLINKY_LED_ON       IfxPort_State_low    /* active-low: LOW = on */
-#define BLINKY_LED_OFF      IfxPort_State_high   /* active-low: HIGH = off */
-
-#define STM_TICKS_500MS     50000000u            /* ~500ms at ~100MHz STM clock */
-
-int core0_main(void)
-{
-    IfxCpu_enableInterrupts();
-    IfxScuWdt_disableCpuWatchdog(IfxScuWdt_getCpuWatchdogPassword());
-    IfxScuWdt_disableSafetyWatchdog(IfxScuWdt_getSafetyWatchdogPassword());
-
-    IfxPort_setPinMode(BLINKY_LED_PORT, BLINKY_LED_PIN, IfxPort_Mode_outputPushPullGeneral);
-
-    while (TRUE)
-    {
-        IfxPort_setPinState(BLINKY_LED_PORT, BLINKY_LED_PIN, BLINKY_LED_ON);
-        IfxStm_waitTicks(&MODULE_STM0, STM_TICKS_500MS);
-        IfxPort_setPinState(BLINKY_LED_PORT, BLINKY_LED_PIN, BLINKY_LED_OFF);
-        IfxStm_waitTicks(&MODULE_STM0, STM_TICKS_500MS);
-    }
-
-    return 0;
-}
-```
+On reset, each core prints its startup message (e.g. `CPU0 started`) once it passes
+the multi-core sync barrier. Connect any serial terminal (PuTTY, Tera Term, …) to the
+X109 COM port at 115 200 baud to observe the output.
 
 ---
 

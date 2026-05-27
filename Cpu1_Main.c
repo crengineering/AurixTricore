@@ -39,9 +39,12 @@
 #define BLINKY_LED_OFF      IfxPort_State_high
 
 extern IfxCpu_syncEvent cpuSyncEvent;
+extern volatile uint32 g_ledPhase;  /* 0 = CPU0–3 active, 1 = CPU4–5 active */
 
 void core1_main(void)
 {
+    uint32 i;
+
     IfxCpu_enableInterrupts();
 
     /* !!WATCHDOG1 IS DISABLED HERE!!
@@ -59,11 +62,34 @@ void core1_main(void)
     IfxPort_setPinMode(BLINKY_LED_PORT, BLINKY_LED_PIN,
                        IfxPort_Mode_outputPushPullGeneral);
 
+    /* P20.12 is shared with CPU5 (which drives it during phase 1).
+     * Rules: only write to the pin when we own it (phase 0).
+     * In phase 1 just poll — any write would fight CPU5. */
     while(1)
     {
-        IfxPort_setPinState(BLINKY_LED_PORT, BLINKY_LED_PIN, BLINKY_LED_ON);
-        IfxStm_waitTicks(&MODULE_STM1, 50000000u);
-        IfxPort_setPinState(BLINKY_LED_PORT, BLINKY_LED_PIN, BLINKY_LED_OFF);
-        IfxStm_waitTicks(&MODULE_STM1, 50000000u);
+        if (g_ledPhase == 0u)
+        {
+            /* 300 ms grace: visible dark gap + ensures CPU5 LED_OFF lands
+             * before we assert ON on shared P20.12. Also aligns this core's
+             * 1300 ms blink cycle (grace + ON + OFF) with CPU0's phase 0
+             * duration (300 + 500 + 500 = 1300 ms). */
+            for (i = 0u; i < 30u && g_ledPhase == 0u; i++)
+                IfxStm_waitTicks(&MODULE_STM1, 1000000u);
+
+            /* ON half — exit the loop early if the phase flips */
+            IfxPort_setPinState(BLINKY_LED_PORT, BLINKY_LED_PIN, BLINKY_LED_ON);
+            for (i = 0u; i < 50u && g_ledPhase == 0u; i++)
+                IfxStm_waitTicks(&MODULE_STM1, 1000000u);   /* 10 ms per sub-tick */
+
+            /* OFF half — exit the loop early if the phase flips */
+            IfxPort_setPinState(BLINKY_LED_PORT, BLINKY_LED_PIN, BLINKY_LED_OFF);
+            for (i = 0u; i < 50u && g_ledPhase == 0u; i++)
+                IfxStm_waitTicks(&MODULE_STM1, 1000000u);
+        }
+        else
+        {
+            /* Phase 1: CPU5 owns P20.12 — do NOT write to the pin; just poll */
+            IfxStm_waitTicks(&MODULE_STM1, 1000000u);
+        }
     }
 }

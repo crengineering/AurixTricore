@@ -28,12 +28,24 @@
 #include "IfxCpu.h"
 #include "IfxScuWdt.h"
 #include "Ifx_Cfg_Ssw.h"
+#include "IfxPort.h"
+#include "IfxStm.h"
 #include "Uart.h"
 
+/* LED for CPU5 — borrows D307, Pin P20.12, active-low (shared with CPU1).
+ * CPU1 guarantees its pin is HIGH (off) during phase 1. */
+#define BLINKY_LED_PORT     &MODULE_P20
+#define BLINKY_LED_PIN      12u
+#define BLINKY_LED_ON       IfxPort_State_low
+#define BLINKY_LED_OFF      IfxPort_State_high
+
 extern IfxCpu_syncEvent cpuSyncEvent;
+extern volatile uint32 g_ledPhase;  /* 0 = CPU0–3 active, 1 = CPU4–5 active */
 
 void core5_main(void)
 {
+    uint32 i;
+
     IfxCpu_enableInterrupts();
 
     /* !!WATCHDOG5 IS DISABLED HERE!!
@@ -47,7 +59,30 @@ void core5_main(void)
 
     Uart_println("CPU5 started");
 
+    /* Pin already configured as output by CPU1; configure it here too so
+     * CPU5 can also drive it safely when it borrows the LED in phase 1. */
+    IfxPort_setPinMode(BLINKY_LED_PORT, BLINKY_LED_PIN,
+                       IfxPort_Mode_outputPushPullGeneral);
+
+    /* P20.12 is shared with CPU1 (which drives it during phase 0).
+     * Rules: only write to the pin when we own it (phase 1).
+     * In phase 0 just poll — any write would fight CPU1. */
     while(1)
     {
+        if (g_ledPhase == 1u)
+        {
+            /* CPU4–5 window — flash ON for up to 500 ms, abort if phase flips */
+            IfxPort_setPinState(BLINKY_LED_PORT, BLINKY_LED_PIN, BLINKY_LED_ON);
+            for (i = 0u; i < 50u && g_ledPhase == 1u; i++)
+                IfxStm_waitTicks(&MODULE_STM5, 1000000u);   /* 10 ms per sub-tick */
+            /* Always write LED_OFF on exit: CPU1 waits a 20 ms grace period
+             * before asserting ON, so this write lands safely before CPU1. */
+            IfxPort_setPinState(BLINKY_LED_PORT, BLINKY_LED_PIN, BLINKY_LED_OFF);
+        }
+        else
+        {
+            /* Phase 0: CPU1 owns P20.12 — do NOT write to the pin; just poll */
+            IfxStm_waitTicks(&MODULE_STM5, 1000000u);
+        }
     }
 }
