@@ -2,13 +2,12 @@
  * \file Uart.c
  * \brief Blocking UART debug output via ASCLIN0 (X109 USB-to-UART).
  *
- * IfxAsclin_Asc_initModule is used only for hardware setup (baud rate, frame format,
- * pin mux). Transmission bypasses the iLLD software FIFO entirely and writes directly
- * to the hardware TX FIFO using IfxAsclin_writeTxData / IfxAsclin_getTxFifoFillLevel.
+ * All six cores share this module. A spinlock (IfxCpu_acquireMutex) serialises
+ * concurrent Uart_print / Uart_println calls so messages never interleave.
  *
- * Why: IfxAsclin_Asc_blockingWrite -> IfxAsclin_Asc_write -> Ifx_Fifo_write with
- * TIME_INFINITE. Without a software TX buffer the Ifx_Fifo is never initialised, so
- * Ifx_Fifo_write blocks forever — hanging CPU0 before it reaches the LED blink loop.
+ * Transmission bypasses the iLLD software FIFO: uart_putchar polls the 16-entry
+ * hardware TX FIFO fill level (IfxAsclin_getTxFifoFillLevel) and writes directly
+ * via IfxAsclin_writeTxData. No TX interrupt or software buffer needed.
  *
  * Hardware:  ASCLIN0, TX = P14.0, RX = P14.1
  * Baud rate: 115200 8N1 (iLLD default)
@@ -16,8 +15,10 @@
 #include "Uart.h"
 #include "IfxAsclin_Asc.h"
 #include "IfxAsclin.h"
+#include "IfxCpu.h"
 
-static IfxAsclin_Asc g_asclin;
+static IfxAsclin_Asc             g_asclin;
+static volatile IfxCpu_mutexLock g_uartMutex = 0u;
 
 void Uart_init(void)
 {
@@ -45,10 +46,9 @@ void Uart_init(void)
     IfxAsclin_Asc_initModule(&g_asclin, &config);
 }
 
-/** Write one byte directly to the hardware TX FIFO (no software FIFO, no ISR). */
+/** Write one byte directly to the hardware TX FIFO (unlocked — callers must hold g_uartMutex). */
 static void uart_putchar(uint8 c)
 {
-    /* Wait until the 16-entry hardware TX FIFO has at least one free slot */
     while (IfxAsclin_getTxFifoFillLevel(&MODULE_ASCLIN0) >= 16u)
     {}
     IfxAsclin_writeTxData(&MODULE_ASCLIN0, (uint32)c);
@@ -56,15 +56,24 @@ static void uart_putchar(uint8 c)
 
 void Uart_print(const char *str)
 {
+    while (!IfxCpu_acquireMutex((IfxCpu_mutexLock *)&g_uartMutex))
+    {}
     while (*str)
     {
         uart_putchar((uint8)*str++);
     }
+    IfxCpu_releaseMutex((IfxCpu_mutexLock *)&g_uartMutex);
 }
 
 void Uart_println(const char *str)
 {
-    Uart_print(str);
+    while (!IfxCpu_acquireMutex((IfxCpu_mutexLock *)&g_uartMutex))
+    {}
+    while (*str)
+    {
+        uart_putchar((uint8)*str++);
+    }
     uart_putchar('\r');
     uart_putchar('\n');
+    IfxCpu_releaseMutex((IfxCpu_mutexLock *)&g_uartMutex);
 }

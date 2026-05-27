@@ -30,6 +30,7 @@
 #include "Ifx_Cfg_Ssw.h"
 #include "IfxPort.h"
 #include "IfxStm.h"
+#include "Uart.h"
 
 /* LED for CPU2 — D308, Pin P20.13, active-low */
 #define BLINKY_LED_PORT     &MODULE_P20
@@ -51,6 +52,8 @@ void core2_main(void)
     /* Wait for CPU sync event */
     IfxCpu_emitEvent(&cpuSyncEvent);
     IfxCpu_waitEvent(&cpuSyncEvent, 10);
+
+    Uart_println("CPU2 started");
 
     /* Configure LED pin as push-pull output */
     IfxPort_setPinMode(BLINKY_LED_PORT, BLINKY_LED_PIN,

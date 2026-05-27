@@ -28,6 +28,7 @@
 #include "IfxCpu.h"
 #include "IfxScuWdt.h"
 #include "Ifx_Cfg_Ssw.h"
+#include "Uart.h"
 
 extern IfxCpu_syncEvent cpuSyncEvent;
 
@@ -43,6 +44,8 @@ void core5_main(void)
     /* Wait for CPU sync event */
     IfxCpu_emitEvent(&cpuSyncEvent);
     IfxCpu_waitEvent(&cpuSyncEvent, 10);
+
+    Uart_println("CPU5 started");
 
     while(1)
     {
