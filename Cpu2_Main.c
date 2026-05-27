@@ -28,6 +28,14 @@
 #include "IfxCpu.h"
 #include "IfxScuWdt.h"
 #include "Ifx_Cfg_Ssw.h"
+#include "IfxPort.h"
+#include "IfxStm.h"
+
+/* LED for CPU2 — D308, Pin P20.13, active-low */
+#define BLINKY_LED_PORT     &MODULE_P20
+#define BLINKY_LED_PIN      13u
+#define BLINKY_LED_ON       IfxPort_State_low
+#define BLINKY_LED_OFF      IfxPort_State_high
 
 extern IfxCpu_syncEvent cpuSyncEvent;
 
@@ -44,7 +52,15 @@ void core2_main(void)
     IfxCpu_emitEvent(&cpuSyncEvent);
     IfxCpu_waitEvent(&cpuSyncEvent, 10);
 
+    /* Configure LED pin as push-pull output */
+    IfxPort_setPinMode(BLINKY_LED_PORT, BLINKY_LED_PIN,
+                       IfxPort_Mode_outputPushPullGeneral);
+
     while(1)
     {
+        IfxPort_setPinState(BLINKY_LED_PORT, BLINKY_LED_PIN, BLINKY_LED_ON);
+        IfxStm_waitTicks(&MODULE_STM2, 50000000u);
+        IfxPort_setPinState(BLINKY_LED_PORT, BLINKY_LED_PIN, BLINKY_LED_OFF);
+        IfxStm_waitTicks(&MODULE_STM2, 50000000u);
     }
 }
