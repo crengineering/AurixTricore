@@ -2,22 +2,24 @@
 #include "IfxCpu.h"
 #include "IfxScuWdt.h"
 #include "Ifx_Cfg_Ssw.h"
-#include "IfxPort.h"
-#include "IfxStm.h"
 #include "Uart.h"
+#include "scheduler.h"
+#include "led.h"
 
 IFX_ALIGN(4) IfxCpu_syncEvent cpuSyncEvent = 0;
 
-/* LED time-division phase flag (shared with all cores via extern).
- * 0 = CPU0–3 have the LEDs   (500 ms ON + 500 ms OFF per cycle)
- * 1 = CPU4–5 have the LEDs   (500 ms ON window; borrow D306/D307) */
-volatile uint32 g_ledPhase = 0u;
+static Scheduler_t g_sched;
+static Led_t       g_led;
 
-/* LED for CPU0 — D306, Pin P20.11, active-low */
-#define BLINKY_LED_PORT     &MODULE_P20
-#define BLINKY_LED_PIN      11u
-#define BLINKY_LED_ON       IfxPort_State_low
-#define BLINKY_LED_OFF      IfxPort_State_high
+static void Task_LedToggle(void)
+{
+    Led_toggle(&g_led);
+}
+
+static void Task_App10ms(void)
+{
+    /* TODO: add CPU0 application logic here */
+}
 
 int core0_main(void)
 {
@@ -28,24 +30,15 @@ int core0_main(void)
     Uart_init();
     Uart_println("CPU0 started");
 
-    IfxPort_setPinMode(BLINKY_LED_PORT, BLINKY_LED_PIN, IfxPort_Mode_outputPushPullGeneral);
+    Led_init(&g_led, &MODULE_P20, 11u);
+
+    Scheduler_init(&g_sched, &MODULE_STM0);
+    Scheduler_addTask(&g_sched, Task_LedToggle, SCHED_MS(500u));
+    Scheduler_addTask(&g_sched, Task_App10ms,   SCHED_MS(10u));
 
     while (TRUE)
     {
-        /* --- Phase 0: CPU0–3 get one 500 ms ON / 500 ms OFF blink --- */
-        g_ledPhase = 0u;
-        /* 300 ms grace: visible dark gap between phase 1 (CPU4/5 window) and
-         * phase 0 ON half.  Also ensures CPU4/5 finish their LED_OFF handover
-         * write (takes at most 10 ms) well before we assert ON. */
-        IfxStm_waitTicks(&MODULE_STM0, 30000000u);
-        IfxPort_setPinState(BLINKY_LED_PORT, BLINKY_LED_PIN, BLINKY_LED_ON);
-        IfxStm_waitTicks(&MODULE_STM0, 50000000u);          /* 500 ms */
-        IfxPort_setPinState(BLINKY_LED_PORT, BLINKY_LED_PIN, BLINKY_LED_OFF);
-        IfxStm_waitTicks(&MODULE_STM0, 50000000u);          /* 500 ms */
-
-        /* --- Phase 1: CPU4–5 get a 500 ms window; CPU0 LED stays off --- */
-        g_ledPhase = 1u;
-        IfxStm_waitTicks(&MODULE_STM0, 50000000u);          /* 500 ms */
+        Scheduler_run(&g_sched);
     }
 
     return 0;
