@@ -55,7 +55,7 @@
 #include "Configuration.h"
 #include <string.h>
 #include <stdarg.h>
-#include <UART_Logging.h>
+#include "Uart.h"
 
 
 /******************************************************************************/
@@ -381,7 +381,7 @@ void Ifx_Lwip_init(eth_addr_t ethAddr)
 {
 #ifdef __LWIP_DEBUG__
     //Init uart for debugging
-    initUART();
+   // initUART();
 #endif
     ip_addr_t default_ipaddr, default_netmask, default_gw;
     IP4_ADDR(&default_gw, 0,0,0,0);
@@ -471,8 +471,9 @@ s8_t Ifx_Lwip_printf(const char *format, ...)
         Ifx_SizeT cnt = 0;
         while(str[cnt]!=0)
             cnt++;
-        sendUARTMessage(str, cnt);
-        sendUARTMessage("\r\n", 2);
+        Uart_println(str);
+        Uart_println(cnt);
+        Uart_println("\r\n");
     }
 #endif
     return result;
