@@ -42,30 +42,39 @@ int core0_main(void)
     Scheduler_addTask(&g_sched, Task_LedToggle, SCHED_MS(500u));
     Scheduler_addTask(&g_sched, Task_App10ms,   SCHED_MS(10u));
 
-    // Ethernet init
-    /* 2. Lokale Variablen statt globaler */
-    Uart_println("Ethernet starting");
-    eth_addr_t myMacAddr = {{0x00, 0x03, 0x19, 0x12, 0x34, 0x56}};
-    IfxStm_CompareConfig stmCompareConfig;
-
-    /* Hardware Init */
-    IfxStm_initCompareConfig(&stmCompareConfig);
-    IfxStm_initCompare(&MODULE_STM0, &stmCompareConfig);
+    /* Ethernet & Timer Initialisierung */
     IfxGeth_enableModule(&MODULE_GETH);
 
-    /* LwIP und Echo Initialisierung mit lokaler MAC */
+    IfxStm_CompareConfig stmCompareConfig;
+    IfxStm_initCompareConfig(&stmCompareConfig);
+    stmCompareConfig.triggerPriority    = ISR_PRIORITY_OS_TICK;
+    stmCompareConfig.comparatorInterrupt = IfxStm_ComparatorInterrupt_ir0;
+    stmCompareConfig.ticks              = IFX_CFG_STM_TICKS_PER_MS * 10;
+    stmCompareConfig.typeOfService      = IfxSrc_Tos_cpu0;
+    IfxStm_initCompare(&MODULE_STM0, &stmCompareConfig);
+
+    eth_addr_t myMacAddr = {{0x00, 0x03, 0x19, 0x12, 0x34, 0x56}};
     Ifx_Lwip_init(myMacAddr);
     echoInit();
     Uart_println("Ethernet started");
-
     while (TRUE)
     {
         Scheduler_run(&g_sched);
 
-        // Ethernet loop
+        /* Ethernet polling - ohne störende UART prints */
         Ifx_Lwip_pollTimerFlags();
         Ifx_Lwip_pollReceiveFlags();
     }
 
     return 0;
+}
+
+/* 4. Timer Interrupt für den Stack-Takt */
+IFX_INTERRUPT(updateLwIPStackISR, 0, ISR_PRIORITY_OS_TICK);
+
+void updateLwIPStackISR(void)
+{
+    IfxStm_increaseCompare(&MODULE_STM0, IfxStm_Comparator_0, IFX_CFG_STM_TICKS_PER_MS);
+    g_TickCount_1ms++;
+    Ifx_Lwip_onTimerTick();
 }
