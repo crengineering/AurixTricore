@@ -471,9 +471,9 @@ s8_t Ifx_Lwip_printf(const char *format, ...)
         Ifx_SizeT cnt = 0;
         while(str[cnt]!=0)
             cnt++;
-        Uart_println(str);
-        Uart_println(cnt);
-        Uart_println("\r\n");
+        //Uart_println(str);
+        //Uart_println(cnt);
+        //Uart_println("\r\n");
     }
 #endif
     return result;
