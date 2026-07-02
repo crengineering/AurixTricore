@@ -11,6 +11,10 @@
 #include "ConfigurationIsr.h"
 #include "Ifx_Lwip.h"
 #include "Echo.h"
+#include "UdpEcho.h"
+#include "Xcp.h"
+#include "Measurements.h"
+#include "Version.h"
 
 IFX_ALIGN(4) IfxCpu_syncEvent cpuSyncEvent = 0;
 
@@ -27,6 +31,11 @@ static void Task_App10ms(void)
     /* TODO: add CPU0 application logic here */
 }
 
+static void Task_Measure100ms(void)
+{
+    measurementsUpdate();
+}
+
 int core0_main(void)
 {
     IfxCpu_enableInterrupts();
@@ -34,13 +43,16 @@ int core0_main(void)
     IfxScuWdt_disableSafetyWatchdog(IfxScuWdt_getSafetyWatchdogPassword());
 
     Uart_init();
-    Uart_println("CPU0 started");
+    Uart_println("CPU0 started, SW v" SW_VERSION_STRING);
 
     Led_init(&g_led, &MODULE_P20, 11u);
 
     Scheduler_init(&g_sched, &MODULE_STM0);
     Scheduler_addTask(&g_sched, Task_LedToggle, SCHED_MS(500u));
     Scheduler_addTask(&g_sched, Task_App10ms,   SCHED_MS(10u));
+    Scheduler_addTask(&g_sched, Task_Measure100ms, SCHED_MS(100u));
+
+    measurementsInit();
 
     /* STM0 Comparator 0 als 1-ms-Tick für den lwIP-Stack scharf schalten
      * (ohne initCompare feuert updateLwIPStackISR nie -> keine TCP/ARP-Timer) */
@@ -69,6 +81,8 @@ int core0_main(void)
     netif_set_up(netif);
 
     echoInit();
+    udpEchoInit();
+    xcpInit();
     Uart_println("Ethernet started");
 
     while (TRUE)
