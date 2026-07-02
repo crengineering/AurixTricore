@@ -1,4 +1,4 @@
-# CLAUDE.md — Blinky_TC300
+# CLAUDE.md — AurixTricore
 
 Bare-metal multi-core blinky on the Infineon AURIX TC399 (6x TriCore, 300 MHz).
 Uses iLLD for GPIO and STM timer. No RTOS, no HAL beyond iLLD.
@@ -14,7 +14,7 @@ Uses iLLD for GPIO and STM timer. No RTOS, no HAL beyond iLLD.
 | Flash | AURIX Flasher button in ADS toolbar (board connected via Micro-USB DAP) |
 | Debug | `Debug Configurations → TASKING winIDEA → Debug`, then `F8` to run |
 
-Build config: **TriCore Debug (TASKING)** — outputs `Blinky_TC300.elf`.
+Build config: **TriCore Debug (TASKING)** — outputs `AurixTricore.elf`.
 
 ---
 

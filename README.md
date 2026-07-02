@@ -67,7 +67,7 @@ Without this define, the iLLD selects a wrong `#else` branch in `IfxPort.c` and 
 ## Project Structure
 
 ```
-Blinky_TC300/
+AurixTricore/
 ├── Configurations/
 │   ├── Ifx_Cfg_Ssw.c       # Startup software configuration (PLL init, PMS init)
 │   ├── Ifx_Cfg_Ssw.h       # Startup software defines

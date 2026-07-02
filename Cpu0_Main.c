@@ -42,6 +42,16 @@ int core0_main(void)
     Scheduler_addTask(&g_sched, Task_LedToggle, SCHED_MS(500u));
     Scheduler_addTask(&g_sched, Task_App10ms,   SCHED_MS(10u));
 
+    /* STM0 Comparator 0 als 1-ms-Tick für den lwIP-Stack scharf schalten
+     * (ohne initCompare feuert updateLwIPStackISR nie -> keine TCP/ARP-Timer) */
+    IfxStm_CompareConfig stmCompareConfig;
+    IfxStm_initCompareConfig(&stmCompareConfig);
+    stmCompareConfig.triggerPriority     = ISR_PRIORITY_OS_TICK;
+    stmCompareConfig.comparatorInterrupt = IfxStm_ComparatorInterrupt_ir0;
+    stmCompareConfig.ticks               = IFX_CFG_STM_TICKS_PER_MS * 10;   /* erster Interrupt nach 10 ms */
+    stmCompareConfig.typeOfService       = IfxSrc_Tos_cpu0;
+    IfxStm_initCompare(&MODULE_STM0, &stmCompareConfig);
+
     /* Ethernet & Timer Initialisierung */
     /* LwIP Stack initialisieren */
     eth_addr_t myMacAddr = {{0x00, 0x03, 0x19, 0x12, 0x34, 0x56}};

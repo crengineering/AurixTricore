@@ -146,7 +146,7 @@
            <Area></Area>
            <Load>true</Load>
            <OverrideMemArea>false</OverrideMemArea>
-           <Path>..\..\..\TriCore Debug (TASKING)\Blinky_TC300.elf</Path>
+           <Path>..\..\..\TriCore Debug (TASKING)\AurixTricore.elf</Path>
            <PgmDestination>memory</PgmDestination>
            <TargetDir></TargetDir>
            <UseDefaultMSID>true</UseDefaultMSID>
@@ -254,7 +254,7 @@
            <Area></Area>
            <Load>true</Load>
            <OverrideMemArea>false</OverrideMemArea>
-           <Path>..\..\..\TriCore Debug (TASKING)\Blinky_TC300.elf</Path>
+           <Path>..\..\..\TriCore Debug (TASKING)\AurixTricore.elf</Path>
            <PgmDestination>memory</PgmDestination>
            <TargetDir></TargetDir>
            <UseDefaultMSID>true</UseDefaultMSID>
