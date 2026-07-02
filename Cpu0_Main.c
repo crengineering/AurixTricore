@@ -14,6 +14,7 @@
 #include "UdpEcho.h"
 #include "Xcp.h"
 #include "Measurements.h"
+#include "Diagnostics.h"
 #include "Version.h"
 
 IFX_ALIGN(4) IfxCpu_syncEvent cpuSyncEvent = 0;
@@ -34,6 +35,7 @@ static void Task_App10ms(void)
 static void Task_Measure100ms(void)
 {
     measurementsUpdate();
+    diagnosticsUpdate();
 }
 
 int core0_main(void)
@@ -52,6 +54,7 @@ int core0_main(void)
     Scheduler_addTask(&g_sched, Task_App10ms,   SCHED_MS(10u));
     Scheduler_addTask(&g_sched, Task_Measure100ms, SCHED_MS(100u));
 
+    diagnosticsInit();      /* before measurementsInit: provides ADC scales */
     measurementsInit();
 
     /* STM0 Comparator 0 als 1-ms-Tick für den lwIP-Stack scharf schalten

@@ -22,6 +22,7 @@
  *   0x21  uint8    rawVddp3    the voltage scale factors against nominals
  *   0x22  uint8    rawVext
  *   0x23  uint8    reserved2
+ *   0x24  uint32   diagStatus  diagnostics bitmask, see DIAGNOSTICS.md
  */
 #define XCP_DATA_ADDR   0x70030000u
 #define XCP_DATA_MAGIC  0x41555258u
@@ -43,6 +44,7 @@ typedef struct
     uint8   rawVddp3;
     uint8   rawVext;
     uint8   reserved2;
+    uint32  diagStatus;
 } Xcp_Data;
 
 void measurementsInit(void);    /* DTS + DTSC + EVR monitor init (CPU0)  */

@@ -1,18 +1,14 @@
 #include "Measurements.h"
+#include "Diagnostics.h"
 #include "Version.h"
 #include "Dts/Dts/IfxDts_Dts.h"
 #include "Pms/Std/IfxPmsEvr.h"
 #include "IfxScuWdt.h"
 #include "Ifx_Lwip.h"
 
-/* Full-scale voltages of the 8-bit PMS monitor ADCs (code 255).
- * Derived empirically on 2026-07-02 from the raw codes with the rails at
- * nominal (VDD 219@1.25V, VDDP3 220@3.30V, VEXT 216@5.00V — the SWD channel
- * must cover >5.5V, so raw 216 implies a 5V VEXT on the TriBoard). These
- * become XCP-calibratable values in the diagnostics module. */
-#define MEAS_VDD_FULLSCALE      1.455f
-#define MEAS_VDDP3_FULLSCALE    3.825f
-#define MEAS_VEXT_FULLSCALE     5.903f
+/* The full-scale voltages of the 8-bit PMS monitor ADCs live in the
+ * XCP-calibratable block (g_xcpCal.fsVdd/fsVddp3/fsVext); defaults were
+ * derived empirically on 2026-07-02 with the rails at nominal. */
 
 /* Fixed address so XCP clients can read without the map file (TASKING __at).
  * 0x70030000 is high in CPU0 DSPR0 (240 KB), clear of linker-placed data —
@@ -45,10 +41,11 @@ void measurementsInit(void)
     g_xcpData.vddCore   = 0.0f;
     g_xcpData.vddp3     = 0.0f;
     g_xcpData.vext      = 0.0f;
-    g_xcpData.rawVdd    = 0u;
-    g_xcpData.rawVddp3  = 0u;
-    g_xcpData.rawVext   = 0u;
-    g_xcpData.reserved2 = 0u;
+    g_xcpData.rawVdd     = 0u;
+    g_xcpData.rawVddp3   = 0u;
+    g_xcpData.rawVext    = 0u;
+    g_xcpData.reserved2  = 0u;
+    g_xcpData.diagStatus = 0u;
 }
 
 void measurementsUpdate(void)
@@ -63,7 +60,7 @@ void measurementsUpdate(void)
     g_xcpData.rawVdd    = rawVdd;
     g_xcpData.rawVddp3  = rawVddp3;
     g_xcpData.rawVext   = rawVext;
-    g_xcpData.vddCore   = ((float32)rawVdd   * MEAS_VDD_FULLSCALE)   / 255.0f;
-    g_xcpData.vddp3     = ((float32)rawVddp3 * MEAS_VDDP3_FULLSCALE) / 255.0f;
-    g_xcpData.vext      = ((float32)rawVext  * MEAS_VEXT_FULLSCALE)  / 255.0f;
+    g_xcpData.vddCore   = ((float32)rawVdd   * g_xcpCal.fsVdd)   / 255.0f;
+    g_xcpData.vddp3     = ((float32)rawVddp3 * g_xcpCal.fsVddp3) / 255.0f;
+    g_xcpData.vext      = ((float32)rawVext  * g_xcpCal.fsVext)  / 255.0f;
 }

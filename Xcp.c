@@ -1,5 +1,6 @@
 #include "Xcp.h"
 #include "Version.h"
+#include "Diagnostics.h"
 #include "Ifx_Types.h"
 #include "lwip/udp.h"
 #include <string.h>
@@ -18,6 +19,8 @@
 #define XCP_CMD_SET_MTA             0xF6u
 #define XCP_CMD_UPLOAD              0xF5u
 #define XCP_CMD_SHORT_UPLOAD        0xF4u
+#define XCP_CMD_DOWNLOAD            0xF0u
+#define XCP_CMD_SHORT_DOWNLOAD      0xEDu
 
 /* packet identifiers (slave -> master) */
 #define XCP_PID_RES                 0xFFu   /* positive response                 */
@@ -27,6 +30,15 @@
 #define XCP_ERR_CMD_SYNCH           0x00u
 #define XCP_ERR_CMD_UNKNOWN         0x20u
 #define XCP_ERR_OUT_OF_RANGE        0x22u
+#define XCP_ERR_WRITE_PROTECTED     0x25u
+
+/* Writes are only allowed inside the calibration block (skipping its magic
+ * word, which only the slave itself may set) — protects the rest of RAM. */
+static boolean xcpWriteAllowed(uint32 addr, uint32 len)
+{
+    return (boolean)((addr >= (XCP_CAL_ADDR + 4u))
+                     && ((addr + len) <= (XCP_CAL_ADDR + XCP_CAL_SIZE)));
+}
 
 /* identification string returned via GET_ID + UPLOAD */
 static const char s_xcpIdent[] = "AurixTricore v" SW_VERSION_STRING;
@@ -100,7 +112,7 @@ static void xcpRecv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
         case XCP_CMD_CONNECT:
             s_connected = TRUE;
             resp[0] = XCP_PID_RES;
-            resp[1] = 0x00u;                    /* RESOURCE: no CAL/DAQ/PGM     */
+            resp[1] = 0x01u;                    /* RESOURCE: CAL/PAG available  */
             resp[2] = 0x00u;                    /* COMM_MODE_BASIC: Intel, byte */
             resp[3] = XCP_MAX_CTO;
             resp[4] = (uint8)(XCP_MAX_DTO & 0xFFu);
@@ -203,6 +215,51 @@ static void xcpRecv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
             memcpy(&resp[1], s_mta, n);
             s_mta += n;
             xcpSend(addr, port, resp, (uint16)(n + 1u));
+            break;
+        }
+
+        case XCP_CMD_DOWNLOAD:                  /* n = cmd[1], data from cmd[2], write at MTA */
+        {
+            uint8 n = cmd[1];
+            if ((n == 0u) || ((uint16)(n + 2u) > pktLen))
+            {
+                xcpSendError(addr, port, XCP_ERR_OUT_OF_RANGE);
+                break;
+            }
+            if (!xcpWriteAllowed((uint32)s_mta, n))
+            {
+                xcpSendError(addr, port, XCP_ERR_WRITE_PROTECTED);
+                break;
+            }
+            memcpy(s_mta, &cmd[2], n);
+            s_mta  += n;
+            resp[0] = XCP_PID_RES;
+            xcpSend(addr, port, resp, 1u);
+            break;
+        }
+
+        case XCP_CMD_SHORT_DOWNLOAD:            /* n cmd[1], ext cmd[3], addr cmd[4..7], data cmd[8..] */
+        {
+            uint8  n = cmd[1];
+            uint32 wrAddr;
+            if ((pktLen < 9u) || (n == 0u) || ((uint16)(n + 8u) > pktLen))
+            {
+                xcpSendError(addr, port, XCP_ERR_OUT_OF_RANGE);
+                break;
+            }
+            wrAddr = (uint32)cmd[4]
+                     | ((uint32)cmd[5] << 8)
+                     | ((uint32)cmd[6] << 16)
+                     | ((uint32)cmd[7] << 24);
+            if (!xcpWriteAllowed(wrAddr, n))
+            {
+                xcpSendError(addr, port, XCP_ERR_WRITE_PROTECTED);
+                break;
+            }
+            memcpy((uint8 *)wrAddr, &cmd[8], n);
+            s_mta   = (uint8 *)(wrAddr + n);
+            resp[0] = XCP_PID_RES;
+            xcpSend(addr, port, resp, 1u);
             break;
         }
 
