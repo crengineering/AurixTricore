@@ -65,6 +65,7 @@ typedef struct
 #define DIAG_VEXT_UNDERVOLT     (1u << 8)
 #define DIAG_VEXT_OVERVOLT      (1u << 9)
 #define DIAG_TEMP_IMPLAUSIBLE   (1u << 10)
+#define DIAG_UART_DISCONNECTED  (1u << 11)
 #define DIAG_CAL_INVALID        (1u << 31)
 
 extern volatile Xcp_Cal g_xcpCal;

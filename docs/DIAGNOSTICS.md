@@ -3,7 +3,7 @@
 Firmware ab **v1.2.0**. Der Diagnose-Task läuft alle 100 ms auf CPU0,
 vergleicht die Messwerte gegen kalibrierbare Grenzwerte und meldet
 Verletzungen als 32-Bit-Bitmaske `diagStatus` im zyklischen XCP-Datenblock.
-Die AurixGUI (Tab *Ethernet (XCP) → Diagnose*) interpretiert die Bits
+Die AurixGUI (Tab *Ethernet → Diagnose*) interpretiert die Bits
 automatisch.
 
 Hinweis zur Arbeitsteilung: harte Versorgungsfehler behandelt die PMS-Hardware
@@ -28,9 +28,28 @@ Adresse: `Xcp_Data + 0x24` (Basis `0x70030000`, also `0x70030024`).
 | 8 | `0x00000100` | VEXT-Unterspannung (5-V-Boardversorgung) | `vext < vextMin` |
 | 9 | `0x00000200` | VEXT-Überspannung | `vext > vextMax` |
 | 10 | `0x00000400` | Temperatursensoren unplausibel | `|DTS − DTSC| > tempDeltaMax` |
+| 11 | `0x00000800` | UART-Verbindung getrennt (kein Heartbeat, ab v1.4.0) | > 2 s kein RX-Byte |
 | 31 | `0x80000000` | Kalibrierblock ungültig — Defaults wurden neu geladen | Magic-Wort zerstört |
 
-Bits 11–30 sind reserviert (immer 0).
+Bits 12–30 sind reserviert (immer 0).
+
+## UART-Heartbeat (Bit 11)
+
+Die Firmware kann ein gezogenes USB-Kabel an X109 nicht direkt erkennen —
+der USB-UART-Bridge-Baustein wird aus dem USB-Kabel versorgt. Ohne Kabel
+zieht sein toter TX-Ausgang die RX-Leitung (P14.1) auf Low: ein Dauer-Break,
+das den ASCLIN-Empfänger mit 0x00-Müllframes flutet. Deshalb sendet die
+AurixGUI bei geöffnetem COM-Port alle 500 ms das Heartbeat-Byte **`'H'`
+(0x48)**, und nur dieses Byte zählt als Lebenszeichen (ab v1.4.1 — v1.4.0
+wertete jedes RX-Byte, wodurch das Break-Garbage die Erkennung aushebelte).
+
+Die Firmware leert im 100-ms-Diagnose-Task das RX-FIFO; kommt länger als
+**2 s** kein `'H'`, gilt die UART-Verbindung als getrennt und Bit 11 wird
+(nach `debounceSec`) gesetzt. Jedes empfangene `'H'` löscht das Bit sofort —
+im Terminalprogramm also `H` tippen.
+
+Nach einem Reset startet der Zähler „getrennt“: Ohne GUI ist Bit 11 also
+dauerhaft aktiv. Das ist gewollt — es zeigt, dass niemand am UART lauscht.
 
 ## Entprellung (Debounce)
 
@@ -72,7 +91,7 @@ Die `fs*`-Werte skalieren die 8-Bit-Rohwerte in Volt
 
 ## Kalibrieren
 
-**GUI:** Tab *Ethernet (XCP) → Kalibrierung* — Werte lesen, editieren,
+**GUI:** Tab *Ethernet → Kalibrierung* — Werte lesen, editieren,
 schreiben.
 
 **pyXCP:**

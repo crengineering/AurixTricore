@@ -1,5 +1,6 @@
 #include "Diagnostics.h"
 #include "Measurements.h"
+#include "Uart.h"
 
 /* Calibration block at a fixed address so XCP masters can read/write it
  * without the map file. The XCP slave only permits writes inside this block. */
@@ -7,12 +8,19 @@ volatile Xcp_Cal g_xcpCal __at(XCP_CAL_ADDR);
 
 extern volatile Xcp_Data g_xcpData;
 
-#define DIAG_NUM_CHECKS     11u
+#define DIAG_NUM_CHECKS     12u
 #define DIAG_TICK_MS        100u    /* diagnosticsUpdate() call period       */
 #define DIAG_MAX_DEBOUNCE_S 60.0f
 
+/* The PC GUI sends a heartbeat byte every 500 ms over UART. No byte for
+ * this many ticks means the UART link (USB cable / GUI) is gone. */
+#define DIAG_UART_TIMEOUT_TICKS 20u     /* 2 s in 100 ms ticks */
+
 /* one debounce counter per status bit (in 100 ms ticks) */
 static uint16 s_violationTicks[DIAG_NUM_CHECKS];
+
+/* 100 ms ticks since the last UART RX byte (saturating) */
+static uint16 s_uartSilenceTicks;
 
 static void diag_loadDefaults(void)
 {
@@ -44,6 +52,9 @@ void diagnosticsInit(void)
     {
         s_violationTicks[i] = 0u;
     }
+
+    /* start disconnected: the bit appears unless a heartbeat arrives */
+    s_uartSilenceTicks = DIAG_UART_TIMEOUT_TICKS;
 
     g_xcpData.diagStatus = 0u;
 }
@@ -92,6 +103,20 @@ void diagnosticsUpdate(void)
     uint32  status = 0u;
     float32 tempDelta;
 
+    /* UART link heartbeat: a received 'H' resets the silence counter */
+    if (Uart_heartbeatReceived())
+    {
+        s_uartSilenceTicks = 0u;
+    }
+    else if (s_uartSilenceTicks < 0xFFFFu)
+    {
+        s_uartSilenceTicks++;
+    }
+    else
+    {
+        /* counter saturated */
+    }
+
     /* self-check: a garbled calibration block falls back to defaults */
     if (g_xcpCal.magic != XCP_CAL_MAGIC)
     {
@@ -116,6 +141,7 @@ void diagnosticsUpdate(void)
     status |= diag_debounce(8u,  (boolean)(g_xcpData.vext      < g_xcpCal.vextMin),  DIAG_VEXT_UNDERVOLT);
     status |= diag_debounce(9u,  (boolean)(g_xcpData.vext      > g_xcpCal.vextMax),  DIAG_VEXT_OVERVOLT);
     status |= diag_debounce(10u, (boolean)(tempDelta           > g_xcpCal.tempDeltaMax), DIAG_TEMP_IMPLAUSIBLE);
+    status |= diag_debounce(11u, (boolean)(s_uartSilenceTicks >= DIAG_UART_TIMEOUT_TICKS), DIAG_UART_DISCONNECTED);
 
     g_xcpData.diagStatus = status;
 }

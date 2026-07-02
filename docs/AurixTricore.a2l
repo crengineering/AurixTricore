@@ -213,6 +213,12 @@ ASAP2_VERSION 1 61
       BIT_MASK 0x00000400
     /end MEASUREMENT
 
+    /begin MEASUREMENT Diag_UartDisconnected "no UART heartbeat from PC GUI for > 2 s"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00000800
+    /end MEASUREMENT
+
     /begin MEASUREMENT Diag_CalInvalid "calibration block magic broken, defaults reloaded"
       ULONG NO_COMPU_METHOD 0 0 0 1
       ECU_ADDRESS 0x70030024

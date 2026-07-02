@@ -65,6 +65,25 @@ void Uart_print(const char *str)
     IfxCpu_releaseMutex((IfxCpu_mutexLock *)&g_uartMutex);
 }
 
+boolean Uart_heartbeatReceived(void)
+{
+    boolean received = FALSE;
+
+    /* Poll-only RX: no interrupt, no software buffer. The 16-entry hardware
+     * FIFO may overflow between calls — irrelevant, only the heartbeat
+     * counts. Everything else (especially 0x00 break garbage from an
+     * unplugged, unpowered USB bridge) is discarded. */
+    while (IfxAsclin_getRxFifoFillLevel(&MODULE_ASCLIN0) > 0u)
+    {
+        if ((IfxAsclin_readRxData(&MODULE_ASCLIN0) & 0xFFu) == UART_HEARTBEAT_BYTE)
+        {
+            received = TRUE;
+        }
+    }
+
+    return received;
+}
+
 void Uart_println(const char *str)
 {
     while (!IfxCpu_acquireMutex((IfxCpu_mutexLock *)&g_uartMutex))
