@@ -63,3 +63,7 @@ TriCore Debug (TASKING)/
 *.hex
 *.map
 *.siz
+
+# MISRA rule texts are MISRA-licensed - never commit
+tools/misra_rule_texts.txt
+__pycache__/

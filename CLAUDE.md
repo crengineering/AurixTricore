@@ -33,6 +33,8 @@ src/                 Application code
   Uart.c, led.c, scheduler.c
 docs/                DIAGNOSTICS.md (diag bits, cal block), AurixTricore.a2l
 tools/               xcp_test.py (pyXCP validation)
+                     misra_check.py + misra_baseline.txt (MISRA gate, see below)
+.github/workflows/   misra.yml — CI MISRA check (cppcheck misra addon)
 Configurations/      PLL init, boot mode header, startup software, lwipopts
 Libraries/Ethernet/  lwIP + Infineon port + RTL8211F PHY driver
 Libraries/iLLD/      Infineon Low-Level Driver (do not edit)
@@ -74,6 +76,17 @@ Set in the TASKING compiler preprocessing symbols. Without it, `IfxPort.c` takes
 `#else` branch and GPIO does not work.
 
 ---
+
+## MISRA Check
+
+CI runs `python tools/misra_check.py` (cppcheck misra addon, pinned 2.21.0)
+over `src/` on every push/PR. Legacy findings are grandfathered in
+`tools/misra_baseline.txt`; only **new** violations fail the build.
+
+- New code should be MISRA-clean — fix violations rather than baselining them.
+- Justified deviations: `/* cppcheck-suppress misra-c2012-X.Y ; deviation: reason */`
+- Intentional re-baseline: `python tools/misra_check.py --update-baseline`
+  (requires local cppcheck; set `CPPCHECK` env var if not on PATH)
 
 ## Git Workflow Rules
 

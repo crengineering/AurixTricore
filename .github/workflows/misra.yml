@@ -1,0 +1,55 @@
+# MISRA C compliance gate.
+#
+# Runs cppcheck's MISRA addon over src/ via tools/misra_check.py and fails
+# on any violation not covered by tools/misra_baseline.txt (baseline
+# ratchet: legacy findings pass, new ones fail).
+#
+# cppcheck is pinned and built from source so CI findings are identical to
+# local runs; the build is cached, so only the first run after a version
+# bump pays the ~4 min compile.
+#
+# The free addon implements MISRA C:2012 + amendments (the basis that
+# MISRA C:2025 consolidates). For native MISRA C:2025 ids, a Cppcheck
+# Premium licence is required — swap the run step for
+# `cppcheck --premium=misra-c-2025 ...` (see tools/misra_check.py).
+
+name: MISRA
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CPPCHECK_VERSION: 2.21.0
+
+jobs:
+  misra:
+    name: MISRA C (cppcheck misra addon)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cppcheck
+        id: cache-cppcheck
+        uses: actions/cache@v4
+        with:
+          path: ~/cppcheck-install
+          key: cppcheck-${{ env.CPPCHECK_VERSION }}-${{ runner.os }}
+
+      - name: Build cppcheck
+        if: steps.cache-cppcheck.outputs.cache-hit != 'true'
+        run: |
+          curl -sSL -o cppcheck.tar.gz \
+            "https://github.com/cppcheck-opensource/cppcheck/archive/refs/tags/${CPPCHECK_VERSION}.tar.gz"
+          tar xzf cppcheck.tar.gz
+          cmake -S "cppcheck-${CPPCHECK_VERSION}" -B cppcheck-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$HOME/cppcheck-install" \
+            -DFILESDIR="$HOME/cppcheck-install/share/cppcheck"
+          cmake --build cppcheck-build -j"$(nproc)"
+          cmake --install cppcheck-build
+
+      - name: Run MISRA check
+        run: CPPCHECK="$HOME/cppcheck-install/bin/cppcheck" python3 tools/misra_check.py
