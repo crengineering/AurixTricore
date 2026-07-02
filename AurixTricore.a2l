@@ -1,0 +1,302 @@
+/* ASAP2/A2L description of the AurixTricore XCP slave (firmware v1.3.0).
+ *
+ * All objects live at fixed addresses (TASKING __at), so this file does not
+ * depend on the link run:
+ *   Xcp_Data  (measurements)          0x70030000, 40 bytes, Measurements.h
+ *   Xcp_Cal   (calibration values)    0x70030100, 64 bytes, Diagnostics.h
+ * Transport: XCP on UDP/IP, port 5555, station 192.168.0.10.
+ * DAQ: dynamic, 1 list, event channel 0 = 100 ms task.
+ */
+ASAP2_VERSION 1 61
+
+/begin PROJECT AurixTricore "TC399 TriBoard bare-metal project"
+
+  /begin MODULE XCP "AurixTricore XCP slave"
+
+    /begin MOD_COMMON ""
+      BYTE_ORDER MSB_LAST
+      ALIGNMENT_BYTE 1
+      ALIGNMENT_WORD 2
+      ALIGNMENT_LONG 4
+      ALIGNMENT_FLOAT32_IEEE 4
+    /end MOD_COMMON
+
+    /begin MOD_PAR "AurixTricore v1.3.0"
+    /end MOD_PAR
+
+    /begin IF_DATA XCP
+      /begin PROTOCOL_LAYER
+        0x0100                  /* protocol layer version 1.0             */
+        1000 1000 1000 1000 1000 1000 1000   /* T1..T7 timeouts [ms]      */
+        64                      /* MAX_CTO                                */
+        64                      /* MAX_DTO                                */
+        BYTE_ORDER_MSB_LAST
+        ADDRESS_GRANULARITY_BYTE
+        OPTIONAL_CMD GET_ID
+        OPTIONAL_CMD SET_MTA
+        OPTIONAL_CMD UPLOAD
+        OPTIONAL_CMD SHORT_UPLOAD
+        OPTIONAL_CMD DOWNLOAD
+        OPTIONAL_CMD SHORT_DOWNLOAD
+        OPTIONAL_CMD GET_DAQ_PROCESSOR_INFO
+        OPTIONAL_CMD GET_DAQ_RESOLUTION_INFO
+        OPTIONAL_CMD FREE_DAQ
+        OPTIONAL_CMD ALLOC_DAQ
+        OPTIONAL_CMD ALLOC_ODT
+        OPTIONAL_CMD ALLOC_ODT_ENTRY
+      /end PROTOCOL_LAYER
+      /begin DAQ
+        DYNAMIC
+        1                       /* MAX_DAQ                                */
+        1                       /* MAX_EVENT_CHANNEL                      */
+        0                       /* MIN_DAQ                                */
+        OPTIMISATION_TYPE_DEFAULT
+        ADDRESS_EXTENSION_FREE
+        IDENTIFICATION_FIELD_TYPE_ABSOLUTE
+        GRANULARITY_ODT_ENTRY_SIZE_DAQ_BYTE
+        63                      /* MAX_ODT_ENTRY_SIZE_DAQ                 */
+        NO_OVERLOAD_INDICATION
+        /begin EVENT "Task100ms" "100ms" 0x0000 DAQ 0xFF 100 6 0x00
+        /end EVENT
+      /end DAQ
+      /begin XCP_ON_UDP_IP
+        0x0100                  /* transport layer version 1.0            */
+        5555                    /* port                                   */
+        ADDRESS "192.168.0.10"
+      /end XCP_ON_UDP_IP
+    /end IF_DATA
+
+    /begin RECORD_LAYOUT RL_FLOAT32
+      FNC_VALUES 1 FLOAT32_IEEE ROW_DIR DIRECT
+    /end RECORD_LAYOUT
+
+    /* ------------------------------------------------------------------ */
+    /* Measurements: Xcp_Data @ 0x70030000 (see Measurements.h)           */
+    /* ------------------------------------------------------------------ */
+
+    /begin MEASUREMENT SwVersionMajor "software version major"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x70030004
+    /end MEASUREMENT
+
+    /begin MEASUREMENT SwVersionMinor "software version minor"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x70030005
+    /end MEASUREMENT
+
+    /begin MEASUREMENT SwVersionStep "software version step"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x70030006
+    /end MEASUREMENT
+
+    /begin MEASUREMENT TickMs "board uptime"
+      ULONG NO_COMPU_METHOD 0 0 0 4294967295
+      ECU_ADDRESS 0x70030008
+      PHYS_UNIT "ms"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT DieTemp_DTS "die temperature, PMS DTS (standby domain)"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -50 170
+      ECU_ADDRESS 0x7003000C
+      PHYS_UNIT "degC"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT DieTemp_DTSC "die temperature, SCU DTSC (core domain)"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -50 170
+      ECU_ADDRESS 0x70030010
+      PHYS_UNIT "degC"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT VDD "1.25 V core rail (PMS monitor ADC)"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 2
+      ECU_ADDRESS 0x70030014
+      PHYS_UNIT "V"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT VDDP3 "3.3 V I/O rail (PMS monitor ADC)"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 5
+      ECU_ADDRESS 0x70030018
+      PHYS_UNIT "V"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT VEXT "5 V board supply (PMS monitor ADC)"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 6
+      ECU_ADDRESS 0x7003001C
+      PHYS_UNIT "V"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT RawVdd "raw monitor ADC code VDD"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x70030020
+    /end MEASUREMENT
+
+    /begin MEASUREMENT RawVddp3 "raw monitor ADC code VDDP3"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x70030021
+    /end MEASUREMENT
+
+    /begin MEASUREMENT RawVext "raw monitor ADC code VEXT"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x70030022
+    /end MEASUREMENT
+
+    /begin MEASUREMENT DiagStatus "diagnostics bitmask, see DIAGNOSTICS.md"
+      ULONG NO_COMPU_METHOD 0 0 0 4294967295
+      ECU_ADDRESS 0x70030024
+    /end MEASUREMENT
+
+    /* individual diagnostics bits (BIT_MASK views on DiagStatus) */
+
+    /begin MEASUREMENT Diag_DTS_Undertemp "DTS temperature below dtsMin"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00000001
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_DTS_Overtemp "DTS temperature above dtsMax"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00000002
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_DTSC_Undertemp "DTSC temperature below dtscMin"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00000004
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_DTSC_Overtemp "DTSC temperature above dtscMax"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00000008
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_VDD_Undervolt "VDD below vddMin"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00000010
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_VDD_Overvolt "VDD above vddMax"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00000020
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_VDDP3_Undervolt "VDDP3 below vddp3Min"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00000040
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_VDDP3_Overvolt "VDDP3 above vddp3Max"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00000080
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_VEXT_Undervolt "VEXT below vextMin"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00000100
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_VEXT_Overvolt "VEXT above vextMax"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00000200
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_TempImplausible "delta DTS/DTSC above tempDeltaMax"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00000400
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_CalInvalid "calibration block magic broken, defaults reloaded"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x80000000
+    /end MEASUREMENT
+
+    /* ------------------------------------------------------------------ */
+    /* Characteristics: Xcp_Cal @ 0x70030100 (see Diagnostics.h)          */
+    /* ------------------------------------------------------------------ */
+
+    /begin CHARACTERISTIC CAL_dtsMin "lower limit DTS temperature"
+      VALUE 0x70030104 RL_FLOAT32 300 NO_COMPU_METHOD -50 170
+      PHYS_UNIT "degC"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC CAL_dtsMax "upper limit DTS temperature"
+      VALUE 0x70030108 RL_FLOAT32 300 NO_COMPU_METHOD -50 170
+      PHYS_UNIT "degC"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC CAL_dtscMin "lower limit DTSC temperature"
+      VALUE 0x7003010C RL_FLOAT32 300 NO_COMPU_METHOD -50 170
+      PHYS_UNIT "degC"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC CAL_dtscMax "upper limit DTSC temperature"
+      VALUE 0x70030110 RL_FLOAT32 300 NO_COMPU_METHOD -50 170
+      PHYS_UNIT "degC"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC CAL_vddMin "lower limit VDD"
+      VALUE 0x70030114 RL_FLOAT32 2 NO_COMPU_METHOD 0 2
+      PHYS_UNIT "V"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC CAL_vddMax "upper limit VDD"
+      VALUE 0x70030118 RL_FLOAT32 2 NO_COMPU_METHOD 0 2
+      PHYS_UNIT "V"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC CAL_vddp3Min "lower limit VDDP3"
+      VALUE 0x7003011C RL_FLOAT32 5 NO_COMPU_METHOD 0 5
+      PHYS_UNIT "V"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC CAL_vddp3Max "upper limit VDDP3"
+      VALUE 0x70030120 RL_FLOAT32 5 NO_COMPU_METHOD 0 5
+      PHYS_UNIT "V"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC CAL_vextMin "lower limit VEXT"
+      VALUE 0x70030124 RL_FLOAT32 6 NO_COMPU_METHOD 0 6
+      PHYS_UNIT "V"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC CAL_vextMax "upper limit VEXT"
+      VALUE 0x70030128 RL_FLOAT32 6 NO_COMPU_METHOD 0 6
+      PHYS_UNIT "V"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC CAL_tempDeltaMax "max plausible delta DTS vs DTSC"
+      VALUE 0x7003012C RL_FLOAT32 50 NO_COMPU_METHOD 0 50
+      PHYS_UNIT "K"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC CAL_debounceSec "fault debounce time (0.1 s resolution)"
+      VALUE 0x70030130 RL_FLOAT32 60 NO_COMPU_METHOD 0 60
+      PHYS_UNIT "s"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC CAL_fsVdd "monitor ADC full scale VDD"
+      VALUE 0x70030134 RL_FLOAT32 10 NO_COMPU_METHOD 0 10
+      PHYS_UNIT "V"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC CAL_fsVddp3 "monitor ADC full scale VDDP3"
+      VALUE 0x70030138 RL_FLOAT32 10 NO_COMPU_METHOD 0 10
+      PHYS_UNIT "V"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC CAL_fsVext "monitor ADC full scale VEXT"
+      VALUE 0x7003013C RL_FLOAT32 10 NO_COMPU_METHOD 0 10
+      PHYS_UNIT "V"
+    /end CHARACTERISTIC
+
+  /end MODULE
+/end PROJECT
