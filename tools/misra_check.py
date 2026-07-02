@@ -73,6 +73,10 @@ def run_cppcheck(exe):
         "--addon=misra",
         "--enable=style",  # misra findings have style severity; without this they are filtered out
         "--std=c11",
+        # without an explicit platform, cppcheck assumes the *host* type widths
+        # and findings differ between Windows and the Linux CI runner; unix32
+        # is ILP32 like the TriCore target
+        "--platform=unix32",
         "--inline-suppr",
         "--suppress=*:Libraries/*",
         "--template={file}|{line}|{id}|{message}",
