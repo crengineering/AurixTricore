@@ -12,4 +12,7 @@
  */
 void xcpInit(void);
 
+/* Transmit pending DAQ lists; call from the 100 ms task (event channel 0). */
+void xcpDaqCycle(void);
+
 #endif /* XCP_H_ */

@@ -36,6 +36,7 @@ static void Task_Measure100ms(void)
 {
     measurementsUpdate();
     diagnosticsUpdate();
+    xcpDaqCycle();
 }
 
 int core0_main(void)
