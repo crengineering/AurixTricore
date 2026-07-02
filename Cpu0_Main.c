@@ -43,20 +43,24 @@ int core0_main(void)
     Scheduler_addTask(&g_sched, Task_App10ms,   SCHED_MS(10u));
 
     /* Ethernet & Timer Initialisierung */
-    IfxGeth_enableModule(&MODULE_GETH);
-
-    IfxStm_CompareConfig stmCompareConfig;
-    IfxStm_initCompareConfig(&stmCompareConfig);
-    stmCompareConfig.triggerPriority    = ISR_PRIORITY_OS_TICK;
-    stmCompareConfig.comparatorInterrupt = IfxStm_ComparatorInterrupt_ir0;
-    stmCompareConfig.ticks              = IFX_CFG_STM_TICKS_PER_MS * 10;
-    stmCompareConfig.typeOfService      = IfxSrc_Tos_cpu0;
-    IfxStm_initCompare(&MODULE_STM0, &stmCompareConfig);
-
+    /* LwIP Stack initialisieren */
     eth_addr_t myMacAddr = {{0x00, 0x03, 0x19, 0x12, 0x34, 0x56}};
     Ifx_Lwip_init(myMacAddr);
+
+    /* Statische IP anstatt DHCP */
+    struct netif *netif = Ifx_Lwip_getNetIf();
+    ip_addr_t ip, netmask, gw;
+
+    IP4_ADDR(&ip,      192, 168, 0, 10);
+    IP4_ADDR(&netmask, 255, 255, 255, 0);
+    IP4_ADDR(&gw,      0,   0,   0,   0);
+
+    netif_set_addr(netif, &ip, &netmask, &gw);
+    netif_set_up(netif);
+
     echoInit();
     Uart_println("Ethernet started");
+
     while (TRUE)
     {
         Scheduler_run(&g_sched);
