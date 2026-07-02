@@ -21,15 +21,23 @@ Build config: **TriCore Debug (TASKING)** — outputs `AurixTricore.elf`.
 ## Project Layout
 
 ```
-Cpu0_Main.c          Core 0 — blinks D306 (P20.11) via STM0
-Cpu1_Main.c          Core 1 — blinks D307 (P20.12) via STM1
-Cpu2_Main.c          Core 2 — blinks D308 (P20.13) via STM2
-Cpu3_Main.c          Core 3 — blinks D309 (P20.14) via STM3
-Cpu4_Main.c          Core 4 — sync + idle (no spare LED)
-Cpu5_Main.c          Core 5 — sync + idle (no spare LED)
-Configurations/      PLL init, boot mode header, startup software
+src/                 Application code
+  Cpu0_Main.c        Core 0 — Ethernet/lwIP/XCP, measurements, blinks D306
+  Cpu1_Main.c ...    Cores 1-3 blink D307-D309; cores 4-5 sync + idle
+  Echo.c/UdpEcho.c   TCP + UDP echo servers (port 7)
+  Xcp.c              XCP-on-UDP slave (port 5555): poll, cal writes, DAQ
+  Measurements.c     Xcp_Data block @0x70030000 (temps, rails, version)
+  Diagnostics.c      threshold checks, Xcp_Cal block @0x70030100
+  Version.h          SW version (bump on releases; then verify via XCP —
+                     amk may miss the rebuild of including files!)
+  Uart.c, led.c, scheduler.c
+docs/                DIAGNOSTICS.md (diag bits, cal block), AurixTricore.a2l
+tools/               xcp_test.py (pyXCP validation)
+Configurations/      PLL init, boot mode header, startup software, lwipopts
+Libraries/Ethernet/  lwIP + Infineon port + RTL8211F PHY driver
 Libraries/iLLD/      Infineon Low-Level Driver (do not edit)
 Libraries/Infra/     SSW / SFR infrastructure (do not edit)
+build.bat/flash.bat  headless build (see comments) and AURIXFlasher
 ```
 
 ---
