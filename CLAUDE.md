@@ -28,11 +28,13 @@ src/                 Application code
   Xcp.c              XCP-on-UDP slave (port 5555): poll, cal writes, DAQ
   Measurements.c     Xcp_Data block @0x70030000 (temps, rails, version)
   Diagnostics.c      threshold checks, Xcp_Cal block @0x70030100
+  Nvm.c              persistent Xcp_Nvm block @0x70030200, stored in
+                     DFLASH0 (2-sector ping-pong, CRC); cal block is RAM-only
   Version.h          SW version (bump on releases; then verify via XCP —
                      amk may miss the rebuild of including files!)
   Uart.c, led.c, scheduler.c
 docs/                DIAGNOSTICS.md (diag bits, cal block), AurixTricore.a2l
-tools/               xcp_test.py (pyXCP validation)
+tools/               xcp_test.py, nvm_test.py (pyXCP validation)
                      misra_check.py + misra_baseline.txt (MISRA gate, see below)
 .github/workflows/   misra.yml — CI MISRA check (cppcheck misra addon)
 Configurations/      PLL init, boot mode header, startup software, lwipopts

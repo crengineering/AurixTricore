@@ -1,5 +1,6 @@
 #include "Diagnostics.h"
 #include "Measurements.h"
+#include "Nvm.h"
 #include "Uart.h"
 
 /* Calibration block at a fixed address so XCP masters can read/write it
@@ -122,6 +123,12 @@ void diagnosticsUpdate(void)
     {
         diag_loadDefaults();
         status |= DIAG_CAL_INVALID;
+    }
+
+    /* persistent-block health, maintained by the Nvm module */
+    if (Nvm_hasFault() != FALSE)
+    {
+        status |= DIAG_NVM_FAULT;
     }
 
     tempDelta = g_xcpData.dieTempC - g_xcpData.dtscTempC;

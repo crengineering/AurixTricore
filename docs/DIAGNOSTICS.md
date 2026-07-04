@@ -29,9 +29,10 @@ Adresse: `Xcp_Data + 0x24` (Basis `0x70030000`, also `0x70030024`).
 | 9 | `0x00000200` | VEXT-Überspannung | `vext > vextMax` |
 | 10 | `0x00000400` | Temperatursensoren unplausibel | `|DTS − DTSC| > tempDeltaMax` |
 | 11 | `0x00000800` | UART-Verbindung getrennt (kein Heartbeat, ab v1.4.0) | > 2 s kein RX-Byte |
+| 12 | `0x00001000` | NVM-Fehler (ab v1.5.0) — DFLASH-Datensatz beim Boot korrupt oder letztes `SAVE` fehlgeschlagen | wird durch erfolgreiches `SAVE` gelöscht |
 | 31 | `0x80000000` | Kalibrierblock ungültig — Defaults wurden neu geladen | Magic-Wort zerstört |
 
-Bits 12–30 sind reserviert (immer 0).
+Bits 13–30 sind reserviert (immer 0).
 
 ## UART-Heartbeat (Bit 11)
 
@@ -62,9 +63,11 @@ wieder im gültigen Bereich liegt, wird das Bit **sofort** gelöscht.
 
 Basisadresse `0x70030100`, 64 Bytes, alle Werte `float32` little-endian.
 Schreibzugriffe per XCP (`DOWNLOAD`/`SHORT_DOWNLOAD`) sind **nur** innerhalb
-dieses Blocks erlaubt (ab Offset 0x04 — das Magic-Wort setzt nur die
-Firmware). Alle anderen Adressen antworten mit `ERR_WRITE_PROTECTED (0x25)`.
-Der Block liegt im RAM: Nach Reset gelten wieder die Defaults.
+dieses Blocks und des NVM-Blocks (s. u.) erlaubt (jeweils ab Offset 0x04 —
+die Magic-Wörter setzt nur die Firmware). Alle anderen Adressen antworten
+mit `ERR_WRITE_PROTECTED (0x25)`.
+Der Block liegt **nur im RAM**: Nach einem Reset gelten wieder die
+Defaults. Persistente Parameter leben strikt getrennt im NVM-Block.
 
 | Offset | Name | Einheit | Default | Herkunft |
 |---:|---|---|---:|---|
@@ -88,6 +91,43 @@ Der Block liegt im RAM: Nach Reset gelten wieder die Defaults.
 Die `fs*`-Werte skalieren die 8-Bit-Rohwerte in Volt
 (`U = raw · fs / 255`) — eine Änderung wirkt direkt auf die Messwerte
 *und* damit auf die Diagnose.
+
+## NVM-Block: persistente Parameter (ab v1.6.0)
+
+Strikt getrennt vom Kalibrierblock gibt es den **persistenten
+Parameterblock** `Xcp_Nvm` an Basisadresse `0x70030200` (12 Bytes,
+little-endian, per XCP ab Offset 0x04 schreibbar). **Nur** dieser Block
+wird im on-chip DFLASH gespeichert (EEPROM-Emulation, zwei 4-KB-Sektoren
+ab `0xAF000000` im Ping-Pong-Verfahren — ein Stromausfall während des
+Speicherns kann den letzten gültigen Datensatz nie zerstören). Jeder
+Datensatz trägt Magic, Layout-Version, Sequenznummer und CRC-32; beim
+Boot gewinnt der neueste gültige Datensatz, sonst gelten die Defaults.
+
+| Offset | Name | Default | Bedeutung |
+|---:|---|---:|---|
+| 0x00 | `magic` | `0x4D564E58` | nur Firmware ("XNVM") |
+| 0x04 | `command` | 0 | NVM-Kommando (s. u.) |
+| 0x08 | `userValue` | 0 | erster persistenter Parameter (freies `uint32`) |
+
+Neue persistente Parameter werden hier angehängt (Layout-Version in
+`Nvm.c` erhöhen; alte Datensätze werden dann ignoriert, kein Fehler).
+
+Gesteuert wird über das `command`-Wort (`0x70030204`):
+
+| Wert | ASCII | Wirkung |
+|---|---|---|
+| `0x45564153` | `SAVE` | NVM-Block in den DFLASH speichern |
+| `0x544C4644` | `DFLT` | NVM-Defaults ins RAM laden (speichert **nicht**) |
+
+Die Firmware führt das Kommando im 100-ms-Task aus und setzt das Wort
+danach auf `0` zurück (Handshake fürs Tool). Erfolg/Misserfolg zeigt
+Diagnose-Bit 12: gesetzt = Datensatz beim Boot korrupt oder letztes
+`SAVE` fehlgeschlagen; ein erfolgreiches `SAVE` löscht es. Ein leerer
+(fabrikneuer) DFLASH ist **kein** Fehler.
+
+Zurück zu den Defaults dauerhaft: erst `DFLT`, dann `SAVE`.
+Validierung (inkl. Nachweis der RAM/NVM-Trennung):
+`python tools/nvm_test.py` (siehe Skript-Hilfe).
 
 ## Kalibrieren
 

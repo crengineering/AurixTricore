@@ -1,6 +1,7 @@
 #include "Xcp.h"
 #include "Version.h"
 #include "Diagnostics.h"
+#include "Nvm.h"
 #include "Ifx_Types.h"
 #include "lwip/udp.h"
 #include <string.h>
@@ -50,12 +51,17 @@
 #define XCP_ERR_OUT_OF_RANGE        0x22u
 #define XCP_ERR_WRITE_PROTECTED     0x25u
 
-/* Writes are only allowed inside the calibration block (skipping its magic
- * word, which only the slave itself may set) — protects the rest of RAM. */
+/* Writes are only allowed inside the calibration block or the persistent
+ * parameter block (each skipping its magic word, which only the slave
+ * itself may set) — protects the rest of RAM. */
 static boolean xcpWriteAllowed(uint32 addr, uint32 len)
 {
-    return (boolean)((addr >= (XCP_CAL_ADDR + 4u))
-                     && ((addr + len) <= (XCP_CAL_ADDR + XCP_CAL_SIZE)));
+    boolean inCal = (boolean)((addr >= (XCP_CAL_ADDR + 4u))
+                              && ((addr + len) <= (XCP_CAL_ADDR + XCP_CAL_SIZE)));
+    boolean inNvm = (boolean)((addr >= (XCP_NVM_ADDR + 4u))
+                              && ((addr + len) <= (XCP_NVM_ADDR + XCP_NVM_SIZE)));
+
+    return (boolean)((inCal != FALSE) || (inNvm != FALSE));
 }
 
 /* identification string returned via GET_ID + UPLOAD */

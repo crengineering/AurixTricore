@@ -3,7 +3,8 @@
  * All objects live at fixed addresses (TASKING __at), so this file does not
  * depend on the link run:
  *   Xcp_Data  (measurements)          0x70030000, 40 bytes, Measurements.h
- *   Xcp_Cal   (calibration values)    0x70030100, 64 bytes, Diagnostics.h
+ *   Xcp_Cal   (calibration, RAM only) 0x70030100, 64 bytes, Diagnostics.h
+ *   Xcp_Nvm   (persistent, DFLASH)    0x70030200, 12 bytes, Nvm.h
  * Transport: XCP on UDP/IP, port 5555, station 192.168.0.10.
  * DAQ: dynamic, 1 list, event channel 0 = 100 ms task.
  */
@@ -68,6 +69,10 @@ ASAP2_VERSION 1 61
 
     /begin RECORD_LAYOUT RL_FLOAT32
       FNC_VALUES 1 FLOAT32_IEEE ROW_DIR DIRECT
+    /end RECORD_LAYOUT
+
+    /begin RECORD_LAYOUT RL_ULONG
+      FNC_VALUES 1 ULONG ROW_DIR DIRECT
     /end RECORD_LAYOUT
 
     /* ------------------------------------------------------------------ */
@@ -219,6 +224,12 @@ ASAP2_VERSION 1 61
       BIT_MASK 0x00000800
     /end MEASUREMENT
 
+    /begin MEASUREMENT Diag_NvmFault "NVM corrupt at boot or last save failed"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00001000
+    /end MEASUREMENT
+
     /begin MEASUREMENT Diag_CalInvalid "calibration block magic broken, defaults reloaded"
       ULONG NO_COMPU_METHOD 0 0 0 1
       ECU_ADDRESS 0x70030024
@@ -302,6 +313,18 @@ ASAP2_VERSION 1 61
     /begin CHARACTERISTIC CAL_fsVext "monitor ADC full scale VEXT"
       VALUE 0x7003013C RL_FLOAT32 10 NO_COMPU_METHOD 0 10
       PHYS_UNIT "V"
+    /end CHARACTERISTIC
+
+    /* ------------------------------------------------------------------ */
+    /* Persistent parameters: Xcp_Nvm @ 0x70030200 (see Nvm.h)            */
+    /* ------------------------------------------------------------------ */
+
+    /begin CHARACTERISTIC NVM_command "NVM command: 0x45564153 SAVE, 0x544C4644 load defaults; firmware clears to 0"
+      VALUE 0x70030204 RL_ULONG 4294967295 NO_COMPU_METHOD 0 4294967295
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC NVM_userValue "persistent user scratch word (survives reset after SAVE)"
+      VALUE 0x70030208 RL_ULONG 4294967295 NO_COMPU_METHOD 0 4294967295
     /end CHARACTERISTIC
 
   /end MODULE

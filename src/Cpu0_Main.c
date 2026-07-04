@@ -15,6 +15,7 @@
 #include "Xcp.h"
 #include "Measurements.h"
 #include "Diagnostics.h"
+#include "Nvm.h"
 #include "Version.h"
 
 IFX_ALIGN(4) IfxCpu_syncEvent cpuSyncEvent = 0;
@@ -34,6 +35,7 @@ static void Task_App10ms(void)
 
 static void Task_Measure100ms(void)
 {
+    Nvm_task100ms();        /* before diagnostics: fresh NVM fault state */
     measurementsUpdate();
     diagnosticsUpdate();
     xcpDaqCycle();
@@ -55,6 +57,7 @@ int core0_main(void)
     Scheduler_addTask(&g_sched, Task_App10ms,   SCHED_MS(10u));
     Scheduler_addTask(&g_sched, Task_Measure100ms, SCHED_MS(100u));
 
+    Nvm_bootInit();         /* load persistent parameters from DFLASH       */
     diagnosticsInit();      /* before measurementsInit: provides ADC scales */
     measurementsInit();
 

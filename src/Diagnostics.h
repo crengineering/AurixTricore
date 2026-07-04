@@ -8,8 +8,9 @@
  * (see DIAGNOSTICS.md for the user-facing documentation).
  *
  * Calibration block, pinned at a fixed address, writable via XCP
- * DOWNLOAD/SHORT_DOWNLOAD (the only writable region). Little-endian,
- * 64 bytes, all values float32:
+ * DOWNLOAD/SHORT_DOWNLOAD. RAM only — after a reset the defaults apply
+ * (persistent parameters live in the separate Xcp_Nvm block, see Nvm.h).
+ * Little-endian, 64 bytes, all values float32:
  *
  *   0x00  uint32   magic          0x4C414358 ("XCAL")
  *   0x04  float32  dtsMin         [degC]  PMS DTS lower limit
@@ -66,6 +67,7 @@ typedef struct
 #define DIAG_VEXT_OVERVOLT      (1u << 9)
 #define DIAG_TEMP_IMPLAUSIBLE   (1u << 10)
 #define DIAG_UART_DISCONNECTED  (1u << 11)
+#define DIAG_NVM_FAULT          (1u << 12)
 #define DIAG_CAL_INVALID        (1u << 31)
 
 extern volatile Xcp_Cal g_xcpCal;
