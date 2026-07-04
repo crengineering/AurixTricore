@@ -7,11 +7,21 @@
  * offset 0x04 (Xcp.c), the magic word is set only by the firmware. */
 volatile Xcp_Nvm g_xcpNvm __at(XCP_NVM_ADDR);
 
+/* Local u-suffixed copies of the iLLD flash constants: the iLLD defines
+ * them without suffix, which leaks essentially-signed operands into every
+ * expression (MISRA 7.2/10.4). Guarded against drift below. */
+#define NVM_DFLASH_START    0xAF000000u     /* = IFXFLASH_DFLASH_START       */
+#define NVM_PAGE_SIZE       8u              /* = IFXFLASH_DFLASH_PAGE_LENGTH */
+
+#if (IFXFLASH_DFLASH_START != 0xAF000000u) || (IFXFLASH_DFLASH_PAGE_LENGTH != 8u)
+#error "NVM flash constants out of sync with the iLLD device configuration"
+#endif
+
 /* Two logical 4 KB sectors at the start of the DFLASH0 EEPROM area.
  * Nothing else in this project uses the DFLASH. */
 #define NVM_SECTOR_COUNT    2u
 #define NVM_SECTOR_SIZE     0x1000u
-#define NVM_SECTOR_ADDR(i)  (IFXFLASH_DFLASH_START + ((i) * NVM_SECTOR_SIZE))
+#define NVM_SECTOR_ADDR(i)  (NVM_DFLASH_START + ((i) * NVM_SECTOR_SIZE))
 
 #define NVM_REC_MAGIC       0x4C41434Eu     /* "NCAL" (ASCII, little-endian) */
 #define NVM_LAYOUT_VERSION  2u              /* bump on Xcp_Nvm layout change */
@@ -32,8 +42,7 @@ typedef struct
 } Nvm_Record;
 
 /* record buffer rounded up to whole 8-byte DFLASH pages, in 32-bit words */
-#define NVM_RECORD_PAGES    ((sizeof(Nvm_Record) + (IFXFLASH_DFLASH_PAGE_LENGTH - 1u)) \
-                             / IFXFLASH_DFLASH_PAGE_LENGTH)
+#define NVM_RECORD_PAGES    ((sizeof(Nvm_Record) + (NVM_PAGE_SIZE - 1u)) / NVM_PAGE_SIZE)
 #define NVM_RECORD_WORDS    (NVM_RECORD_PAGES * 2u)
 
 /* per-sector record classification */
@@ -88,6 +97,8 @@ static uint32 nvm_crcPayload(const Xcp_Nvm *payload)
 {
     uint8 bytes[sizeof(Xcp_Nvm)];
 
+    /* cppcheck-suppress misra-c2012-21.15 ; deviation: intentional
+     * serialization of the struct into raw bytes for the CRC */
     (void)memcpy(bytes, payload, sizeof(bytes));
 
     return nvm_crc32(bytes, (uint32)sizeof(bytes));
@@ -117,6 +128,8 @@ static Nvm_RecState nvm_classify(const uint32 *words, Xcp_Nvm *dst, uint32 *sequ
     Nvm_Record   rec;
     Nvm_RecState state;
 
+    /* cppcheck-suppress misra-c2012-21.15 ; deviation: intentional
+     * deserialization of the raw flash words into the record struct */
     (void)memcpy(&rec, words, sizeof(rec));
 
     if (rec.hdr.magic != NVM_REC_MAGIC)
@@ -165,6 +178,8 @@ static boolean nvm_saveBlock(const Xcp_Nvm *src)
     rec.hdr.sequence = s_activeSequence + 1u;
     rec.payload      = *src;
     rec.hdr.crc      = nvm_crcPayload(&rec.payload);
+    /* cppcheck-suppress misra-c2012-21.15 ; deviation: intentional
+     * serialization of the record struct into the flash word buffer */
     (void)memcpy(words, &rec, sizeof(rec));
 
     /* ping-pong: never touch the sector holding the last good record */
@@ -183,7 +198,7 @@ static boolean nvm_saveBlock(const Xcp_Nvm *src)
 
     for (page = 0u; (page < NVM_RECORD_PAGES) && (ok != FALSE); page++)
     {
-        uint32 pageAddr = targetAddr + (page * IFXFLASH_DFLASH_PAGE_LENGTH);
+        uint32 pageAddr = targetAddr + (page * NVM_PAGE_SIZE);
 
         if (IfxFlash_enterPageMode(pageAddr) != 0u)
         {
@@ -273,7 +288,14 @@ void Nvm_bootInit(void)
     }
 
     /* blank/stale flash silently falls back to the defaults */
-    s_fault = (boolean)((s_haveActive == FALSE) && (anyCorrupt != FALSE));
+    if ((s_haveActive == FALSE) && (anyCorrupt != FALSE))
+    {
+        s_fault = TRUE;
+    }
+    else
+    {
+        s_fault = FALSE;
+    }
 }
 
 void Nvm_task100ms(void)
@@ -287,7 +309,14 @@ void Nvm_task100ms(void)
         snapshot.command = NVM_CMD_NONE;    /* never persist a command       */
         snapshot.magic   = XCP_NVM_MAGIC;
 
-        s_fault = (boolean)(nvm_saveBlock(&snapshot) == FALSE);
+        if (nvm_saveBlock(&snapshot) != FALSE)
+        {
+            s_fault = FALSE;
+        }
+        else
+        {
+            s_fault = TRUE;
+        }
 
         g_xcpNvm.command = NVM_CMD_NONE;    /* handshake for the master      */
     }

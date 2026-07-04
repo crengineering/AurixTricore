@@ -4,7 +4,7 @@ misra-c2012-10.4 src/Echo.c 15
 misra-c2012-10.4 src/UdpEcho.c 1
 misra-c2012-10.4 src/Xcp.c 1
 misra-c2012-10.5 src/Diagnostics.c 11
-misra-c2012-10.5 src/Xcp.c 2
+misra-c2012-10.5 src/Xcp.c 1
 misra-c2012-10.8 src/Cpu0_Main.c 3
 misra-c2012-10.8 src/Diagnostics.c 1
 misra-c2012-10.8 src/Xcp.c 4
@@ -13,7 +13,6 @@ misra-c2012-11.5 src/Echo.c 5
 misra-c2012-11.5 src/Xcp.c 1
 misra-c2012-11.8 src/Xcp.c 1
 misra-c2012-12.1 src/Echo.c 3
-misra-c2012-12.2 src/Diagnostics.c 4
 misra-c2012-12.2 src/Xcp.c 1
 misra-c2012-12.3 src/Cpu0_Main.c 1
 misra-c2012-14.4 src/Cpu0_Main.c 1

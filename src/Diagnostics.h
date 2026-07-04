@@ -54,21 +54,23 @@ typedef struct
     float32 fsVext;
 } Xcp_Cal;
 
-/* diagStatus bits in Xcp_Data (see DIAGNOSTICS.md) */
-#define DIAG_DTS_UNDERTEMP      (1u << 0)
-#define DIAG_DTS_OVERTEMP       (1u << 1)
-#define DIAG_DTSC_UNDERTEMP     (1u << 2)
-#define DIAG_DTSC_OVERTEMP      (1u << 3)
-#define DIAG_VDD_UNDERVOLT      (1u << 4)
-#define DIAG_VDD_OVERVOLT       (1u << 5)
-#define DIAG_VDDP3_UNDERVOLT    (1u << 6)
-#define DIAG_VDDP3_OVERVOLT     (1u << 7)
-#define DIAG_VEXT_UNDERVOLT     (1u << 8)
-#define DIAG_VEXT_OVERVOLT      (1u << 9)
-#define DIAG_TEMP_IMPLAUSIBLE   (1u << 10)
-#define DIAG_UART_DISCONNECTED  (1u << 11)
-#define DIAG_NVM_FAULT          (1u << 12)
-#define DIAG_CAL_INVALID        (1u << 31)
+/* diagStatus bits in Xcp_Data (see DIAGNOSTICS.md). Hex literals instead
+ * of (1u << n): MISRA 12.2 sees 1u as essentially unsigned char, making
+ * every shift beyond bit 7 a violation. */
+#define DIAG_DTS_UNDERTEMP      0x00000001u     /* bit 0  */
+#define DIAG_DTS_OVERTEMP       0x00000002u     /* bit 1  */
+#define DIAG_DTSC_UNDERTEMP     0x00000004u     /* bit 2  */
+#define DIAG_DTSC_OVERTEMP      0x00000008u     /* bit 3  */
+#define DIAG_VDD_UNDERVOLT      0x00000010u     /* bit 4  */
+#define DIAG_VDD_OVERVOLT       0x00000020u     /* bit 5  */
+#define DIAG_VDDP3_UNDERVOLT    0x00000040u     /* bit 6  */
+#define DIAG_VDDP3_OVERVOLT     0x00000080u     /* bit 7  */
+#define DIAG_VEXT_UNDERVOLT     0x00000100u     /* bit 8  */
+#define DIAG_VEXT_OVERVOLT      0x00000200u     /* bit 9  */
+#define DIAG_TEMP_IMPLAUSIBLE   0x00000400u     /* bit 10 */
+#define DIAG_UART_DISCONNECTED  0x00000800u     /* bit 11 */
+#define DIAG_NVM_FAULT          0x00001000u     /* bit 12 */
+#define DIAG_CAL_INVALID        0x80000000u     /* bit 31 */
 
 extern volatile Xcp_Cal g_xcpCal;
 

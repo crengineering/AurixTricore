@@ -103,9 +103,10 @@ void diagnosticsUpdate(void)
 {
     uint32  status = 0u;
     float32 tempDelta;
+    boolean uartLost;
 
     /* UART link heartbeat: a received 'H' resets the silence counter */
-    if (Uart_heartbeatReceived())
+    if (Uart_heartbeatReceived() != FALSE)
     {
         s_uartSilenceTicks = 0u;
     }
@@ -148,7 +149,16 @@ void diagnosticsUpdate(void)
     status |= diag_debounce(8u,  (boolean)(g_xcpData.vext      < g_xcpCal.vextMin),  DIAG_VEXT_UNDERVOLT);
     status |= diag_debounce(9u,  (boolean)(g_xcpData.vext      > g_xcpCal.vextMax),  DIAG_VEXT_OVERVOLT);
     status |= diag_debounce(10u, (boolean)(tempDelta           > g_xcpCal.tempDeltaMax), DIAG_TEMP_IMPLAUSIBLE);
-    status |= diag_debounce(11u, (boolean)(s_uartSilenceTicks >= DIAG_UART_TIMEOUT_TICKS), DIAG_UART_DISCONNECTED);
+
+    if (s_uartSilenceTicks >= DIAG_UART_TIMEOUT_TICKS)
+    {
+        uartLost = TRUE;
+    }
+    else
+    {
+        uartLost = FALSE;
+    }
+    status |= diag_debounce(11u, uartLost, DIAG_UART_DISCONNECTED);
 
     g_xcpData.diagStatus = status;
 }

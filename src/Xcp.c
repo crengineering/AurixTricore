@@ -56,12 +56,22 @@
  * itself may set) — protects the rest of RAM. */
 static boolean xcpWriteAllowed(uint32 addr, uint32 len)
 {
-    boolean inCal = (boolean)((addr >= (XCP_CAL_ADDR + 4u))
-                              && ((addr + len) <= (XCP_CAL_ADDR + XCP_CAL_SIZE)));
-    boolean inNvm = (boolean)((addr >= (XCP_NVM_ADDR + 4u))
-                              && ((addr + len) <= (XCP_NVM_ADDR + XCP_NVM_SIZE)));
+    boolean allowed = FALSE;
 
-    return (boolean)((inCal != FALSE) || (inNvm != FALSE));
+    if ((addr >= (XCP_CAL_ADDR + 4u)) && ((addr + len) <= (XCP_CAL_ADDR + XCP_CAL_SIZE)))
+    {
+        allowed = TRUE;
+    }
+    else if ((addr >= (XCP_NVM_ADDR + 4u)) && ((addr + len) <= (XCP_NVM_ADDR + XCP_NVM_SIZE)))
+    {
+        allowed = TRUE;
+    }
+    else
+    {
+        /* outside both writable blocks */
+    }
+
+    return allowed;
 }
 
 /* identification string returned via GET_ID + UPLOAD */
