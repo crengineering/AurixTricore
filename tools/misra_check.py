@@ -41,7 +41,8 @@ INCLUDE_ROOTS = [  # every directory below these is passed as an include path
     "Libraries/Infra",
 ]
 INCLUDE_DIRS = [
-    "src",
+    "src/bsw",
+    "src/asw",
     "Configurations",
     "Libraries/Ethernet/lwip/src/include",
     "Libraries/Ethernet/lwip/port/include",

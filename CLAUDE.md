@@ -21,7 +21,8 @@ Build config: **TriCore Debug (TASKING)** — outputs `AurixTricore.elf`.
 ## Project Layout
 
 ```
-src/                 Application code
+src/bsw/             Base software (owns hardware + generic services;
+                     never includes ASW headers)
   Cpu0_Main.c        Core 0 — Ethernet/lwIP/XCP, measurements, blinks D306
   Cpu1_Main.c ...    Cores 1-3 blink D307-D309; cores 4-5 sync + idle
   Echo.c/UdpEcho.c   TCP + UDP echo servers (port 7)
@@ -33,7 +34,10 @@ src/                 Application code
   Version.h          SW version (bump on releases; then verify via XCP —
                      amk may miss the rebuild of including files!)
   Uart.c, led.c, scheduler.c
-docs/                DIAGNOSTICS.md (diag bits, cal block), AurixTricore.a2l
+src/asw/             Application software (vision pipeline, from M1 on;
+                     calls BSW only, never iLLD — see asw/README.md)
+docs/                DIAGNOSTICS.md (diag bits, cal block),
+                     OBJECT_DETECTION.md (vision roadmap), AurixTricore.a2l
 tools/               xcp_test.py, nvm_test.py (pyXCP validation)
                      misra_check.py + misra_baseline.txt (MISRA gate, see below)
 .github/workflows/   misra.yml — CI MISRA check (cppcheck misra addon)
