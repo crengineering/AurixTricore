@@ -23,7 +23,7 @@ IFX_ALIGN(4) IfxCpu_syncEvent cpuSyncEvent = 0;
 
 static Scheduler_t g_sched;
 static Led_t       g_led;
-static gpio_t      g_gpio;
+static boolean error_active = FALSE;
 
 static void Task_LedToggle(void)
 {
@@ -39,7 +39,8 @@ static void Task_Measure100ms(void)
 {
     Nvm_task100ms();        /* before diagnostics: fresh NVM fault state */
     measurementsUpdate();
-    diagnosticsUpdate();
+    error_active = diagnosticsUpdate();
+    toggle_gpio_pins(error_active);
     xcpDaqCycle();
 }
 
@@ -59,8 +60,7 @@ int core0_main(void)
     Led_init(&g_led, &MODULE_P20, 11u);
 
     /* init GPIO */
-    gpio_init(&g_gpio, &MODULE_P00, 0u);
-    gpio_toggle(&g_gpio);
+    init_gpio_pins();
 
     /* init scheduler */
     Scheduler_init(&g_sched, &MODULE_STM0);

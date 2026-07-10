@@ -99,7 +99,7 @@ static uint32 diag_debounce(uint32 checkIndex, boolean violated, uint32 bitMask)
     return 0u;
 }
 
-void diagnosticsUpdate(void)
+boolean diagnosticsUpdate(void)
 {
     uint32  status = 0u;
     float32 tempDelta;
@@ -161,4 +161,10 @@ void diagnosticsUpdate(void)
     status |= diag_debounce(11u, uartLost, DIAG_UART_DISCONNECTED);
 
     g_xcpData.diagStatus = status;
+
+    if (status > 0) {
+        return TRUE;
+    } else {
+        return FALSE;
+    }
 }

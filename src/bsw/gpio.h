@@ -28,8 +28,10 @@ typedef struct
 /******************************************************************************/
 /*-------------------------Global Function Prototypes-------------------------*/
 /******************************************************************************/
-
+/* Pin level */
 void gpio_init(gpio_t *gpio, Ifx_P *port, uint8 pin);
-void gpio_toggle(gpio_t *gpio);
+void gpio_toggle(gpio_t *gpio, boolean condition);
+void init_gpio_pins(void);
+void toggle_gpio_pins(boolean error_active);
 
 #endif /* LED_H */
