@@ -17,11 +17,13 @@
 #include "Diagnostics.h"
 #include "Nvm.h"
 #include "Version.h"
+#include "gpio.h"
 
 IFX_ALIGN(4) IfxCpu_syncEvent cpuSyncEvent = 0;
 
 static Scheduler_t g_sched;
 static Led_t       g_led;
+static gpio_t      g_gpio;
 
 static void Task_LedToggle(void)
 {
@@ -44,19 +46,29 @@ static void Task_Measure100ms(void)
 int core0_main(void)
 {
     IfxCpu_enableInterrupts();
+
+    /*disable Watchdogs*/
     IfxScuWdt_disableCpuWatchdog(IfxScuWdt_getCpuWatchdogPassword());
     IfxScuWdt_disableSafetyWatchdog(IfxScuWdt_getSafetyWatchdogPassword());
 
+    /* init UART communication*/
     Uart_init();
     Uart_println("CPU0 started, SW v" SW_VERSION_STRING);
 
+    /* init LED toggle for task*/
     Led_init(&g_led, &MODULE_P20, 11u);
 
+    /* init GPIO */
+    gpio_init(&g_gpio, &MODULE_P00, 0u);
+    gpio_toggle(&g_gpio);
+
+    /* init scheduler */
     Scheduler_init(&g_sched, &MODULE_STM0);
     Scheduler_addTask(&g_sched, Task_LedToggle, SCHED_MS(500u));
     Scheduler_addTask(&g_sched, Task_App10ms,   SCHED_MS(10u));
     Scheduler_addTask(&g_sched, Task_Measure100ms, SCHED_MS(100u));
 
+    /* init persistent memory*/
     Nvm_bootInit();         /* load persistent parameters from DFLASH       */
     diagnosticsInit();      /* before measurementsInit: provides ADC scales */
     measurementsInit();
