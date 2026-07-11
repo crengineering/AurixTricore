@@ -104,6 +104,7 @@ boolean diagnosticsUpdate(void)
     uint32  status = 0u;
     float32 tempDelta;
     boolean uartLost;
+    boolean anyFault;
 
     /* UART link heartbeat: a received 'H' resets the silence counter */
     if (Uart_heartbeatReceived() != FALSE)
@@ -162,5 +163,10 @@ boolean diagnosticsUpdate(void)
 
     g_xcpData.diagStatus = status;
 
-    return (boolean)(status != 0u);
+    if (status != 0u) {
+        anyFault = TRUE;
+    } else {
+        anyFault = FALSE;
+    }
+    return anyFault;
 }
