@@ -34,8 +34,6 @@ static const gpio_cfg_t g_gpio_cfg[GPIO_P_00_END] =
     [GPIO_P_00_15] = { &MODULE_P00, 15u, IfxPort_State_low, TRUE  }
 };
 
-static gpio_state_t g_gpio_state[GPIO_P_00_END];
-
 /* XCP control block at a fixed address (see gpio.h). RAM only: a reset
  * returns every pin to firmware control. The XCP slave only permits writes
  * inside this block, skipping the magic word. */
@@ -50,7 +48,7 @@ volatile Xcp_Gpio g_xcpGpio __at(XCP_GPIO_ADDR);
 void init_gpio_pins(void)
 {
     uint32 pin_id;
-    for (pin_id = 0u; pin_id < GPIO_P_00_END; pin_id++){
+    for (pin_id = 0u; pin_id < (uint32)GPIO_P_00_END; pin_id++){
         IfxPort_setPinState(g_gpio_cfg[pin_id].port, g_gpio_cfg[pin_id].pin, g_gpio_cfg[pin_id].state);
         IfxPort_setPinMode(g_gpio_cfg[pin_id].port, g_gpio_cfg[pin_id].pin, IfxPort_Mode_outputPushPullGeneral);
     }
@@ -58,16 +56,14 @@ void init_gpio_pins(void)
 
 void gpio_write(gpio_P_00_t pin_id, gpio_state_t state)
 {
-    if (pin_id >= GPIO_P_00_END) {
-        return;   /* out-of-range handle: ignore, never index past the table */
+    /* bounds check: never index past the config table */
+    if (pin_id < GPIO_P_00_END) {
+        if (state == GPIO_STATE_ON) {
+            IfxPort_setPinState(g_gpio_cfg[pin_id].port, g_gpio_cfg[pin_id].pin, IfxPort_State_high);
+        } else {
+            IfxPort_setPinState(g_gpio_cfg[pin_id].port, g_gpio_cfg[pin_id].pin, IfxPort_State_low);
+        }
     }
-
-    if (state == GPIO_STATE_ON) {
-        IfxPort_setPinState(g_gpio_cfg[pin_id].port, g_gpio_cfg[pin_id].pin, IfxPort_State_high);
-    } else {
-        IfxPort_setPinState(g_gpio_cfg[pin_id].port, g_gpio_cfg[pin_id].pin, IfxPort_State_low);
-    }
-    g_gpio_state[pin_id] = state;
 }
 
 /* Load default XCP control state: valid magic, every pin state OFF. */
@@ -76,7 +72,7 @@ void gpio_calInit(void)
     uint32 i;
 
     g_xcpGpio.magic = XCP_GPIO_MAGIC;
-    for (i = 0u; i < GPIO_P_00_END; i++) {
+    for (i = 0u; i < (uint32)GPIO_P_00_END; i++) {
         g_xcpGpio.state[i] = 0u;
     }
 }
@@ -91,13 +87,12 @@ void gpio_calApply(void)
 
     if (g_xcpGpio.magic != XCP_GPIO_MAGIC) {
         gpio_calInit();
-        return;
-    }
-
-    for (i = 0u; i < GPIO_P_00_END; i++) {
-        if (g_gpio_cfg[i].userControllable != FALSE) {
-            gpio_write((gpio_P_00_t)i,
-                       (g_xcpGpio.state[i] != 0u) ? GPIO_STATE_ON : GPIO_STATE_OFF);
+    } else {
+        for (i = 0u; i < (uint32)GPIO_P_00_END; i++) {
+            if (g_gpio_cfg[i].userControllable != FALSE) {
+                gpio_write((gpio_P_00_t)i,
+                           (g_xcpGpio.state[i] != 0u) ? GPIO_STATE_ON : GPIO_STATE_OFF);
+            }
         }
     }
 }

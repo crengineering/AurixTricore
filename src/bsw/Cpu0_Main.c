@@ -39,7 +39,7 @@ static void Task_Measure100ms(void)
 {
     Nvm_task100ms();        /* before diagnostics: fresh NVM fault state */
     measurementsUpdate();
-    if (diagnosticsUpdate()) {
+    if (diagnosticsUpdate() != FALSE) {
         gpio_write(GPIO_P_00_0, GPIO_STATE_ON);
     } else {
         gpio_write(GPIO_P_00_0, GPIO_STATE_OFF);

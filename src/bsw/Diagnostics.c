@@ -162,9 +162,5 @@ boolean diagnosticsUpdate(void)
 
     g_xcpData.diagStatus = status;
 
-    if (status > 0) {
-        return TRUE;
-    } else {
-        return FALSE;
-    }
+    return (boolean)(status != 0u);
 }
