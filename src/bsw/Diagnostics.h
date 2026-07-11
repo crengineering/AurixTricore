@@ -75,6 +75,6 @@ typedef struct
 extern volatile Xcp_Cal g_xcpCal;
 
 void diagnosticsInit(void);     /* load default calibration (CPU0, once)     */
-void diagnosticsUpdate(void);   /* call every 100 ms, after measurements     */
+boolean diagnosticsUpdate(void);   /* call every 100 ms, after measurements     */
 
 #endif /* DIAGNOSTICS_H_ */

@@ -2,6 +2,7 @@
 #include "Version.h"
 #include "Diagnostics.h"
 #include "Nvm.h"
+#include "gpio.h"
 #include "Ifx_Types.h"
 #include "lwip/udp.h"
 #include <string.h>
@@ -66,9 +67,13 @@ static boolean xcpWriteAllowed(uint32 addr, uint32 len)
     {
         allowed = TRUE;
     }
+    else if ((addr >= (XCP_GPIO_ADDR + 4u)) && ((addr + len) <= (XCP_GPIO_ADDR + XCP_GPIO_SIZE)))
+    {
+        allowed = TRUE;
+    }
     else
     {
-        /* outside both writable blocks */
+        /* outside every writable block */
     }
 
     return allowed;

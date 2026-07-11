@@ -17,11 +17,13 @@
 #include "Diagnostics.h"
 #include "Nvm.h"
 #include "Version.h"
+#include "gpio.h"
 
 IFX_ALIGN(4) IfxCpu_syncEvent cpuSyncEvent = 0;
 
 static Scheduler_t g_sched;
 static Led_t       g_led;
+static boolean error_active = FALSE;
 
 static void Task_LedToggle(void)
 {
@@ -37,26 +39,41 @@ static void Task_Measure100ms(void)
 {
     Nvm_task100ms();        /* before diagnostics: fresh NVM fault state */
     measurementsUpdate();
-    diagnosticsUpdate();
+    if (diagnosticsUpdate() != FALSE) {
+        gpio_write(GPIO_P_00_0, GPIO_STATE_ON);
+    } else {
+        gpio_write(GPIO_P_00_0, GPIO_STATE_OFF);
+    }
+    gpio_calApply();        /* XCP overrides win over the diagnostics write above */
     xcpDaqCycle();
 }
 
 int core0_main(void)
 {
     IfxCpu_enableInterrupts();
+
+    /*disable Watchdogs*/
     IfxScuWdt_disableCpuWatchdog(IfxScuWdt_getCpuWatchdogPassword());
     IfxScuWdt_disableSafetyWatchdog(IfxScuWdt_getSafetyWatchdogPassword());
 
+    /* init UART communication*/
     Uart_init();
     Uart_println("CPU0 started, SW v" SW_VERSION_STRING);
 
+    /* init LED toggle for task*/
     Led_init(&g_led, &MODULE_P20, 11u);
 
+    /* init GPIO */
+    init_gpio_pins();
+    gpio_calInit();         /* XCP GPIO control block: all pins firmware-owned */
+
+    /* init scheduler */
     Scheduler_init(&g_sched, &MODULE_STM0);
     Scheduler_addTask(&g_sched, Task_LedToggle, SCHED_MS(500u));
     Scheduler_addTask(&g_sched, Task_App10ms,   SCHED_MS(10u));
     Scheduler_addTask(&g_sched, Task_Measure100ms, SCHED_MS(100u));
 
+    /* init persistent memory*/
     Nvm_bootInit();         /* load persistent parameters from DFLASH       */
     diagnosticsInit();      /* before measurementsInit: provides ADC scales */
     measurementsInit();
