@@ -26,10 +26,23 @@ typedef struct
 } gpio_cfg_t;
 
 typedef enum {
-    GPIO_P_00_0 = 0, 
-    GPIO_P_00_1, 
-    /* new pins here */
-    GPIO_P_00_END
+    GPIO_P_00_0 = 0,
+    GPIO_P_00_1,
+    GPIO_P_00_2,
+    GPIO_P_00_3,
+    GPIO_P_00_4,
+    GPIO_P_00_5,
+    GPIO_P_00_6,
+    GPIO_P_00_7,
+    GPIO_P_00_8,
+    GPIO_P_00_9,
+    GPIO_P_00_10,
+    GPIO_P_00_11,
+    GPIO_P_00_12,
+    GPIO_P_00_13,
+    GPIO_P_00_14,
+    GPIO_P_00_15,
+    GPIO_P_00_END        /* == number of configured pins (16) */
 } gpio_P_00_t;
 
 typedef enum {

@@ -4,6 +4,15 @@ setlocal
 rem =====================================================================
 rem Headless build for AurixTricore
 rem
+rem Usage:
+rem   build.bat          incremental build (fast; default)
+rem   build.bat clean    clean build (slower; wipes intermediates first)
+rem
+rem Use "clean" after editing a header (.h). amk's incremental dependency
+rem tracking does not reliably recompile .c files when only a header
+rem changed, so a stale .o (e.g. an old array size) can be linked into the
+rem ELF. A clean build recompiles everything and avoids this.
+rem
 rem Uses a dedicated Eclipse workspace (ads_headless_ws) so it works even
 rem while the ADS GUI is open. Do NOT start an IDE build while this runs.
 rem
@@ -12,6 +21,13 @@ rem has not been created yet") because it needs the GUI. It is temporarily
 rem removed from .project for the build; the standard CDT genmakebuilder
 rem performs the actual amk build. .project is restored afterwards.
 rem =====================================================================
+
+rem --- pick incremental (-build) or clean (-cleanBuild) ---
+set BUILDGOAL=-build
+if /I "%~1"=="clean" (
+    set BUILDGOAL=-cleanBuild
+    echo === CLEAN BUILD angefordert ===
+)
 
 set ADS=C:\Infineon\AURIX-Studio-1.10.32
 set WORKSPACE=C:\Users\chris\Projects\ads_headless_ws
@@ -42,7 +58,7 @@ echo === BUILD ===
   -data "%WORKSPACE%" ^
   -application com.tasking.managedbuilder.headlessbuild ^
   %IMPORTARG% ^
-  -build "AurixTricore/TriCore Debug .TASKING." ^
+  %BUILDGOAL% "AurixTricore/TriCore Debug .TASKING." ^
   --launcher.ini "%ADS%\AURIX-studio-headless.ini"
 
 rem --- always restore the original .project for the IDE ---
