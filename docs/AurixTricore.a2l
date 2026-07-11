@@ -5,6 +5,7 @@
  *   Xcp_Data  (measurements)          0x70030000, 40 bytes, Measurements.h
  *   Xcp_Cal   (calibration, RAM only) 0x70030100, 64 bytes, Diagnostics.h
  *   Xcp_Nvm   (persistent, DFLASH)    0x70030200, 12 bytes, Nvm.h
+ *   Xcp_Gpio  (GPIO control, RAM only) 0x70030300, 20 bytes, gpio.h
  * Transport: XCP on UDP/IP, port 5555, station 192.168.0.10.
  * DAQ: dynamic, 1 list, event channel 0 = 100 ms task.
  */
@@ -73,6 +74,10 @@ ASAP2_VERSION 1 61
 
     /begin RECORD_LAYOUT RL_ULONG
       FNC_VALUES 1 ULONG ROW_DIR DIRECT
+    /end RECORD_LAYOUT
+
+    /begin RECORD_LAYOUT RL_UBYTE
+      FNC_VALUES 1 UBYTE ROW_DIR DIRECT
     /end RECORD_LAYOUT
 
     /* ------------------------------------------------------------------ */
@@ -325,6 +330,73 @@ ASAP2_VERSION 1 61
 
     /begin CHARACTERISTIC NVM_userValue "persistent user scratch word (survives reset after SAVE)"
       VALUE 0x70030208 RL_ULONG 4294967295 NO_COMPU_METHOD 0 4294967295
+    /end CHARACTERISTIC
+
+    /* ------------------------------------------------------------------ */
+    /* GPIO control: Xcp_Gpio @ 0x70030300 (see gpio.h)                   */
+    /* Per-pin output state (0=OFF/low, 1=ON/high). Which pins are        */
+    /* user-controllable is fixed in firmware; reserved pins (e.g. P00.0, */
+    /* diagnostics) are not exposed here and cannot be driven over XCP.   */
+    /* ------------------------------------------------------------------ */
+
+    /begin CHARACTERISTIC GPIO_P00_01_state "P00.1 output level (0=OFF/low, 1=ON/high)"
+      VALUE 0x70030305 RL_UBYTE 1 NO_COMPU_METHOD 0 1
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_02_state "P00.2 output level (0=OFF/low, 1=ON/high)"
+      VALUE 0x70030306 RL_UBYTE 1 NO_COMPU_METHOD 0 1
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_03_state "P00.3 output level (0=OFF/low, 1=ON/high)"
+      VALUE 0x70030307 RL_UBYTE 1 NO_COMPU_METHOD 0 1
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_04_state "P00.4 output level (0=OFF/low, 1=ON/high)"
+      VALUE 0x70030308 RL_UBYTE 1 NO_COMPU_METHOD 0 1
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_05_state "P00.5 output level (0=OFF/low, 1=ON/high)"
+      VALUE 0x70030309 RL_UBYTE 1 NO_COMPU_METHOD 0 1
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_06_state "P00.6 output level (0=OFF/low, 1=ON/high)"
+      VALUE 0x7003030A RL_UBYTE 1 NO_COMPU_METHOD 0 1
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_07_state "P00.7 output level (0=OFF/low, 1=ON/high)"
+      VALUE 0x7003030B RL_UBYTE 1 NO_COMPU_METHOD 0 1
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_08_state "P00.8 output level (0=OFF/low, 1=ON/high)"
+      VALUE 0x7003030C RL_UBYTE 1 NO_COMPU_METHOD 0 1
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_09_state "P00.9 output level (0=OFF/low, 1=ON/high)"
+      VALUE 0x7003030D RL_UBYTE 1 NO_COMPU_METHOD 0 1
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_10_state "P00.10 output level (0=OFF/low, 1=ON/high)"
+      VALUE 0x7003030E RL_UBYTE 1 NO_COMPU_METHOD 0 1
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_11_state "P00.11 output level (0=OFF/low, 1=ON/high)"
+      VALUE 0x7003030F RL_UBYTE 1 NO_COMPU_METHOD 0 1
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_12_state "P00.12 output level (0=OFF/low, 1=ON/high)"
+      VALUE 0x70030310 RL_UBYTE 1 NO_COMPU_METHOD 0 1
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_13_state "P00.13 output level (0=OFF/low, 1=ON/high)"
+      VALUE 0x70030311 RL_UBYTE 1 NO_COMPU_METHOD 0 1
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_14_state "P00.14 output level (0=OFF/low, 1=ON/high)"
+      VALUE 0x70030312 RL_UBYTE 1 NO_COMPU_METHOD 0 1
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_15_state "P00.15 output level (0=OFF/low, 1=ON/high)"
+      VALUE 0x70030313 RL_UBYTE 1 NO_COMPU_METHOD 0 1
     /end CHARACTERISTIC
 
   /end MODULE

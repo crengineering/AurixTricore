@@ -44,6 +44,7 @@ static void Task_Measure100ms(void)
     } else {
         gpio_write(GPIO_P_00_0, GPIO_STATE_OFF);
     }
+    gpio_calApply();        /* XCP overrides win over the diagnostics write above */
     xcpDaqCycle();
 }
 
@@ -64,6 +65,7 @@ int core0_main(void)
 
     /* init GPIO */
     init_gpio_pins();
+    gpio_calInit();         /* XCP GPIO control block: all pins firmware-owned */
 
     /* init scheduler */
     Scheduler_init(&g_sched, &MODULE_STM0);
