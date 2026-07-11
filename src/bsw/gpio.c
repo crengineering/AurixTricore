@@ -7,55 +7,39 @@
 /******************************************************************************/
 /*----------------------------------Includes----------------------------------*/
 /******************************************************************************/
-
 #include "gpio.h"
-
 /******************************************************************************/
 /*----------------------------------Variables---------------------------------*/
 /******************************************************************************/
-static gpio_t      g_gpio_P00_0;
-static gpio_t      g_gpio_P00_1;
+static const gpio_cfg_t g_gpio_cfg[GPIO_P_00_END] = 
+{
+    [GPIO_P_00_0]  = { &MODULE_P00, 0u, IfxPort_State_low  },
+    [GPIO_P_00_1]  = { &MODULE_P00, 1u, IfxPort_State_low  }
+};
 
+static gpio_state_t g_gpio_state[GPIO_P_00_END];
 /******************************************************************************/
 /*--------------------------Local Function Implementations--------------------*/
 /******************************************************************************/
 
-void gpio_init(gpio_t *gpio, Ifx_P *port, uint8 pin)
-{
-    gpio->port  = port;
-    gpio->pin   = pin;
-    gpio->state = IfxPort_State_low;   /* OFF on active-low board */
-
-    IfxPort_setPinMode(port, pin, IfxPort_Mode_outputPushPullGeneral);
-    IfxPort_setPinState(port, pin, IfxPort_State_low);
-}
-
-void gpio_toggle(gpio_t *gpio, boolean condition)
-{
-    if (condition) {
-        gpio->state = IfxPort_State_high;
-    } else {
-        gpio->state = IfxPort_State_low;
-    }
-    
-    IfxPort_setPinState(gpio->port, gpio->pin, gpio->state);
-}
-
 /******************************************************************************/
 /*-------------------------- Global Function Implementations------------------*/
 /******************************************************************************/
-
-/* init Pins*/
-void init_gpio_pins(void){
-
-    /* Module P00*/
-    gpio_init(&g_gpio_P00_0, &MODULE_P00, 0u); /* Pin 0 */
-    gpio_init(&g_gpio_P00_1, &MODULE_P00, 1u); /* Pin 1 */
+void init_gpio_pins(void)
+{
+    uint32 pin_id;
+    for (pin_id = 0u; pin_id < GPIO_P_00_END; pin_id++){
+        IfxPort_setPinState(g_gpio_cfg[pin_id].port, g_gpio_cfg[pin_id].pin, g_gpio_cfg[pin_id].state);
+        IfxPort_setPinMode(g_gpio_cfg[pin_id].port, g_gpio_cfg[pin_id].pin, IfxPort_Mode_outputPushPullGeneral);
+    }
 }
 
-void toggle_gpio_pins(boolean error_active){
-
-    /* Module P00 */
-    gpio_toggle(&g_gpio_P00_0, error_active); /* Pin 0 */
-    gpio_toggle(&g_gpio_P00_1, TRUE);         /* Pin 1 */
+void gpio_write(gpio_P_00_t pin_id, gpio_state_t state)
+{
+    if (state == GPIO_STATE_ON) {
+        IfxPort_setPinState(g_gpio_cfg[pin_id].port, g_gpio_cfg[pin_id].pin, IfxPort_State_high);
+    } else {
+        IfxPort_setPinState(g_gpio_cfg[pin_id].port, g_gpio_cfg[pin_id].pin, IfxPort_State_low);
+    }
+    g_gpio_state[pin_id] = state;
 }

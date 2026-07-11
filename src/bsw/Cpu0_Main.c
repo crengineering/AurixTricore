@@ -39,8 +39,11 @@ static void Task_Measure100ms(void)
 {
     Nvm_task100ms();        /* before diagnostics: fresh NVM fault state */
     measurementsUpdate();
-    error_active = diagnosticsUpdate();
-    toggle_gpio_pins(error_active);
+    if (diagnosticsUpdate()) {
+        gpio_write(GPIO_P_00_0, GPIO_STATE_ON);
+    } else {
+        gpio_write(GPIO_P_00_0, GPIO_STATE_OFF);
+    }
     xcpDaqCycle();
 }
 
