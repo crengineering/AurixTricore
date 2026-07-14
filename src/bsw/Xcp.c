@@ -67,9 +67,15 @@ static boolean xcpWriteAllowed(uint32 addr, uint32 len)
     {
         allowed = TRUE;
     }
-    else if ((addr >= (XCP_GPIO_ADDR + 4u)) && ((addr + len) <= (XCP_GPIO_ADDR + XCP_GPIO_SIZE)))
+    else if ((addr >= (XCP_GPIO_ADDR + XCP_GPIO_STATE_OFFSET))
+             && ((addr + len) <= (XCP_GPIO_ADDR + XCP_GPIO_MODE_OFFSET)))
     {
-        allowed = TRUE;
+        allowed = TRUE;                 /* GPIO state[] — mode[] stays protected */
+    }
+    else if ((addr >= (XCP_GPIO_ADDR + XCP_GPIO_DUTY_OFFSET))
+             && ((addr + len) <= (XCP_GPIO_ADDR + XCP_GPIO_SIZE)))
+    {
+        allowed = TRUE;                 /* GPIO duty[] */
     }
     else
     {

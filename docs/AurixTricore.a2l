@@ -5,7 +5,7 @@
  *   Xcp_Data  (measurements)          0x70030000, 40 bytes, Measurements.h
  *   Xcp_Cal   (calibration, RAM only) 0x70030100, 64 bytes, Diagnostics.h
  *   Xcp_Nvm   (persistent, DFLASH)    0x70030200, 12 bytes, Nvm.h
- *   Xcp_Gpio  (GPIO control, RAM only) 0x70030300, 20 bytes, gpio.h
+ *   Xcp_Gpio  (GPIO control, RAM only) 0x70030300, 52 bytes, gpio.h
  * Transport: XCP on UDP/IP, port 5555, station 192.168.0.10.
  * DAQ: dynamic, 1 list, event channel 0 = 100 ms task.
  */
@@ -333,10 +333,16 @@ ASAP2_VERSION 1 61
     /end CHARACTERISTIC
 
     /* ------------------------------------------------------------------ */
-    /* GPIO control: Xcp_Gpio @ 0x70030300 (see gpio.h)                   */
-    /* Per-pin output state (0=OFF/low, 1=ON/high). Which pins are        */
-    /* user-controllable is fixed in firmware; reserved pins (e.g. P00.0, */
-    /* diagnostics) are not exposed here and cannot be driven over XCP.   */
+    /* GPIO control: Xcp_Gpio @ 0x70030300, 52 bytes (see gpio.h)         */
+    /*   0x04 state[16]  0=OFF, 1=ON                       (writable)     */
+    /*   0x14 mode[16]   0=digital, 1=PWM, 2=reserved      (READ-ONLY)    */
+    /*   0x24 duty[16]   PWM duty cycle 0..100 %           (writable)     */
+    /* Which pins are user-controllable and which are PWM is fixed in     */
+    /* firmware (gpio_cfg.h); reserved pins (e.g. P00.0, diagnostics) are */
+    /* not exposed here and cannot be driven over XCP. For a PWM pin,     */
+    /* state acts as an enable: OFF forces 0 % duty (output low), ON      */
+    /* applies the duty value. Duty writes to digital pins are accepted   */
+    /* but have no effect.                                                */
     /* ------------------------------------------------------------------ */
 
     /begin CHARACTERISTIC GPIO_P00_01_state "P00.1 output level (0=OFF/low, 1=ON/high)"
@@ -397,6 +403,81 @@ ASAP2_VERSION 1 61
 
     /begin CHARACTERISTIC GPIO_P00_15_state "P00.15 output level (0=OFF/low, 1=ON/high)"
       VALUE 0x70030313 RL_UBYTE 1 NO_COMPU_METHOD 0 1
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_01_duty "P00.1 PWM duty cycle (effective only if pin is PWM in gpio_cfg.h)"
+      VALUE 0x70030325 RL_UBYTE 100 NO_COMPU_METHOD 0 100
+      PHYS_UNIT "%"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_02_duty "P00.2 PWM duty cycle (effective only if pin is PWM in gpio_cfg.h)"
+      VALUE 0x70030326 RL_UBYTE 100 NO_COMPU_METHOD 0 100
+      PHYS_UNIT "%"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_03_duty "P00.3 PWM duty cycle (effective only if pin is PWM in gpio_cfg.h)"
+      VALUE 0x70030327 RL_UBYTE 100 NO_COMPU_METHOD 0 100
+      PHYS_UNIT "%"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_04_duty "P00.4 PWM duty cycle (effective only if pin is PWM in gpio_cfg.h)"
+      VALUE 0x70030328 RL_UBYTE 100 NO_COMPU_METHOD 0 100
+      PHYS_UNIT "%"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_05_duty "P00.5 PWM duty cycle (effective only if pin is PWM in gpio_cfg.h)"
+      VALUE 0x70030329 RL_UBYTE 100 NO_COMPU_METHOD 0 100
+      PHYS_UNIT "%"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_06_duty "P00.6 PWM duty cycle (effective only if pin is PWM in gpio_cfg.h)"
+      VALUE 0x7003032A RL_UBYTE 100 NO_COMPU_METHOD 0 100
+      PHYS_UNIT "%"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_07_duty "P00.7 PWM duty cycle (effective only if pin is PWM in gpio_cfg.h)"
+      VALUE 0x7003032B RL_UBYTE 100 NO_COMPU_METHOD 0 100
+      PHYS_UNIT "%"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_08_duty "P00.8 PWM duty cycle (effective only if pin is PWM in gpio_cfg.h)"
+      VALUE 0x7003032C RL_UBYTE 100 NO_COMPU_METHOD 0 100
+      PHYS_UNIT "%"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_09_duty "P00.9 PWM duty cycle (effective only if pin is PWM in gpio_cfg.h)"
+      VALUE 0x7003032D RL_UBYTE 100 NO_COMPU_METHOD 0 100
+      PHYS_UNIT "%"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_10_duty "P00.10 PWM duty cycle (effective only if pin is PWM in gpio_cfg.h)"
+      VALUE 0x7003032E RL_UBYTE 100 NO_COMPU_METHOD 0 100
+      PHYS_UNIT "%"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_11_duty "P00.11 PWM duty cycle (effective only if pin is PWM in gpio_cfg.h)"
+      VALUE 0x7003032F RL_UBYTE 100 NO_COMPU_METHOD 0 100
+      PHYS_UNIT "%"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_12_duty "P00.12 PWM duty cycle (effective only if pin is PWM in gpio_cfg.h)"
+      VALUE 0x70030330 RL_UBYTE 100 NO_COMPU_METHOD 0 100
+      PHYS_UNIT "%"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_13_duty "P00.13 PWM duty cycle (effective only if pin is PWM in gpio_cfg.h)"
+      VALUE 0x70030331 RL_UBYTE 100 NO_COMPU_METHOD 0 100
+      PHYS_UNIT "%"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_14_duty "P00.14 PWM duty cycle (effective only if pin is PWM in gpio_cfg.h)"
+      VALUE 0x70030332 RL_UBYTE 100 NO_COMPU_METHOD 0 100
+      PHYS_UNIT "%"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC GPIO_P00_15_duty "P00.15 PWM duty cycle (effective only if pin is PWM in gpio_cfg.h)"
+      VALUE 0x70030333 RL_UBYTE 100 NO_COMPU_METHOD 0 100
+      PHYS_UNIT "%"
     /end CHARACTERISTIC
 
   /end MODULE
