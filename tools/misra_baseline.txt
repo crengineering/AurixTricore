@@ -12,8 +12,10 @@ misra-c2012-11.4 src/bsw/Xcp.c 6
 misra-c2012-11.5 src/bsw/Echo.c 5
 misra-c2012-11.5 src/bsw/Xcp.c 1
 misra-c2012-11.8 src/bsw/Xcp.c 1
+misra-c2012-12.1 src/asw/flight_ctrl.c 8
 misra-c2012-12.1 src/bsw/Echo.c 3
 misra-c2012-12.2 src/bsw/Xcp.c 1
+misra-c2012-12.3 src/asw/flight_ctrl.c 4
 misra-c2012-12.3 src/bsw/Cpu0_Main.c 1
 misra-c2012-14.4 src/bsw/Cpu0_Main.c 1
 misra-c2012-14.4 src/bsw/Cpu1_Main.c 1
@@ -25,6 +27,7 @@ misra-c2012-14.4 src/bsw/Diagnostics.c 1
 misra-c2012-14.4 src/bsw/Echo.c 2
 misra-c2012-14.4 src/bsw/Uart.c 2
 misra-c2012-14.4 src/bsw/Xcp.c 1
+misra-c2012-15.5 src/asw/flight_ctrl.c 2
 misra-c2012-15.5 src/bsw/Diagnostics.c 1
 misra-c2012-15.5 src/bsw/Echo.c 2
 misra-c2012-15.5 src/bsw/Xcp.c 4

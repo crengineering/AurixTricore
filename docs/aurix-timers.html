@@ -1,0 +1,458 @@
+<title>AURIX TC399 — Timer Overview</title>
+<style>
+  :root {
+    --bg: #F7F8F6;
+    --card: #FFFFFF;
+    --ink: #1C2422;
+    --muted: #5A6763;
+    --line: #D8DFDB;
+    --line-soft: #E6ECE9;
+    --accent: #0E7568;
+    --accent-soft: #0E756814;
+    --trace: #C97F2A;
+    --chip-bg: #0E75681A;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121816;
+      --card: #1A211E;
+      --ink: #DCE5E1;
+      --muted: #8CA098;
+      --line: #27332F;
+      --line-soft: #202B27;
+      --accent: #43BFA9;
+      --accent-soft: #43BFA91F;
+      --trace: #E0A050;
+      --chip-bg: #43BFA926;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #121816;
+    --card: #1A211E;
+    --ink: #DCE5E1;
+    --muted: #8CA098;
+    --line: #27332F;
+    --line-soft: #202B27;
+    --accent: #43BFA9;
+    --accent-soft: #43BFA91F;
+    --trace: #E0A050;
+    --chip-bg: #43BFA926;
+  }
+  :root[data-theme="light"] {
+    --bg: #F7F8F6;
+    --card: #FFFFFF;
+    --ink: #1C2422;
+    --muted: #5A6763;
+    --line: #D8DFDB;
+    --line-soft: #E6ECE9;
+    --accent: #0E7568;
+    --accent-soft: #0E756814;
+    --trace: #C97F2A;
+    --chip-bg: #0E75681A;
+  }
+
+  html { background: var(--bg); }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    font-size: 16px;
+    line-height: 1.65;
+  }
+  .wrap {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 48px 24px 80px;
+  }
+  h1, h2, h3 {
+    font-family: Bahnschrift, "DIN Alternate", "Franklin Gothic Medium", "Segoe UI", sans-serif;
+    line-height: 1.15;
+    text-wrap: balance;
+    margin: 0;
+  }
+  h1 { font-size: 2.5rem; font-weight: 600; letter-spacing: 0.01em; }
+  h2 { font-size: 1.6rem; font-weight: 600; }
+  h3 { font-size: 1.1rem; font-weight: 600; }
+  p { max-width: 68ch; margin: 0.8em 0; }
+  code, .mono {
+    font-family: "Cascadia Mono", Consolas, "SF Mono", ui-monospace, monospace;
+    font-size: 0.86em;
+  }
+  code {
+    background: var(--line-soft);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+  }
+
+  /* header ---------------------------------------------------------- */
+  .kicker {
+    font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+    font-size: 0.78rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 12px;
+  }
+  .lede { color: var(--muted); font-size: 1.06rem; max-width: 62ch; }
+
+  .scope {
+    margin: 36px 0 6px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--card);
+    padding: 10px 12px 6px;
+  }
+  .scope svg { display: block; width: 100%; height: auto; }
+  .scope-caption {
+    font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+    font-size: 0.74rem;
+    color: var(--muted);
+    padding: 6px 2px 4px;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .scope-caption .sig { color: var(--accent); }
+
+  /* sections -------------------------------------------------------- */
+  section { margin-top: 56px; }
+  .eyebrow {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+    border-bottom: 2px solid var(--accent);
+    padding-bottom: 8px;
+    margin-bottom: 18px;
+  }
+  .eyebrow .family {
+    font-family: Bahnschrift, "DIN Alternate", "Segoe UI", sans-serif;
+    font-size: 0.72rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .eyebrow .addr {
+    margin-left: auto;
+    font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+    font-size: 0.78rem;
+    color: var(--muted);
+  }
+  .chip {
+    display: inline-block;
+    font-family: Bahnschrift, "DIN Alternate", "Segoe UI", sans-serif;
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: var(--chip-bg);
+    border-radius: 999px;
+    padding: 2px 10px;
+    vertical-align: middle;
+  }
+
+  /* tables ----------------------------------------------------------- */
+  .tablewrap { overflow-x: auto; margin: 20px 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 560px;
+    font-size: 0.94rem;
+    font-variant-numeric: tabular-nums;
+  }
+  th {
+    font-family: Bahnschrift, "DIN Alternate", "Segoe UI", sans-serif;
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    text-align: left;
+    color: var(--muted);
+    font-weight: 600;
+    padding: 8px 14px 8px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  td {
+    padding: 9px 14px 9px 0;
+    border-bottom: 1px solid var(--line-soft);
+    vertical-align: top;
+  }
+  td:first-child { font-weight: 600; white-space: nowrap; }
+
+  /* GTM card grid ---------------------------------------------------- */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 14px;
+    margin-top: 22px;
+  }
+  .module {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .module.inuse { border-color: var(--accent); background: var(--accent-soft); }
+  .module .head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .module .meta {
+    font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+    font-size: 0.74rem;
+    color: var(--muted);
+  }
+  .module p { font-size: 0.92rem; margin: 0; color: var(--ink); max-width: none; }
+
+  /* callout ----------------------------------------------------------- */
+  .callout {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--accent);
+    border-radius: 4px;
+    padding: 18px 22px;
+    margin-top: 24px;
+  }
+  .callout ul { margin: 8px 0 0; padding-left: 20px; }
+  .callout li { margin: 5px 0; }
+
+  footer {
+    margin-top: 64px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+    font-size: 0.74rem;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .module { transition: border-color 140ms ease; }
+    .module:hover { border-color: var(--accent); }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="kicker">AurixTricore · Hardware Reference</div>
+    <h1>Timers on the AURIX TC399</h1>
+    <p class="lede">Every timer module on the TriBoard's TC399XB, what it is for, and how
+    to choose between them. Three families: <strong>timekeeping</strong> (STM),
+    <strong>waveform I/O</strong> (GTM, CCU6, GPT12) and <strong>supervision</strong>
+    (watchdogs, wake-up timer).</p>
+
+    <div class="scope" role="img" aria-label="Oscilloscope-style PWM trace with duty cycle increasing from 10 to 95 percent">
+      <svg viewBox="0 0 800 140" preserveAspectRatio="none">
+        <defs>
+          <pattern id="grat" width="25" height="35" patternUnits="userSpaceOnUse">
+            <path d="M25 0 V35 M0 35 H25" fill="none" stroke="var(--line-soft)" stroke-width="1"/>
+          </pattern>
+        </defs>
+        <rect width="800" height="140" fill="url(#grat)"/>
+        <path d="M0,102 V38 H10 V102 H100 V38 H125 V102 H200 V38 H240 V102 H300 V38 H350 V102 H400 V38 H460 V102 H500 V38 H575 V102 H600 V38 H690 V102 H700 V38 H795 V102 H800"
+              fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="miter"/>
+      </svg>
+      <div class="scope-caption">
+        <span><span class="sig">CH1&nbsp;P00.1</span> — GTM TOM0 ch 9, duty 10&nbsp;→&nbsp;95&nbsp;%</span>
+        <span>shadow-register update: new duty applied at each period boundary, glitch-free</span>
+      </div>
+    </div>
+  </header>
+
+  <section>
+    <div class="eyebrow">
+      <h2>At a glance</h2>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Module</th><th>Instances</th><th>Width</th><th>Main job</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>STM</td><td>6 — one per core</td><td>64-bit</td><td>System time, delays, OS ticks, timestamps</td></tr>
+          <tr><td>GTM</td><td>1 large subsystem</td><td>16 / 24-bit channels</td><td>All waveform generation &amp; measurement</td></tr>
+          <tr><td>CCU6</td><td>2 (CCU60 / 61)</td><td>16-bit</td><td>Classic 3-phase motor PWM, ADC sync</td></tr>
+          <tr><td>GPT12</td><td>1 (timers T2–T6)</td><td>16-bit</td><td>Legacy timers, quadrature encoder input</td></tr>
+          <tr><td>Watchdogs</td><td>1 per CPU + 1 safety</td><td>16-bit</td><td>Detecting a hung or misbehaving core</td></tr>
+          <tr><td>PMS wake-up timer</td><td>1</td><td>24-bit</td><td>Waking the chip from standby</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">
+      <h2>STM — System Timer</h2>
+      <span class="chip">in use</span>
+      <span class="family">timekeeping</span>
+      <span class="addr">0xF0001000 … 0xF0001500 · STM0–STM5</span>
+    </div>
+    <p>One per core: a <strong>64-bit counter free-running at ≈100&nbsp;MHz</strong> from
+    power-on. It is never started, stopped or reloaded — at 100&nbsp;MHz it overflows
+    after ~5,850 years, so software treats time as monotonically increasing, always
+    race-free to read.</p>
+    <p>Each STM has two compare registers (<code>CMP0</code>/<code>CMP1</code>) that fire an
+    interrupt when a selectable bit-window of the counter matches. That is its only
+    output — no pins, no PWM.</p>
+    <p>This project uses both of its classic roles: <code>scheduler.c</code> polls STM0 for
+    task timing, and CMP0 generates the 1&nbsp;ms lwIP tick
+    (<code>updateLwIPStackISR</code>). The rule “each core uses its own STM” is the intended
+    pattern — per-core local time without bus contention.</p>
+  </section>
+
+  <section>
+    <div class="eyebrow">
+      <h2>GTM — Generic Timer Module</h2>
+      <span class="chip">TOM in use</span>
+      <span class="family">waveform i/o</span>
+      <span class="addr">0xF0100000 · 1 instance</span>
+    </div>
+    <p>A timer <em>co-processor</em> (Bosch GTM-IP) with its own address space and clock
+    tree. Anything that generates or measures a waveform on a pin lives here. The PWM
+    feature uses TOM&nbsp;+&nbsp;CMU — roughly 10&nbsp;% of the box. The sub-modules, with
+    instance counts from the TC39xB register files:</p>
+
+    <div class="grid">
+      <div class="module">
+        <div class="head"><h3>CMU</h3><span class="meta">clock tree</span></div>
+        <p>8 configurable clocks CLK0–7 plus fixed FXCLK dividers (÷1 … ÷16⁴) used by
+        the TOMs. Every channel picks its time base here.</p>
+      </div>
+      <div class="module">
+        <div class="head"><h3>TBU</h3><span class="meta">global time bases</span></div>
+        <p>Up to three shared 24-bit time bases, so channels across the GTM can act on a
+        <em>common</em> notion of time (or engine angle).</p>
+      </div>
+      <div class="module inuse">
+        <div class="head"><h3>TOM</h3><span class="meta">6 × 16 ch · +0x8000</span></div>
+        <p>Simple 16-bit PWM outputs — cheap and plentiful (96 channels). Duty/period
+        via shadow registers, glitch-free at period boundaries. Drives the P00 PWM
+        pins since v1.7.0.</p>
+      </div>
+      <div class="module">
+        <div class="head"><h3>ATOM</h3><span class="meta">12 × 8 ch · +0xE8000</span></div>
+        <p>The advanced sibling: <strong>24-bit</strong>, per-channel modes — high-res PWM,
+        compare against TBU time (“fire exactly at X”), serial shift-register output.</p>
+      </div>
+      <div class="module">
+        <div class="head"><h3>TIM</h3><span class="meta">8 × 8 ch · +0x1000</span></div>
+        <p>Input capture: measures PWM duty &amp; period in hardware (TPWM), pulse
+        integration, edge counting, glitch filters. The mirror image of TOM.</p>
+      </div>
+      <div class="module">
+        <div class="head"><h3>CDTM</h3><span class="meta">7 dead-time modules · +0xE4000</span></div>
+        <p>Hardware dead time between complementary outputs — what makes GTM viable for
+        half-bridge / motor drive without software timing.</p>
+      </div>
+      <div class="module">
+        <div class="head"><h3>MCS</h3><span class="meta">10 cores · +0xF0000</span></div>
+        <p>Small programmable RISC cores inside the GTM that drive TIM/TOM/ATOM registers
+        autonomously — for waveforms too complex for fixed modes, too fast for ISRs.</p>
+      </div>
+      <div class="module">
+        <div class="head"><h3>DPLL + SPE</h3><span class="meta">engine / BLDC</span></div>
+        <p>Automotive-specific: DPLL locks onto crank/cam pulses and outputs an engine-angle
+        clock; SPE does BLDC block commutation. Rarely needed outside powertrain.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">
+      <h2>CCU6 — Capture/Compare Unit</h2>
+      <span class="family">waveform i/o</span>
+      <span class="addr">0xF0002A00 / 0xF0002B00 · CCU60, CCU61</span>
+    </div>
+    <p>Two instances, each with <strong>T12</strong> (three capture/compare channels,
+    edge- or center-aligned, hardware dead time → six complementary outputs = one
+    3-phase inverter) and <strong>T13</strong> (single channel, typically triggering ADC
+    conversions in sync with the PWM). Built-in hall-sensor mode and a trap input for
+    emergency shutdown.</p>
+    <p>It predates the GTM and overlaps with TOM&nbsp;+&nbsp;CDTM — it survives because it is
+    <em>much</em> simpler to set up for its one specialty: a small 3-phase motor, or
+    PWM-synchronized ADC triggering without learning the GTM routing.</p>
+  </section>
+
+  <section>
+    <div class="eyebrow">
+      <h2>GPT12 — General Purpose Timer</h2>
+      <span class="family">waveform i/o</span>
+      <span class="addr">0xF0001800 · GPT120</span>
+    </div>
+    <p>Five 16-bit timers (T2–T6) in two blocks; timer, gated-timer, counter and
+    concatenation modes. The architecture goes back to the C166 — for plain timing the
+    STM is better in every way.</p>
+    <p>Its one killer feature: the <strong>incremental encoder interface</strong>. T3
+    (with T2/T4 as auxiliary inputs) decodes quadrature A/B signals in hardware —
+    direction, edge counting, index handling. Wheel odometry or a motor encoder with
+    zero CPU load.</p>
+  </section>
+
+  <section>
+    <div class="eyebrow">
+      <h2>Supervision</h2>
+      <span class="family">safety</span>
+      <span class="addr">SCU · PMS standby domain</span>
+    </div>
+    <p><strong>Watchdogs:</strong> one per CPU plus a global <em>safety</em> watchdog,
+    windowed with password protection. This project disables all of them
+    (CLAUDE.md rule&nbsp;5) — fine for development; production firmware services them
+    instead.</p>
+    <p><strong>PMS wake-up timer:</strong> a small counter in the standby power domain
+    (≈70&nbsp;kHz backup clock) to wake the chip from standby. Irrelevant while the
+    TriBoard is always-on.</p>
+    <p>Adjacent, not general-purpose: per-CPU performance counters (cycle counting for
+    profiling) and peripheral-local baud timers in ASCLIN/QSPI.</p>
+  </section>
+
+  <section>
+    <div class="eyebrow">
+      <h2>Choosing the right timer</h2>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Need</th><th>Take</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Delay, timeout, task period, timestamp</td><td><strong>STM</strong> — the one on your own core</td></tr>
+          <tr><td>PWM output, ordinary resolution</td><td><strong>GTM TOM</strong> ✓ shipped in v1.7.0</td></tr>
+          <tr><td>24-bit PWM / time-base-aligned / serial waveform</td><td><strong>GTM ATOM</strong></td></tr>
+          <tr><td>Measure frequency or duty of an input</td><td><strong>GTM TIM</strong></td></tr>
+          <tr><td>Complementary PWM with dead time</td><td><strong>GTM TOM/ATOM + CDTM</strong> (or CCU6)</td></tr>
+          <tr><td>3-phase motor, simple setup, ADC sync</td><td><strong>CCU6</strong></td></tr>
+          <tr><td>Quadrature encoder</td><td><strong>GPT12</strong> (T3 incremental interface)</td></tr>
+          <tr><td>“Is my software still alive?”</td><td><strong>Watchdogs</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The connecting idea: these modules interoperate <em>without the CPU</em> —
+    GTM/CCU6 channels trigger EVADC conversions, TIM timestamps feed MCS programs,
+    outputs reach pins through the TOUT mux. If an ISR exists only to wiggle or sample
+    a pin at a fixed rate, there is almost always a hardware timer mode that replaces it.</p>
+  </section>
+
+  <section>
+    <div class="eyebrow">
+      <h2>Where this project stands</h2>
+    </div>
+    <div class="callout">
+      <ul>
+        <li><strong>STM0–STM5</strong> — scheduler on every core; STM0 CMP0 drives the 1&nbsp;ms lwIP tick.</li>
+        <li><strong>GTM TOM</strong> — P00 PWM outputs (v1.7.0), per-pin config in <code>gpio_cfg.h</code>, duty over XCP, validated by <code>tools/gpio_pwm_test.py</code>.</li>
+        <li><strong>Watchdogs</strong> — deliberately disabled during bring-up.</li>
+        <li><strong>Natural next step</strong> — GTM TIM input capture: a <code>GPIO_MODE_PWM_INPUT</code> that measures duty/frequency and publishes it in the measurements block; with a jumper wire the board then validates its own PWM without an oscilloscope.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    AurixTricore · TC399XB on TriBoard · instance counts and base addresses verified against
+    IfxGtm_regdef.h / IfxStm_reg.h / IfxCcu6_reg.h / IfxGpt12_reg.h (iLLD TC39xB) · 2026-07-14
+  </footer>
+</div>

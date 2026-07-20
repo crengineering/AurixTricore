@@ -18,6 +18,9 @@
 #include "Nvm.h"
 #include "Version.h"
 #include "gpio.h"
+#include "CtrlReplay.h"     /* ASW replay harness; single BSW->ASW init
+                             * callout — documented deviation, see
+                             * docs/CTRL_REPLAY.md                      */
 
 IFX_ALIGN(4) IfxCpu_syncEvent cpuSyncEvent = 0;
 
@@ -107,6 +110,7 @@ int core0_main(void)
     echoInit();
     udpEchoInit();
     xcpInit();
+    CtrlReplay_init();
     Uart_println("Ethernet started");
 
     while (TRUE)
