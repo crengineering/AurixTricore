@@ -18,6 +18,8 @@
 #include "Nvm.h"
 #include "Version.h"
 #include "gpio.h"
+#include "I2c.h"
+#include "Bmp388.h"
 #include "CtrlReplay.h"     /* ASW replay harness; single BSW->ASW init
                              * callout — documented deviation, see
                              * docs/CTRL_REPLAY.md                      */
@@ -26,7 +28,6 @@ IFX_ALIGN(4) IfxCpu_syncEvent cpuSyncEvent = 0;
 
 static Scheduler_t g_sched;
 static Led_t       g_led;
-static boolean error_active = FALSE;
 
 static void Task_LedToggle(void)
 {
@@ -36,6 +37,19 @@ static void Task_LedToggle(void)
 static void Task_App10ms(void)
 {
     /* TODO: add CPU0 application logic here */
+}
+
+static void Task_Baro(void)
+{
+    float32 pressPa = 0.0f;
+    float32 tempC   = 0.0f;
+    boolean present = FALSE;
+
+    if (Bmp388_isPresent() != FALSE)
+    {
+        present = Bmp388_read(&pressPa, &tempC);
+    }
+    measurementsSetBaro(present, pressPa, tempC);
 }
 
 static void Task_Measure100ms(void)
@@ -74,12 +88,24 @@ int core0_main(void)
     Scheduler_init(&g_sched, &MODULE_STM0);
     Scheduler_addTask(&g_sched, Task_LedToggle, SCHED_MS(500u));
     Scheduler_addTask(&g_sched, Task_App10ms,   SCHED_MS(10u));
+    (void)Scheduler_addTask(&g_sched, Task_Baro, SCHED_MS(20u));  /* 50 Hz barometer */
     Scheduler_addTask(&g_sched, Task_Measure100ms, SCHED_MS(100u));
 
     /* init persistent memory*/
     Nvm_bootInit();         /* load persistent parameters from DFLASH       */
     diagnosticsInit();      /* before measurementsInit: provides ADC scales */
     measurementsInit();
+
+    /* init shared I2C0 sensor bus + first sensor (BMP388 barometer, CJMCU-388) */
+    I2c_init();
+    if (Bmp388_init() != FALSE)
+    {
+        Uart_println("BMP388 detected (CHIP_ID 0x50)");
+    }
+    else
+    {
+        Uart_println("BMP388 not found - check wiring/address (0x77 vs 0x76)");
+    }
 
     /* STM0 Comparator 0 als 1-ms-Tick für den lwIP-Stack scharf schalten
      * (ohne initCompare feuert updateLwIPStackISR nie -> keine TCP/ARP-Timer) */

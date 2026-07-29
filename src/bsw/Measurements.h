@@ -5,7 +5,7 @@
 
 /* Live measurement block read by XCP masters (pyXCP, AurixGUI) via
  * SHORT_UPLOAD. Pinned to a fixed address so clients do not need the map
- * file. Little-endian, 36 bytes:
+ * file. Little-endian, 52 bytes:
  *
  *   0x00  uint32   magic       0x41555258
  *   0x04  uint8    verMajor
@@ -21,8 +21,12 @@
  *   0x20  uint8    rawVdd      raw 8-bit monitor-ADC codes, for verifying
  *   0x21  uint8    rawVddp3    the voltage scale factors against nominals
  *   0x22  uint8    rawVext
- *   0x23  uint8    reserved2
+ *   0x23  uint8    baroPresent 1 if the BMP388 answered at init, else 0
  *   0x24  uint32   diagStatus  diagnostics bitmask, see DIAGNOSTICS.md
+ *   0x28  float32  baroPressPa BMP388 pressure [Pa]    (0 when not present)
+ *   0x2C  float32  baroTempC   BMP388 temperature [degC] (0 when not present)
+ *   0x30  float32  baroAltM    pressure altitude [m] vs standard 1013.25 hPa
+ *                              (0 when not present; see measurementsSetBaro)
  */
 #define XCP_DATA_ADDR   0x70030000u
 #define XCP_DATA_MAGIC  0x41555258u
@@ -43,11 +47,18 @@ typedef struct
     uint8   rawVdd;
     uint8   rawVddp3;
     uint8   rawVext;
-    uint8   reserved2;
+    uint8   baroPresent;
     uint32  diagStatus;
+    float32 baroPressPa;
+    float32 baroTempC;
+    float32 baroAltM;
 } Xcp_Data;
 
 void measurementsInit(void);    /* DTS + DTSC + EVR monitor init (CPU0)  */
 void measurementsUpdate(void);  /* call cyclically, e.g. every 100 ms    */
+
+/* Publish the latest barometer sample into the XCP block. Called by the baro
+ * task; pass present = FALSE to show "no sensor" (pressure/temp forced to 0). */
+void measurementsSetBaro(boolean present, float32 pressurePa, float32 temperatureC);
 
 #endif /* MEASUREMENTS_H_ */

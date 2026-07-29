@@ -24,7 +24,7 @@ volatile Xcp_Nvm g_xcpNvm __at(XCP_NVM_ADDR);
 #define NVM_SECTOR_ADDR(i)  (NVM_DFLASH_START + ((i) * NVM_SECTOR_SIZE))
 
 #define NVM_REC_MAGIC       0x4C41434Eu     /* "NCAL" (ASCII, little-endian) */
-#define NVM_LAYOUT_VERSION  2u              /* bump on Xcp_Nvm layout change */
+#define NVM_LAYOUT_VERSION  3u              /* bump on Xcp_Nvm layout change */
 
 typedef struct
 {
@@ -157,9 +157,10 @@ static Nvm_RecState nvm_classify(const uint32 *words, Xcp_Nvm *dst, uint32 *sequ
 
 static void nvm_loadDefaults(void)
 {
-    g_xcpNvm.userValue = 0u;
-    g_xcpNvm.command   = NVM_CMD_NONE;
-    g_xcpNvm.magic     = XCP_NVM_MAGIC;
+    g_xcpNvm.userValue  = 0u;
+    g_xcpNvm.seaLevelPa = NVM_SEA_LEVEL_PA_DEFAULT;
+    g_xcpNvm.command    = NVM_CMD_NONE;
+    g_xcpNvm.magic      = XCP_NVM_MAGIC;
 }
 
 static boolean nvm_saveBlock(const Xcp_Nvm *src)

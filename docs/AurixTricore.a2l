@@ -2,7 +2,7 @@
  *
  * All objects live at fixed addresses (TASKING __at), so this file does not
  * depend on the link run:
- *   Xcp_Data  (measurements)          0x70030000, 40 bytes, Measurements.h
+ *   Xcp_Data  (measurements)          0x70030000, 52 bytes, Measurements.h
  *   Xcp_Cal   (calibration, RAM only) 0x70030100, 64 bytes, Diagnostics.h
  *   Xcp_Nvm   (persistent, DFLASH)    0x70030200, 12 bytes, Nvm.h
  *   Xcp_Gpio  (GPIO control, RAM only) 0x70030300, 52 bytes, gpio.h
@@ -153,6 +153,24 @@ ASAP2_VERSION 1 61
     /begin MEASUREMENT DiagStatus "diagnostics bitmask, see DIAGNOSTICS.md"
       ULONG NO_COMPU_METHOD 0 0 0 4294967295
       ECU_ADDRESS 0x70030024
+    /end MEASUREMENT
+
+    /begin MEASUREMENT BaroPressure "BMP388 barometric pressure"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 200000
+      ECU_ADDRESS 0x70030028
+      PHYS_UNIT "Pa"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT BaroTemperature "BMP388 temperature"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -40 85
+      ECU_ADDRESS 0x7003002C
+      PHYS_UNIT "degC"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT BaroAltitude "pressure altitude vs standard 1013.25 hPa"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -500 9000
+      ECU_ADDRESS 0x70030030
+      PHYS_UNIT "m"
     /end MEASUREMENT
 
     /* individual diagnostics bits (BIT_MASK views on DiagStatus) */
