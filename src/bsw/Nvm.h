@@ -14,6 +14,8 @@
  *                             100 ms task and clears the word (handshake)
  *   0x08  uint32  userValue   first persistent parameter (free scratch
  *                             word, also used by tools/nvm_test.py)
+ *   0x0C  uint32  seaLevelPa  sea-level reference pressure [Pa] for the baro
+ *                             altitude (QNH); default 101325 (standard atm)
  *
  * New persistent parameters are appended here (bump NVM_LAYOUT_VERSION in
  * Nvm.c; stored records of an older layout are ignored, not a fault).
@@ -28,7 +30,10 @@
  */
 #define XCP_NVM_ADDR    0x70030200u
 #define XCP_NVM_MAGIC   0x4D564E58u
-#define XCP_NVM_SIZE    12u
+#define XCP_NVM_SIZE    16u
+
+/* default sea-level reference pressure [Pa] (ISA standard atmosphere) */
+#define NVM_SEA_LEVEL_PA_DEFAULT    101325u
 
 /* values for the 'command' word */
 #define NVM_CMD_NONE        0x00000000u
@@ -40,6 +45,7 @@ typedef struct
     uint32 magic;
     uint32 command;
     uint32 userValue;
+    uint32 seaLevelPa;
 } Xcp_Nvm;
 
 extern volatile Xcp_Nvm g_xcpNvm;

@@ -1,10 +1,23 @@
 #include "Measurements.h"
 #include "Diagnostics.h"
+#include "Nvm.h"
 #include "Version.h"
 #include "Dts/Dts/IfxDts_Dts.h"
 #include "Pms/Std/IfxPmsEvr.h"
 #include "IfxScuWdt.h"
 #include "Ifx_Lwip.h"
+#include <math.h>
+
+/* Pressure-altitude reference: the sea-level reference pressure (QNH) is a
+ * persistent NVM parameter (g_xcpNvm.seaLevelPa, DFLASH). Set it to local QNH
+ * for true elevation; the default is the ISA standard atmosphere. Values
+ * outside a sane band fall back to the standard so a bad write can't blow up
+ * the altitude. */
+#define MEAS_SEA_LEVEL_PA   (101325.0f)
+#define MEAS_SEA_LEVEL_MIN  (80000.0f)       /* ~2 km above sea level QNH floor  */
+#define MEAS_SEA_LEVEL_MAX  (120000.0f)      /* well above any real QNH          */
+#define MEAS_ALT_EXPONENT   (0.190294957f)   /* 1 / 5.25588 (barometric formula) */
+#define MEAS_ALT_SCALE      (44330.0f)       /* [m] */
 
 /* The full-scale voltages of the 8-bit PMS monitor ADCs live in the
  * XCP-calibratable block (g_xcpCal.fsVdd/fsVddp3/fsVext); defaults were
@@ -41,11 +54,41 @@ void measurementsInit(void)
     g_xcpData.vddCore   = 0.0f;
     g_xcpData.vddp3     = 0.0f;
     g_xcpData.vext      = 0.0f;
-    g_xcpData.rawVdd     = 0u;
-    g_xcpData.rawVddp3   = 0u;
-    g_xcpData.rawVext    = 0u;
-    g_xcpData.reserved2  = 0u;
-    g_xcpData.diagStatus = 0u;
+    g_xcpData.rawVdd      = 0u;
+    g_xcpData.rawVddp3    = 0u;
+    g_xcpData.rawVext     = 0u;
+    g_xcpData.baroPresent = 0u;
+    g_xcpData.diagStatus  = 0u;
+    g_xcpData.baroPressPa = 0.0f;
+    g_xcpData.baroTempC   = 0.0f;
+    g_xcpData.baroAltM    = 0.0f;
+}
+
+void measurementsSetBaro(boolean present, float32 pressurePa, float32 temperatureC)
+{
+    if ((present != FALSE) && (pressurePa > 0.0f))
+    {
+        float32 p0 = (float32)g_xcpNvm.seaLevelPa;
+
+        if ((p0 < MEAS_SEA_LEVEL_MIN) || (p0 > MEAS_SEA_LEVEL_MAX))
+        {
+            p0 = MEAS_SEA_LEVEL_PA;         /* guard against a bad/zero NVM value */
+        }
+
+        g_xcpData.baroPresent = 1u;
+        g_xcpData.baroPressPa = pressurePa;
+        g_xcpData.baroTempC   = temperatureC;
+        /* International barometric formula: h = 44330 * (1 - (P/P0)^0.190295). */
+        g_xcpData.baroAltM    = MEAS_ALT_SCALE *
+            (1.0f - powf(pressurePa / p0, MEAS_ALT_EXPONENT));
+    }
+    else
+    {
+        g_xcpData.baroPresent = 0u;
+        g_xcpData.baroPressPa = 0.0f;
+        g_xcpData.baroTempC   = 0.0f;
+        g_xcpData.baroAltM    = 0.0f;
+    }
 }
 
 void measurementsUpdate(void)
