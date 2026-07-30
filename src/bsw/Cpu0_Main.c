@@ -107,8 +107,12 @@ static void Task_Baro(void)
      * sum moves with sensor noise on every sample, so a frozen value is a real
      * fault rather than a quiet signal. */
     {
-        const boolean plausible = (boolean)((pressPa > 30000.0f) && (pressPa < 120000.0f)
-                                            && (tempC > -40.0f) && (tempC < 85.0f));
+        boolean plausible = FALSE;
+        if ((pressPa > 30000.0f) && (pressPa < 120000.0f)
+            && (tempC > -40.0f) && (tempC < 85.0f))
+        {
+            plausible = TRUE;
+        }
         PeriphDiag_report(PERIPH_DIAG_BARO, present, plausible, pressPa + tempC);
     }
 }
@@ -167,9 +171,12 @@ static void Task_Imu(void)
         const float32 accMagSq = (sample.acc[0] * sample.acc[0])
                                + (sample.acc[1] * sample.acc[1])
                                + (sample.acc[2] * sample.acc[2]);
-        const boolean plausible = (boolean)((accMagSq > 0.0025f) && (accMagSq < 169.0f)
-                                            && (sample.tempC > -40.0f)
-                                            && (sample.tempC < 85.0f));
+        boolean plausible = FALSE;
+        if ((accMagSq > 0.0025f) && (accMagSq < 169.0f)
+            && (sample.tempC > -40.0f) && (sample.tempC < 85.0f))
+        {
+            plausible = TRUE;
+        }
         const float32 liveness = sample.acc[0] + sample.acc[1] + sample.acc[2]
                                + sample.gyro[0] + sample.gyro[1] + sample.gyro[2]
                                + sample.tempC;

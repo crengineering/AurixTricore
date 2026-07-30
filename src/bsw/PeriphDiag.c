@@ -6,9 +6,6 @@
 #include "Diagnostics.h"
 #include "I2c.h"
 
-/* Evaluation period: PeriphDiag_update() runs on the 100 ms diagnostics tick. */
-#define PD_TICK_MS            (100u)
-
 /* A device is "gone" after this long without a successful read. Generous
  * against the 50 Hz poll rate: a handful of NAKs during a bus recovery is
  * normal and must not raise a fault. */
@@ -37,12 +34,6 @@ typedef struct
     uint32 implausible;
 } PeriphDiag_Bits;
 
-static const PeriphDiag_Bits s_bits[PERIPH_DIAG_COUNT] =
-{
-    { DIAG_BARO_NO_RESPONSE, DIAG_BARO_TIMEOUT, DIAG_BARO_STUCK_DATA, DIAG_BARO_IMPLAUSIBLE },
-    { DIAG_IMU_NO_RESPONSE,  DIAG_IMU_TIMEOUT,  DIAG_IMU_STUCK_DATA,  DIAG_IMU_IMPLAUSIBLE  },
-};
-
 typedef struct
 {
     boolean everOk;          /* a read has succeeded at least once since boot */
@@ -55,7 +46,7 @@ typedef struct
     uint16  implausibleTicks;
 } PeriphDiag_State;
 
-static PeriphDiag_State s_state[PERIPH_DIAG_COUNT];
+static PeriphDiag_State s_periph[PERIPH_DIAG_COUNT];
 static uint16           s_sclLowTicks;
 static uint16           s_sdaLowTicks;
 
@@ -65,14 +56,14 @@ void PeriphDiag_init(void)
 
     for (i = 0u; i < (uint8)PERIPH_DIAG_COUNT; i++)
     {
-        s_state[i].everOk           = FALSE;
-        s_state[i].sawOk            = FALSE;
-        s_state[i].sawImplausible   = FALSE;
-        s_state[i].haveLast         = FALSE;
-        s_state[i].lastLive         = 0.0f;
-        s_state[i].silentTicks      = 0u;
-        s_state[i].frozenTicks      = 0u;
-        s_state[i].implausibleTicks = 0u;
+        s_periph[i].everOk           = FALSE;
+        s_periph[i].sawOk            = FALSE;
+        s_periph[i].sawImplausible   = FALSE;
+        s_periph[i].haveLast         = FALSE;
+        s_periph[i].lastLive         = 0.0f;
+        s_periph[i].silentTicks      = 0u;
+        s_periph[i].frozenTicks      = 0u;
+        s_periph[i].implausibleTicks = 0u;
     }
     s_sclLowTicks = 0u;
     s_sdaLowTicks = 0u;
@@ -82,7 +73,7 @@ void PeriphDiag_report(PeriphDiag_Id id, boolean readOk, boolean plausible, floa
 {
     if ((uint8)id < (uint8)PERIPH_DIAG_COUNT)
     {
-        PeriphDiag_State *st = &s_state[id];
+        PeriphDiag_State *st = &s_periph[id];
 
         if (readOk != FALSE)
         {
@@ -133,9 +124,17 @@ static void pd_track(uint16 *ticks, boolean active)
 
 uint32 PeriphDiag_update(void)
 {
+    /* Block scope (MISRA 8.9): only this function maps peripherals to bits. */
+    static const PeriphDiag_Bits s_bits[PERIPH_DIAG_COUNT] =
+    {
+        { DIAG_BARO_NO_RESPONSE, DIAG_BARO_TIMEOUT, DIAG_BARO_STUCK_DATA, DIAG_BARO_IMPLAUSIBLE },
+        { DIAG_IMU_NO_RESPONSE,  DIAG_IMU_TIMEOUT,  DIAG_IMU_STUCK_DATA,  DIAG_IMU_IMPLAUSIBLE  },
+    };
+
     uint32  status = 0u;
     boolean sclReleased = TRUE;
     boolean sdaReleased = TRUE;
+    boolean cond;
     uint8   i;
 
     /* Bus lines. Safe to sample here without disturbing anything: the sensor
@@ -144,8 +143,12 @@ uint32 PeriphDiag_update(void)
      * the pull-ups must hold both lines high; a line low is a short to ground
      * or a slave jamming the bus. */
     I2c_getLineState(&sclReleased, &sdaReleased);
-    pd_track(&s_sclLowTicks, (boolean)(sclReleased == FALSE));
-    pd_track(&s_sdaLowTicks, (boolean)(sdaReleased == FALSE));
+    cond = FALSE;
+    if (sclReleased == FALSE) { cond = TRUE; }
+    pd_track(&s_sclLowTicks, cond);
+    cond = FALSE;
+    if (sdaReleased == FALSE) { cond = TRUE; }
+    pd_track(&s_sdaLowTicks, cond);
 
     if (s_sclLowTicks >= PD_BUS_STUCK_TICKS)
     {
@@ -158,10 +161,12 @@ uint32 PeriphDiag_update(void)
 
     for (i = 0u; i < (uint8)PERIPH_DIAG_COUNT; i++)
     {
-        PeriphDiag_State      *st = &s_state[i];
+        PeriphDiag_State      *st = &s_periph[i];
         const PeriphDiag_Bits *bt = &s_bits[i];
 
-        pd_track(&st->silentTicks, (boolean)(st->sawOk == FALSE));
+        cond = FALSE;
+        if (st->sawOk == FALSE) { cond = TRUE; }
+        pd_track(&st->silentTicks, cond);
         pd_track(&st->implausibleTicks, st->sawImplausible);
 
         if (st->everOk == FALSE)
