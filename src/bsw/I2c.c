@@ -185,6 +185,18 @@ boolean I2c_busIsIdle(void)
     return i2c_busIdle();
 }
 
+void I2c_getLineState(boolean *sclReleased, boolean *sdaReleased)
+{
+    if (sclReleased != NULL_PTR)
+    {
+        *sclReleased = IfxPort_getPinState(&MODULE_P13, I2C_SCL_PIN);
+    }
+    if (sdaReleased != NULL_PTR)
+    {
+        *sdaReleased = IfxPort_getPinState(&MODULE_P13, I2C_SDA_PIN);
+    }
+}
+
 /* Called after a hard transfer failure: the module may be mid-packet and a slave
  * may still be holding SDA. Free the lines and rebuild the module so the next
  * call starts from a defined state instead of inheriting the wreckage. */

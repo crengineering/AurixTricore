@@ -70,6 +70,23 @@ typedef struct
 #define DIAG_TEMP_IMPLAUSIBLE   0x00000400u     /* bit 10 */
 #define DIAG_UART_DISCONNECTED  0x00000800u     /* bit 11 */
 #define DIAG_NVM_FAULT          0x00001000u     /* bit 12 */
+
+/* Peripheral faults, maintained by PeriphDiag.c. The bus bits are shared by
+ * every device on I2C0; the per-device bits say which sensor is affected.
+ * Reading them together tells you where to look: a bus bit means the wiring
+ * common to both sensors, a single device's bits mean that device's own
+ * wiring, and STUCK_DATA means the wiring is fine and the part is not. */
+#define DIAG_I2C_SCL_STUCK      0x00002000u     /* bit 13 SCL held low       */
+#define DIAG_I2C_SDA_STUCK      0x00004000u     /* bit 14 SDA held low       */
+#define DIAG_BARO_NO_RESPONSE   0x00008000u     /* bit 15 never answered     */
+#define DIAG_BARO_TIMEOUT       0x00010000u     /* bit 16 answered, now gone */
+#define DIAG_BARO_STUCK_DATA    0x00020000u     /* bit 17 value frozen       */
+#define DIAG_BARO_IMPLAUSIBLE   0x00040000u     /* bit 18 out of range       */
+#define DIAG_IMU_NO_RESPONSE    0x00080000u     /* bit 19                    */
+#define DIAG_IMU_TIMEOUT        0x00100000u     /* bit 20                    */
+#define DIAG_IMU_STUCK_DATA     0x00200000u     /* bit 21                    */
+#define DIAG_IMU_IMPLAUSIBLE    0x00400000u     /* bit 22                    */
+
 #define DIAG_CAL_INVALID        0x80000000u     /* bit 31 */
 
 extern volatile Xcp_Cal g_xcpCal;

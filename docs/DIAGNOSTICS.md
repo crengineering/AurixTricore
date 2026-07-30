@@ -30,9 +30,48 @@ Adresse: `Xcp_Data + 0x24` (Basis `0x70030000`, also `0x70030024`).
 | 10 | `0x00000400` | Temperatursensoren unplausibel | `|DTS − DTSC| > tempDeltaMax` |
 | 11 | `0x00000800` | UART-Verbindung getrennt (kein Heartbeat, ab v1.4.0) | > 2 s kein RX-Byte |
 | 12 | `0x00001000` | NVM-Fehler (ab v1.5.0) — DFLASH-Datensatz beim Boot korrupt oder letztes `SAVE` fehlgeschlagen | wird durch erfolgreiches `SAVE` gelöscht |
+| 13 | `0x00002000` | I2C0 **SCL dauerhaft LOW** (ab v1.13.0) — Kurzschluss nach GND oder Slave hängt in Clock-Stretching | > 0,3 s bei ruhendem Bus |
+| 14 | `0x00004000` | I2C0 **SDA dauerhaft LOW** — Kurzschluss nach GND oder Slave mitten im Byte blockiert | > 0,3 s bei ruhendem Bus |
+| 15 | `0x00008000` | **BMP388 antwortet nie** seit dem Start — nicht verdrahtet, falsche Adresse oder defekt (Leitungsbruch) | kein ACK seit Boot |
+| 16 | `0x00010000` | **BMP388 Kommunikations-Timeout** — hat geantwortet, ist jetzt still (Leitung ab, Stecker locker) | > 1 s kein erfolgreicher Read |
+| 17 | `0x00020000` | **BMP388 Daten eingefroren** — Bus gesund, Wert ändert sich nicht mehr | > 5 s bit-identischer Wert |
+| 18 | `0x00040000` | **BMP388 unplausibel** — Druck außerhalb 300–1200 hPa oder Temperatur außerhalb −40…85 °C | > 1 s außerhalb |
+| 19 | `0x00080000` | **MPU-6050 antwortet nie** seit dem Start | kein ACK seit Boot |
+| 20 | `0x00100000` | **MPU-6050 Kommunikations-Timeout** | > 1 s kein erfolgreicher Read |
+| 21 | `0x00200000` | **MPU-6050 Daten eingefroren** — genau der Fehler vom 30.07.2026 (Register standen still, Bus meldete OK) | > 5 s bit-identischer Wert |
+| 22 | `0x00400000` | **MPU-6050 unplausibel** — \|a\| außerhalb 0,05…13 g oder Temperatur außerhalb −40…85 °C | > 1 s außerhalb |
 | 31 | `0x80000000` | Kalibrierblock ungültig — Defaults wurden neu geladen | Magic-Wort zerstört |
 
-Bits 13–30 sind reserviert (immer 0).
+Bits 23–30 sind reserviert (immer 0).
+
+### Peripherie-Diagnose lesen (ab v1.13.0)
+
+Die vier Fehlerarten je Gerät sind absichtlich getrennt, weil sie
+unterschiedliche Reparaturen bedeuten:
+
+* **NO_RESPONSE** — hat seit dem Boot nie geantwortet: Verdrahtung, Adresse
+  oder Bauteil defekt. Bewusst getrennt von TIMEOUT, damit „hat nie
+  funktioniert" nicht mit „lief und ist ausgefallen" verwechselt wird.
+* **TIMEOUT** — lief und ist jetzt still: Leitung ab, Stecker locker,
+  Spannungseinbruch.
+* **STUCK_DATA** — Bus in Ordnung, Werte stehen still. Eigenes Bit, weil genau
+  dieser Fall am 30.07.2026 tagelang unentdeckt blieb: der MPU-6050 hat jeden
+  Read sauber quittiert, während seine Sensorregister eingefroren waren.
+  Weder Busstatus noch Present-Flag zeigen so etwas an.
+* **IMPLAUSIBLE** — antwortet und ändert sich, liegt aber außerhalb des
+  physikalisch Möglichen: Skalierung, Kalibrierung oder Messelement defekt.
+
+**Kurzschluss vs. Leitungsbruch:** Bei ruhendem Bus müssen beide Leitungen über
+die Pull-ups HIGH sein. Eine Leitung dauerhaft LOW (Bit 13/14) ist ein
+Kurzschluss nach GND oder ein blockierender Slave. Ein **Leitungsbruch** sieht
+genau umgekehrt aus — Bus perfekt im Leerlauf, aber niemand quittiert, also
+NO_RESPONSE bzw. TIMEOUT ohne Bus-Bit. Sind **beide** Sensoren betroffen,
+liegt es an der gemeinsamen Verdrahtung; ist nur einer betroffen, an dessen
+eigener Leitung.
+
+Die Zeitgrenzen sind Konstanten in `PeriphDiag.c` und nicht kalibrierbar — der
+64-Byte-Kalibrierblock ist voll (siehe `Nvm.h` für den gleichen Grund beim
+QNH-Parameter).
 
 ## UART-Heartbeat (Bit 11)
 

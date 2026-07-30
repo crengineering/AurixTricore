@@ -4,8 +4,8 @@
 /* Software version, transported via XCP (Xcp_Data struct + GET_ID string).
  * No integer suffixes here — the values are also stringified for GET_ID. */
 #define SW_VERSION_MAJOR    1
-#define SW_VERSION_MINOR    12
-#define SW_VERSION_STEP     5
+#define SW_VERSION_MINOR    13
+#define SW_VERSION_STEP     0
 
 #define SW_VERSION_STR_(x)  #x
 #define SW_VERSION_STR(x)   SW_VERSION_STR_(x)

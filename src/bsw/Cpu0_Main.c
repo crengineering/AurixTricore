@@ -22,6 +22,7 @@
 #include "Bmp388.h"
 #include "Mpu6050.h"
 #include "Ahrs.h"
+#include "PeriphDiag.h"
 #include "EthStats.h"
 #include "SysTime.h"
 #include "CtrlReplay.h"     /* ASW replay harness; single BSW->ASW init
@@ -99,6 +100,17 @@ static void Task_Baro(void)
         present = Bmp388_read(&pressPa, &tempC);
     }
     measurementsSetBaro(present, pressPa, tempC);
+
+    /* Plausibility bands are the sensor's physical envelope, not tuning:
+     * 300..1200 hPa spans sea level to well above any altitude this airframe
+     * reaches, and the BMP388 is specified from -40 to +85 degC. The liveness
+     * sum moves with sensor noise on every sample, so a frozen value is a real
+     * fault rather than a quiet signal. */
+    {
+        const boolean plausible = (boolean)((pressPa > 30000.0f) && (pressPa < 120000.0f)
+                                            && (tempC > -40.0f) && (tempC < 85.0f));
+        PeriphDiag_report(PERIPH_DIAG_BARO, present, plausible, pressPa + tempC);
+    }
 }
 
 static void Task_Imu(void)
@@ -145,6 +157,23 @@ static void Task_Imu(void)
             gyrCorr[i] = sample.gyro[i] - bias[i];
         }
         measurementsSetImu(present, sample.acc, gyrCorr, sample.tempC);
+
+        /* |a| must stay inside the +/-8 g full scale; a sustained 0 g means a
+         * dead element rather than free fall, which never lasts seconds on the
+         * bench. Temperature bounds are the MPU-6050's specified range. The
+         * liveness sum spans every axis, so it only freezes if the whole
+         * sample block stops updating -- exactly the failure that hid for days
+         * on 2026-07-30 while the bus and presence flag looked healthy. */
+        const float32 accMagSq = (sample.acc[0] * sample.acc[0])
+                               + (sample.acc[1] * sample.acc[1])
+                               + (sample.acc[2] * sample.acc[2]);
+        const boolean plausible = (boolean)((accMagSq > 0.0025f) && (accMagSq < 169.0f)
+                                            && (sample.tempC > -40.0f)
+                                            && (sample.tempC < 85.0f));
+        const float32 liveness = sample.acc[0] + sample.acc[1] + sample.acc[2]
+                               + sample.gyro[0] + sample.gyro[1] + sample.gyro[2]
+                               + sample.tempC;
+        PeriphDiag_report(PERIPH_DIAG_IMU, present, plausible, liveness);
     }
 }
 

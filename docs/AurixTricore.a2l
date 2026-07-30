@@ -496,6 +496,69 @@ ASAP2_VERSION 1 61
       BIT_MASK 0x00001000
     /end MEASUREMENT
 
+
+    /* peripheral wiring / communication / liveness faults, firmware >= v1.13.0 */
+
+    /begin MEASUREMENT Diag_I2cSclStuck "I2C0 SCL held low: short to GND or a slave stretching the clock"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00002000
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_I2cSdaStuck "I2C0 SDA held low: short to GND or a slave jammed mid-byte"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00004000
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_BaroNoResponse "BMP388 never answered since boot: wiring, address or dead part"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00008000
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_BaroTimeout "BMP388 answered before and is now silent for > 1 s"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00010000
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_BaroStuckData "BMP388 bus healthy but the value stopped changing for > 5 s"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00020000
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_BaroImplausible "BMP388 outside 300-1200 hPa or -40..85 degC"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00040000
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_ImuNoResponse "MPU-6050 never answered since boot"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00080000
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_ImuTimeout "MPU-6050 answered before and is now silent for > 1 s"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00100000
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_ImuStuckData "MPU-6050 bus healthy but the sample block stopped changing for > 5 s"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00200000
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Diag_ImuImplausible "MPU-6050 |a| outside 0.05..13 g or temperature outside -40..85 degC"
+      ULONG NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030024
+      BIT_MASK 0x00400000
+    /end MEASUREMENT
+
     /begin MEASUREMENT Diag_CalInvalid "calibration block magic broken, defaults reloaded"
       ULONG NO_COMPU_METHOD 0 0 0 1
       ECU_ADDRESS 0x70030024

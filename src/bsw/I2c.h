@@ -33,6 +33,14 @@ void I2c_init(void);
  *  a slave is holding the bus (or the pad level cannot be read back). */
 boolean I2c_busIsIdle(void);
 
+/** Diagnostic: the two bus lines separately, TRUE = released (pulled high).
+ *  Which line is stuck says what broke: with the bus idle both must float
+ *  high, so SCL low is a short to ground or a slave stretching the clock
+ *  forever, and SDA low is a short or a slave jammed mid-byte. An OPEN circuit
+ *  looks the opposite -- both lines perfectly idle, nothing ever ACKs.
+ *  Call only between transfers (see PeriphDiag.c). */
+void I2c_getLineState(boolean *sclReleased, boolean *sdaReleased);
+
 /** Read \p len bytes starting at register \p reg of the 7-bit-addressed slave.
  *  \return TRUE only if the whole transfer was ACKed. */
 boolean I2c_readReg(uint8 addr7, uint8 reg, uint8 *data, uint16 len);

@@ -1,6 +1,7 @@
 #include "Diagnostics.h"
 #include "Measurements.h"
 #include "Nvm.h"
+#include "PeriphDiag.h"
 #include "Uart.h"
 
 /* Calibration block at a fixed address so XCP masters can read/write it
@@ -48,6 +49,7 @@ void diagnosticsInit(void)
     uint32 i;
 
     diag_loadDefaults();
+    PeriphDiag_init();
 
     for (i = 0u; i < DIAG_NUM_CHECKS; i++)
     {
@@ -132,6 +134,10 @@ boolean diagnosticsUpdate(void)
     {
         status |= DIAG_NVM_FAULT;
     }
+
+    /* peripheral wiring / communication / liveness faults (PeriphDiag.c).
+     * Already debounced there, so no diag_debounce() around it. */
+    status |= PeriphDiag_update();
 
     tempDelta = g_xcpData.dieTempC - g_xcpData.dtscTempC;
     if (tempDelta < 0.0f)
