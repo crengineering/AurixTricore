@@ -219,20 +219,53 @@ boolean Bmp388_init(void)
     return ok;
 }
 
-boolean Bmp388_isPresent(void)
-{
-    return s_present;
-}
+/* Hot-plug recovery: retry this often (calls, i.e. 50 per second from the
+ * 20 ms baro task) while the device is missing. */
+#define BMP388_RECOVERY_PERIOD  (50u)      /* ~1 s */
 
 boolean Bmp388_read(float32 *pressurePa, float32 *temperatureC)
 {
+    /* Block scope (MISRA 8.9): only this function drives the retry. */
+    static uint16 s_recovery = 0u;
+
     uint8   raw[BMP388_DATA_LEN];
     boolean ok = FALSE;
 
-    if (s_present != FALSE)
+    if (s_present == FALSE)
+    {
+        /* Device absent: probe periodically so it comes back on its own when
+         * the wiring is restored.
+         *
+         * The probe is a single CHIP_ID read (~1 ms) and the full bring-up runs
+         * ONLY once that answers. That matters: Bmp388_init() reads the 21-byte
+         * trim block and reconfigures the sensor, and running it blindly once a
+         * second would stall the scheduler for no reason the whole time a wire
+         * is off. Re-init is required rather than optional - unplugging the
+         * sensor power-cycles it back to sleep mode with its configuration
+         * lost, so simply resuming reads would return nothing. */
+        s_recovery++;
+        if (s_recovery >= BMP388_RECOVERY_PERIOD)
+        {
+            uint8 chipId = 0u;
+
+            s_recovery = 0u;
+            if ((Bmp388_readChipId(&chipId) != FALSE) && (chipId == BMP388_CHIP_ID_VALUE))
+            {
+                (void)Bmp388_init();
+            }
+        }
+    }
+    else
     {
         ok = I2c_readReg(BMP388_I2C_ADDR, BMP388_REG_DATA_0, raw, BMP388_DATA_LEN);
-        if (ok != FALSE)
+        if (ok == FALSE)
+        {
+            /* Lost it. Drop presence so the branch above starts probing
+             * instead of retrying a dead device at 50 Hz forever. */
+            s_present  = FALSE;
+            s_recovery = 0u;
+        }
+        else
         {
             /* 24-bit little-endian: pressure = [0..2], temperature = [3..5]. */
             uint32 pRaw = ((uint32)raw[2] << 16) | ((uint32)raw[1] << 8) | (uint32)raw[0];

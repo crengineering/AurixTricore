@@ -39,9 +39,6 @@
  *          call with no sensor attached — it returns FALSE without hanging. */
 boolean Bmp388_init(void);
 
-/** \return TRUE once Bmp388_init() has succeeded. */
-boolean Bmp388_isPresent(void);
-
 /** Read the CHIP_ID register (0x00). Bring-up helper; BMP388 returns 0x50. */
 boolean Bmp388_readChipId(uint8 *chipId);
 

@@ -242,13 +242,27 @@ boolean Mpu6050_read(Mpu6050_Sample *sample)
 
     if (s_mpuPresent == FALSE)
     {
-        /* Device missing: retry the bring-up periodically so it comes back on
-         * its own once the wiring/supply is good again. */
+        /* Device missing: probe periodically so it comes back on its own once
+         * the wiring/supply is restored.
+         *
+         * The probe is a single WHO_AM_I read (~1 ms) and the full bring-up
+         * runs ONLY once that answers. Mpu6050_init() blocks for ~250 ms of
+         * reset and settle delays, so running it blindly every second would
+         * stall the scheduler - and therefore the Ethernet polling and the
+         * control loop - the entire time a wire is off. Re-init is required
+         * rather than optional: unplugging the sensor power-cycles it back to
+         * SLEEP with its configuration lost. */
         s_recovery++;
         if (s_recovery >= MPU6050_RECOVERY_PERIOD)
         {
+            uint8 whoAmI = 0u;
+
             s_recovery = 0u;
-            (void)Mpu6050_init();
+            if ((Mpu6050_readWhoAmI(&whoAmI) != FALSE)
+                && (whoAmI == MPU6050_WHO_AM_I_VALUE))
+            {
+                (void)Mpu6050_init();
+            }
         }
     }
     else

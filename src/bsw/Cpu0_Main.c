@@ -93,12 +93,13 @@ static void Task_Baro(void)
 {
     float32 pressPa = 0.0f;
     float32 tempC   = 0.0f;
-    boolean present = FALSE;
+    boolean present;
 
-    if (Bmp388_isPresent() != FALSE)
-    {
-        present = Bmp388_read(&pressPa, &tempC);
-    }
+    /* Called unconditionally, like Task_Imu: Bmp388_read() owns the presence
+     * state and uses these calls to probe for a reconnected sensor. Gating on
+     * Bmp388_isPresent() here would make that recovery unreachable, which is
+     * exactly why a replugged barometer never came back. */
+    present = Bmp388_read(&pressPa, &tempC);
     measurementsSetBaro(present, pressPa, tempC);
 
     /* Plausibility bands are the sensor's physical envelope, not tuning:
