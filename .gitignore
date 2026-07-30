@@ -70,3 +70,6 @@ __pycache__/
 
 # Runtime measurement logs from AurixGUI
 *.mf4
+
+# Vendor datasheets/manuals - large binaries, fetch from Infineon instead
+docs/*.pdf

@@ -1,0 +1,50 @@
+{
+    "logChannels": [
+        "ImuAccelX",
+        "AhrsRoll"
+    ],
+    "plots": [
+        {
+            "signals": [
+                "ImuAccelX",
+                "ImuAccelY",
+                "ImuAccelZ"
+            ]
+        },
+        {
+            "signals": [
+                "ImuGyroX",
+                "ImuGyroY",
+                "ImuGyroZ"
+            ]
+        },
+        {
+            "signals": [
+                "AhrsRoll",
+                "AhrsPitch",
+                "AhrsYaw"
+            ]
+        },
+        {
+            "signals": [
+                "AhrsRateP",
+                "AhrsRateQ",
+                "AhrsRateR"
+            ]
+        },
+        {
+            "signals": [
+                "ImuGyroX",
+                "ImuGyroY",
+                "ImuGyroZ"
+            ]
+        },
+        {
+            "signals": [
+                "BaroTemperature",
+                "ImuTemperature"
+            ]
+        }
+    ],
+    "version": 1
+}
