@@ -61,6 +61,19 @@ typedef enum
 
 static IfxI2c_I2c g_i2c;   /* I2C0 module handle */
 
+volatile I2c_Debug g_i2cDebug __at(XCP_I2CDBG_ADDR);
+
+/* Record the outcome of one transfer attempt for the XCP-readable counters. */
+static void i2c_note(i2c_XferResult res, uint8 busStatus)
+{
+    g_i2cDebug.magic         = XCP_I2CDBG_MAGIC;
+    g_i2cDebug.lastBusStatus = busStatus;
+    g_i2cDebug.lastResult    = (uint8)res;
+    if (res == I2C_XFER_OK)        { g_i2cDebug.okCount++;   }
+    else if (res == I2C_XFER_NAK)  { g_i2cDebug.nakCount++;  }
+    else                           { g_i2cDebug.failCount++; }
+}
+
 /* Bounded transfer engine, defined below the bus-recovery helpers it reports to. */
 static i2c_XferResult i2c_xferWrite(uint16 devAddr8, const uint8 *data, uint16 len);
 static i2c_XferResult i2c_xferRead(uint16 devAddr8, uint8 *data, uint16 len);
@@ -202,6 +215,22 @@ void I2c_getLineState(boolean *sclReleased, boolean *sdaReleased)
  * call starts from a defined state instead of inheriting the wreckage. */
 static void i2c_recoverAfterFailure(void)
 {
+    g_i2cDebug.recoverCount++;
+
+    /* Hard-reset the kernel and the FIFOs, not just re-run initModule().
+     *
+     * Measured 2026-07-30: after the IMU's supply was pulled and restored, the
+     * register-pointer WRITE of every probe still completed while the following
+     * READ failed - never a NAK, always a hardware error - and it stayed that
+     * way indefinitely. So the slaves were answering and the master's receive
+     * path was wedged. IfxI2c_I2c_initModule() reconfigures registers but does
+     * not clear the kernel state machine or the FIFOs, so re-running it left
+     * the module exactly as broken; the failure/recovery counters climbed in
+     * lockstep forever. A kernel reset plus an explicit FIFO reset is what
+     * actually clears it. */
+    IfxI2c_resetModule(&MODULE_I2C0);
+    IfxI2c_resetFifo(&MODULE_I2C0);
+
     i2c_busRecovery();
     i2c_configureModule();
 }
@@ -490,6 +519,7 @@ static i2c_XferResult i2c_xferWrite(uint16 devAddr8, const uint8 *data, uint16 l
             }
         }
     }
+    i2c_note(res, (uint8)bus);
     return res;
 }
 
@@ -618,6 +648,7 @@ static i2c_XferResult i2c_xferRead(uint16 devAddr8, uint8 *data, uint16 len)
             }
         }
     }
+    i2c_note(res, (uint8)bus);
     return res;
 }
 

@@ -25,6 +25,28 @@
 
 #include "Ifx_Types.h"
 
+/* Bus-level counters at a fixed address, readable over XCP without the map
+ * file. Exists because a sensor that fails to reconnect at run time looks
+ * identical from the outside whether the device is silent or the master is
+ * wedged -- these separate the two. Sits clear of the other pinned blocks
+ * (cal 0x...100, nvm 0x...200, gpio 0x...300). */
+#define XCP_I2CDBG_ADDR   0x70030400u
+#define XCP_I2CDBG_MAGIC  0x49324344u   /* "I2CD" */
+
+typedef struct
+{
+    uint32 magic;
+    uint8  lastBusStatus;   /* IfxI2c_BusStatus of the last transfer attempt */
+    uint8  lastResult;      /* 0 = ok, 1 = nak, 2 = fail                     */
+    uint8  reserved[2];
+    uint32 okCount;
+    uint32 nakCount;
+    uint32 failCount;
+    uint32 recoverCount;    /* bus recovery + module re-init invocations     */
+} I2c_Debug;
+
+extern volatile I2c_Debug g_i2cDebug;
+
 /** Bring up the I2C0 master (pins, TTL pads, baud rate). Call once at startup. */
 void I2c_init(void);
 
