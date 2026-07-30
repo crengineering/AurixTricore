@@ -50,7 +50,7 @@ void core4_main(void)
 
     Uart_println("CPU4 started");
 
-    Scheduler_init(&g_sched, &MODULE_STM4);
+    Scheduler_init(&g_sched, &MODULE_STM4, 4u);
     Scheduler_addTask(&g_sched, Task_App10ms, SCHED_MS(10u));
 
     while (TRUE)

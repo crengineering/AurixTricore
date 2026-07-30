@@ -120,7 +120,16 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 | P22.11 | CS (SLSO10) | `IfxQspi0_SLSO10_P22_11_OUT` | X702·18 | plan |
 | P22.7 | INT1 (data‑ready) | GPIO input | X702·17 | plan |
 
-### 2.3 Baro / Mag / GNSS — **I2C0**, shared bus (electrical: §2.5)
+> **Interim IMU in code — MPU‑6050 (GY‑521) on I2C0, not this QSPI plan.** The
+> ICM‑42688‑P above is still `plan` (not delivered). A borrowed **MPU‑6050** stands
+> in as the flyable IMU and rides the **shared I2C0 bus** (§2.3) at address **`0x68`**
+> — no new MCU pins, no clash with the BMP388 (`0x77`). Driver `src/bsw/Mpu6050.c`,
+> read at 50 Hz, exposed over XCP (`accelX…`, `gyroX…`, `imuTempC`, firmware ≥ v1.10.0).
+> **Hardware‑unverified.** Bring‑up gate = `Mpu6050_readWhoAmI()` == 0x68. Wiring /
+> address / power: **`docs/MPU6050.md`**. When the ICM‑42688‑P arrives it moves to
+> QSPI0 as planned here; the MPU‑6050 driver stays in‑tree as the I2C fallback.
+
+### 2.3 Baro / Mag / GNSS / IMU(interim) — **I2C0**, shared bus (electrical: §2.5)
 
 | Pin | Function | iLLD object | Header·pin | Status |
 |---|---|---|---|---|
@@ -135,8 +144,14 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 > firmware ≥ v1.9.0). **Hardware-unverified.** Bring-up gate =
 > `Bmp388_readChipId()` == 0x50. Breakout wiring, address (`0x77`/`0x76`) and
 > power notes: **`docs/BMP388.md`**. The iLLD `I2c` source tree was un-excluded in
-> `.cproject`. Mag (MMC5983MA `0x30`) and GNSS (NEO‑M9N `0x42`) share this bus,
-> still `plan`.
+> `.cproject`. The **MPU‑6050 IMU (`0x68`, `src/bsw/Mpu6050.c`)** now also shares this
+> bus as the interim IMU (§2.2 note; wiring **`docs/MPU6050.md`**). Mag (MMC5983MA
+> `0x30`) and GNSS (NEO‑M9N `0x42`) share this bus too, still `plan`.
+>
+> **Bus loading:** two active devices now pull SCL/SDA — the BMP388/CJMCU‑388
+> pull‑ups (~10 kΩ) and the GY‑521 pull‑ups (~4.7 kΩ) in parallel ≈ 3.2 kΩ to 3.3 V
+> (~1 mA sink, well within the pad limit). Fine, and edges are a touch faster. All
+> four I2C addresses are distinct, so no collision.
 
 ### 2.4 Actuator companion signals — ESC current sense + telemetry
 
@@ -164,12 +179,14 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 
 | Role | Part | Bus | iLLD driver | Rate |
 |---|---|---|---|---|
-| IMU | ICM‑42688‑P (EV board) | **QSPI0** (SPI) | `Qspi/SpiMaster/IfxQspi_SpiMaster.c` | 1 kHz |
-| Baro | BMP581 | **I2C0** | `I2c/I2c/IfxI2c_I2c.c` | 50 Hz |
+| IMU (planned) | ICM‑42688‑P (EV board) | **QSPI0** (SPI) | `Qspi/SpiMaster/IfxQspi_SpiMaster.c` | 1 kHz |
+| IMU (interim, in code) | MPU‑6050 (GY‑521) | **I2C0** (shared) | `I2c/I2c/IfxI2c_I2c.c` | 50 Hz |
+| Baro | BMP388 (BMP581 planned) | **I2C0** (shared) | `I2c/I2c/IfxI2c_I2c.c` | 50 Hz |
 | Mag | MMC5983MA | **I2C0** (shared) | (shared) | 100 Hz |
 | GNSS | u‑blox NEO‑M9N | **I2C0** (DDC, shared) | (shared) | 10 Hz |
 
-**I2C addresses (no collisions):** BMP581 `0x46`/`0x47`, MMC5983MA `0x30`, NEO‑M9N `0x42`.
+**I2C addresses (no collisions):** MPU‑6050 `0x68`/`0x69`, BMP388 `0x77`/`0x76`
+(BMP581 `0x46`/`0x47`), MMC5983MA `0x30`, NEO‑M9N `0x42`.
 
 **Supply — tap the regulated +3V3 rail** (X702·78/80 or X703·70), **not** `VCC_IN`
 (X702·5‑8, raw board input 3.5–40 V) and **not** `V_UC` (MCU supply, 5 V here). All

@@ -2,6 +2,9 @@
 #include "Diagnostics.h"
 #include "Nvm.h"
 #include "Version.h"
+#include "Ahrs.h"
+#include "CoreStats.h"
+#include "EthStats.h"
 #include "Dts/Dts/IfxDts_Dts.h"
 #include "Pms/Std/IfxPmsEvr.h"
 #include "IfxScuWdt.h"
@@ -62,6 +65,84 @@ void measurementsInit(void)
     g_xcpData.baroPressPa = 0.0f;
     g_xcpData.baroTempC   = 0.0f;
     g_xcpData.baroAltM    = 0.0f;
+    g_xcpData.imuPresent  = 0u;
+    g_xcpData.imuReserved[0] = 0u;
+    g_xcpData.imuReserved[1] = 0u;
+    g_xcpData.imuReserved[2] = 0u;
+    g_xcpData.accelX      = 0.0f;
+    g_xcpData.accelY      = 0.0f;
+    g_xcpData.accelZ      = 0.0f;
+    g_xcpData.gyroX       = 0.0f;
+    g_xcpData.gyroY       = 0.0f;
+    g_xcpData.gyroZ       = 0.0f;
+    g_xcpData.imuTempC    = 0.0f;
+
+    {
+        uint8 i;
+        g_xcpData.ahrsState      = 0u;
+        g_xcpData.ahrsAccOk      = 0u;
+        g_xcpData.ahrsReserved[0] = 0u;
+        g_xcpData.ahrsReserved[1] = 0u;
+        g_xcpData.roll  = 0.0f;
+        g_xcpData.pitch = 0.0f;
+        g_xcpData.yaw   = 0.0f;
+        g_xcpData.rateP = 0.0f;
+        g_xcpData.rateQ = 0.0f;
+        g_xcpData.rateR = 0.0f;
+        g_xcpData.biasX = 0.0f;
+        g_xcpData.biasY = 0.0f;
+        g_xcpData.biasZ = 0.0f;
+
+        for (i = 0u; i < CORESTATS_NUM_CORES; i++)
+        {
+            g_xcpData.coreExecUs[i]   = 0u;
+            g_xcpData.coreLoadPmil[i] = 0u;
+            g_xcpData.coreAlive[i]    = 0u;
+        }
+        g_xcpData.ethBytesPerSec = 0u;
+        g_xcpData.ethUtilPmil    = 0u;
+        g_xcpData.ethLinkMbits   = 0u;
+    }
+}
+
+void measurementsSetAttitude(void)
+{
+    float32 phi[3];
+    float32 om[3];
+    float32 bias[3];
+
+    Ahrs_getAttitude(phi);
+    Ahrs_getRates(om);
+    Ahrs_getGyroBias(bias);
+
+    g_xcpData.ahrsState = (uint8)Ahrs_getState();
+    g_xcpData.ahrsAccOk = (Ahrs_isAccelTrusted() != FALSE) ? 1u : 0u;
+    g_xcpData.roll      = phi[0];
+    g_xcpData.pitch     = phi[1];
+    g_xcpData.yaw       = phi[2];
+    g_xcpData.rateP     = om[0];
+    g_xcpData.rateQ     = om[1];
+    g_xcpData.rateR     = om[2];
+    g_xcpData.biasX     = bias[0];
+    g_xcpData.biasY     = bias[1];
+    g_xcpData.biasZ     = bias[2];
+}
+
+void measurementsSetSystemLoad(void)
+{
+    uint8 i;
+
+    for (i = 0u; i < CORESTATS_NUM_CORES; i++)
+    {
+        g_xcpData.coreExecUs[i]   = g_coreStats[i].execUs;
+        g_xcpData.coreLoadPmil[i] = g_coreStats[i].loadPmil;
+        g_xcpData.coreAlive[i]    = g_coreStats[i].aliveCounter;
+    }
+
+    EthStats_update();
+    g_xcpData.ethBytesPerSec = EthStats_getBytesPerSec();
+    g_xcpData.ethUtilPmil    = EthStats_getUtilPmil();
+    g_xcpData.ethLinkMbits   = EthStats_getLinkMbits();
 }
 
 void measurementsSetBaro(boolean present, float32 pressurePa, float32 temperatureC)
@@ -88,6 +169,33 @@ void measurementsSetBaro(boolean present, float32 pressurePa, float32 temperatur
         g_xcpData.baroPressPa = 0.0f;
         g_xcpData.baroTempC   = 0.0f;
         g_xcpData.baroAltM    = 0.0f;
+    }
+}
+
+void measurementsSetImu(boolean present, const float32 accel[3], const float32 gyro[3],
+                        float32 temperatureC)
+{
+    if (present != FALSE)
+    {
+        g_xcpData.imuPresent = 1u;
+        g_xcpData.accelX     = accel[0];
+        g_xcpData.accelY     = accel[1];
+        g_xcpData.accelZ     = accel[2];
+        g_xcpData.gyroX      = gyro[0];
+        g_xcpData.gyroY      = gyro[1];
+        g_xcpData.gyroZ      = gyro[2];
+        g_xcpData.imuTempC   = temperatureC;
+    }
+    else
+    {
+        g_xcpData.imuPresent = 0u;
+        g_xcpData.accelX     = 0.0f;
+        g_xcpData.accelY     = 0.0f;
+        g_xcpData.accelZ     = 0.0f;
+        g_xcpData.gyroX      = 0.0f;
+        g_xcpData.gyroY      = 0.0f;
+        g_xcpData.gyroZ      = 0.0f;
+        g_xcpData.imuTempC   = 0.0f;
     }
 }
 

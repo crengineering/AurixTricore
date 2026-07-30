@@ -67,3 +67,6 @@ TriCore Debug (TASKING)/
 # MISRA rule texts are MISRA-licensed - never commit
 tools/misra_rule_texts.txt
 __pycache__/
+
+# Runtime measurement logs from AurixGUI
+*.mf4

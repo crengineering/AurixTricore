@@ -50,7 +50,7 @@ void core5_main(void)
 
     Uart_println("CPU5 started");
 
-    Scheduler_init(&g_sched, &MODULE_STM5);
+    Scheduler_init(&g_sched, &MODULE_STM5, 5u);
     Scheduler_addTask(&g_sched, Task_App10ms, SCHED_MS(10u));
 
     while (TRUE)

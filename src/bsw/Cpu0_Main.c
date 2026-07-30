@@ -20,6 +20,10 @@
 #include "gpio.h"
 #include "I2c.h"
 #include "Bmp388.h"
+#include "Mpu6050.h"
+#include "Ahrs.h"
+#include "EthStats.h"
+#include "SysTime.h"
 #include "CtrlReplay.h"     /* ASW replay harness; single BSW->ASW init
                              * callout — documented deviation, see
                              * docs/CTRL_REPLAY.md                      */
@@ -28,6 +32,51 @@ IFX_ALIGN(4) IfxCpu_syncEvent cpuSyncEvent = 0;
 
 static Scheduler_t g_sched;
 static Led_t       g_led;
+
+/* print one byte as two hex digits (no UART formatted-print available) */
+static void uartHexByte(uint8 v)
+{
+    static const char hexDigits[] = "0123456789ABCDEF";
+    char buf[3];
+    buf[0] = hexDigits[(v >> 4) & 0x0Fu];
+    buf[1] = hexDigits[v & 0x0Fu];
+    buf[2] = '\0';
+    Uart_print(buf);
+}
+
+/* One-time raw MPU-6050 register dump at boot for bring-up diagnosis.
+ * If the burst ever reads all-zero or never changes between resets, read
+ * docs/MPU6050.md section 7 before suspecting the sensor hardware. */
+static void mpuDebugDump(void)
+{
+    uint8 cfg[4] = { 0u, 0u, 0u, 0u };
+    uint8 pwr[3] = { 0u, 0u, 0u };
+    uint8 raw[14];
+
+    if (Mpu6050_debugDump(cfg, pwr, raw) != FALSE)
+    {
+        uint8 i;
+        Uart_print("MPU cfg(SMPLRT/CFG/GYRO/ACCEL)=");
+        for (i = 0u; i < 4u; i++)
+        {
+            uartHexByte(cfg[i]);
+            Uart_print(" ");
+        }
+        Uart_print("USER_CTRL/PWR1/PWR2=");
+        for (i = 0u; i < 3u; i++)
+        {
+            uartHexByte(pwr[i]);
+            Uart_print(" ");
+        }
+        Uart_print("burst=");
+        for (i = 0u; i < 14u; i++)
+        {
+            uartHexByte(raw[i]);
+            Uart_print(" ");
+        }
+        Uart_println("");
+    }
+}
 
 static void Task_LedToggle(void)
 {
@@ -52,6 +101,51 @@ static void Task_Baro(void)
     measurementsSetBaro(present, pressPa, tempC);
 }
 
+static void Task_Imu(void)
+{
+    Mpu6050_Sample sample = { { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 0.0f };
+    boolean        present;
+    static uint32  lastTicks = 0u;
+    uint32         nowTicks;
+    float32        dt;
+
+    /* Called unconditionally: Mpu6050_read() owns the presence state and uses
+     * these calls to re-run the bring-up periodically after the device drops
+     * off the bus. Gating on Mpu6050_isPresent() here would make that recovery
+     * unreachable. */
+    present = Mpu6050_read(&sample);
+
+    /* Measured dt, not the nominal 20 ms: the scheduler dispatches on a "period
+     * elapsed" test, so the real interval jitters and integrating the nominal
+     * value would bias the attitude. STM0 ticks are 10 ns. */
+    nowTicks = SysTime_getTicks();
+    dt       = (float32)(nowTicks - lastTicks) * 1e-8f;
+    lastTicks = nowTicks;
+
+    /* AHRS first: it owns the gyro bias, and the published rates below are
+     * bias-corrected using the value it measured at start-up. */
+    Ahrs_update(sample.accel, sample.gyro, dt, present);
+    measurementsSetAttitude();
+
+    {
+        float32 bias[3];
+        float32 gyroCorr[3];
+        uint8   i;
+
+        /* Publish the CORRECTED rate, not the raw one. This unit has a ~21.8
+         * deg/s offset on Y; showing it raw makes a stationary board look like
+         * it is yawing. The bias itself stays visible separately (biasX/Y/Z),
+         * so the raw value is still recoverable as corrected + bias.
+         * Zero until calibration finishes, so this is a no-op until then. */
+        Ahrs_getGyroBias(bias);
+        for (i = 0u; i < 3u; i++)
+        {
+            gyroCorr[i] = sample.gyro[i] - bias[i];
+        }
+        measurementsSetImu(present, sample.accel, gyroCorr, sample.tempC);
+    }
+}
+
 static void Task_Measure100ms(void)
 {
     Nvm_task100ms();        /* before diagnostics: fresh NVM fault state */
@@ -62,6 +156,7 @@ static void Task_Measure100ms(void)
         gpio_write(GPIO_P_00_0, GPIO_STATE_OFF);
     }
     gpio_calApply();        /* XCP overrides win over the diagnostics write above */
+    measurementsSetSystemLoad();   /* per-core exec time + Ethernet utilisation */
     xcpDaqCycle();
 }
 
@@ -85,10 +180,11 @@ int core0_main(void)
     gpio_calInit();         /* XCP GPIO control block: all pins firmware-owned */
 
     /* init scheduler */
-    Scheduler_init(&g_sched, &MODULE_STM0);
+    Scheduler_init(&g_sched, &MODULE_STM0, 0u);
     Scheduler_addTask(&g_sched, Task_LedToggle, SCHED_MS(500u));
     Scheduler_addTask(&g_sched, Task_App10ms,   SCHED_MS(10u));
     (void)Scheduler_addTask(&g_sched, Task_Baro, SCHED_MS(20u));  /* 50 Hz barometer */
+    (void)Scheduler_addTask(&g_sched, Task_Imu,  SCHED_MS(20u));  /* 50 Hz IMU */
     Scheduler_addTask(&g_sched, Task_Measure100ms, SCHED_MS(100u));
 
     /* init persistent memory*/
@@ -98,6 +194,14 @@ int core0_main(void)
 
     /* init shared I2C0 sensor bus + first sensor (BMP388 barometer, CJMCU-388) */
     I2c_init();
+    if (I2c_busIsIdle() != FALSE)
+    {
+        Uart_println("I2C0 bus idle (SCL+SDA released)");
+    }
+    else
+    {
+        Uart_println("I2C0 bus HELD - a slave is pulling SCL/SDA low");
+    }
     if (Bmp388_init() != FALSE)
     {
         Uart_println("BMP388 detected (CHIP_ID 0x50)");
@@ -106,6 +210,17 @@ int core0_main(void)
     {
         Uart_println("BMP388 not found - check wiring/address (0x77 vs 0x76)");
     }
+
+    /* second sensor on the shared I2C0 bus: MPU-6050 IMU (GY-521), address 0x68 */
+    if (Mpu6050_init() != FALSE)
+    {
+        Uart_println("MPU-6050 detected (WHO_AM_I 0x68)");
+    }
+    else
+    {
+        Uart_println("MPU-6050 not found - check wiring/address (0x68 vs 0x69)");
+    }
+    mpuDebugDump();     /* one-time raw register dump for bring-up diagnosis */
 
     /* STM0 Comparator 0 als 1-ms-Tick für den lwIP-Stack scharf schalten
      * (ohne initCompare feuert updateLwIPStackISR nie -> keine TCP/ARP-Timer) */
@@ -137,7 +252,10 @@ int core0_main(void)
     udpEchoInit();
     xcpInit();
     CtrlReplay_init();
+    EthStats_init();        /* MMC octet counters; after the MAC is up */
+    Ahrs_init();            /* starts the gyro-bias calibration - hold still */
     Uart_println("Ethernet started");
+    Uart_println("AHRS calibrating gyro bias - keep the board still ~2 s");
 
     while (TRUE)
     {

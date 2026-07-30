@@ -59,7 +59,7 @@ void core1_main(void)
 
     Led_init(&g_led, &MODULE_P20, 12u);
 
-    Scheduler_init(&g_sched, &MODULE_STM1);
+    Scheduler_init(&g_sched, &MODULE_STM1, 1u);
     Scheduler_addTask(&g_sched, Task_LedToggle, SCHED_MS(500u));
     Scheduler_addTask(&g_sched, Task_App10ms,   SCHED_MS(10u));
 

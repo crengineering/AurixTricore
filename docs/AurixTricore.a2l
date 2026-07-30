@@ -173,6 +173,55 @@ ASAP2_VERSION 1 61
       PHYS_UNIT "m"
     /end MEASUREMENT
 
+    /* MPU-6050 IMU (GY-521) on shared I2C0, firmware >= v1.10.0 */
+
+    /begin MEASUREMENT ImuPresent "1 if the MPU-6050 answered at init, else 0"
+      UBYTE NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030034
+    /end MEASUREMENT
+
+    /begin MEASUREMENT ImuAccelX "MPU-6050 acceleration X"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -8 8
+      ECU_ADDRESS 0x70030038
+      PHYS_UNIT "g"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT ImuAccelY "MPU-6050 acceleration Y"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -8 8
+      ECU_ADDRESS 0x7003003C
+      PHYS_UNIT "g"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT ImuAccelZ "MPU-6050 acceleration Z"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -8 8
+      ECU_ADDRESS 0x70030040
+      PHYS_UNIT "g"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT ImuGyroX "MPU-6050 angular rate X"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -2000 2000
+      ECU_ADDRESS 0x70030044
+      PHYS_UNIT "deg/s"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT ImuGyroY "MPU-6050 angular rate Y"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -2000 2000
+      ECU_ADDRESS 0x70030048
+      PHYS_UNIT "deg/s"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT ImuGyroZ "MPU-6050 angular rate Z"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -2000 2000
+      ECU_ADDRESS 0x7003004C
+      PHYS_UNIT "deg/s"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT ImuTemperature "MPU-6050 die temperature"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -40 85
+      ECU_ADDRESS 0x70030050
+      PHYS_UNIT "degC"
+    /end MEASUREMENT
+
     /* individual diagnostics bits (BIT_MASK views on DiagStatus) */
 
     /begin MEASUREMENT Diag_DTS_Undertemp "DTS temperature below dtsMin"
