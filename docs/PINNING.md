@@ -129,29 +129,35 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 > address / power: **`docs/MPU6050.md`**. When the ICM‑42688‑P arrives it moves to
 > QSPI0 as planned here; the MPU‑6050 driver stays in‑tree as the I2C fallback.
 
-### 2.3 Baro / Mag / GNSS / IMU(interim) — **I2C0**, shared bus (electrical: §2.5)
+### 2.3 Baro / Mag / GNSS — **I2C0**, shared bus (electrical: §2.5)
 
 | Pin | Function | iLLD object | Header·pin | Status |
 |---|---|---|---|---|
 | P13.1 | SCL | `IfxI2c0_SCL_P13_1_INOUT` | X702·29 | **impl** (bus) |
 | P13.2 | SDA | `IfxI2c0_SDA_P13_2_INOUT` | X702·35 | **impl** (bus) |
 
-> **Bus + first sensor in code** (branch `feature/sensors_i2c_baro`): `src/bsw/I2c.c`
-> brings up I2C0 at 100 kHz on TTL pads (SCL alt6). The active baro is now the
-> **BMP388** on a **CJMCU-388** breakout (`src/bsw/Bmp388.c`), a learning-project
-> stand-in for the delayed BMP581 (driver kept in-tree, unused). Initialised from
-> `Cpu0_Main.c`, read at 50 Hz, exposed over XCP (`baroPressPa`/`baroTempC`,
-> firmware ≥ v1.9.0). **Hardware-unverified.** Bring-up gate =
-> `Bmp388_readChipId()` == 0x50. Breakout wiring, address (`0x77`/`0x76`) and
-> power notes: **`docs/BMP388.md`**. The iLLD `I2c` source tree was un-excluded in
-> `.cproject`. The **MPU‑6050 IMU (`0x68`, `src/bsw/Mpu6050.c`)** now also shares this
-> bus as the interim IMU (§2.2 note; wiring **`docs/MPU6050.md`**). Mag (MMC5983MA
-> `0x30`) and GNSS (NEO‑M9N `0x42`) share this bus too, still `plan`.
+> **Bus + sensors in code.** `src/bsw/I2c.c` brings up I2C0 at 100 kHz on TTL pads
+> (SCL alt6), with bus recovery and a bounded transfer engine (see the file header —
+> the iLLD default emits **no STOP**, and `IfxI2c_I2c_initModule()` does **not**
+> clear the kernel, both of which cost days). The iLLD `I2c` source tree was
+> un-excluded in `.cproject`.
 >
-> **Bus loading:** two active devices now pull SCL/SDA — the BMP388/CJMCU‑388
-> pull‑ups (~10 kΩ) and the GY‑521 pull‑ups (~4.7 kΩ) in parallel ≈ 3.2 kΩ to 3.3 V
-> (~1 mA sink, well within the pad limit). Fine, and edges are a touch faster. All
-> four I2C addresses are distinct, so no collision.
+> **From 2026-07-31 the active baro is the BMP581 at `0x46`** (`src/bsw/Bmp581.c`,
+> wiring **`docs/BMP581.md`**). It replaces the BMP388/CJMCU-388 (`0x77`,
+> `docs/BMP388.md`) and the interim MPU-6050/GY-521 IMU (`0x68`,
+> `docs/MPU6050.md`), **both physically removed**. Those two are hardware-validated
+> and their docs stay as reference; the BMP581 driver is written but
+> **hardware-unverified**, every register marked `TODO(hw)`.
+>
+> The flight IMU (ICM-42688-P, §2.2), mag (MMC5983MA `0x30`) and GNSS (NEO-M9N
+> `0x42`) are still `plan`. All four addresses are distinct, so no collision.
+>
+> ⚠️ **Bus loading changed.** The old bus was held up by two breakouts in parallel
+> — CJMCU-388 ~10 kΩ and GY-521 ~4.7 kΩ, about **3.2 kΩ**. Removing both removes
+> **all** pull-up: whatever the BMP581 breakout carries is now the entire bus. If
+> it has none, the bus never idles high and nothing ACKs, which looks exactly like
+> a dead sensor — add **4.7 kΩ from SCL and SDA to +3V3**. The boot line
+> `I2C0 bus idle (SCL+SDA released)` confirms it either way.
 
 ### 2.4 Actuator companion signals — ESC current sense + telemetry
 
