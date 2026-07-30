@@ -38,7 +38,13 @@
 #define XCP_CMD_ALLOC_ODT_ENTRY     0xD3u
 
 /* static DAQ resources: one list on event channel 0 (the 100 ms task) */
-#define XCP_DAQ_MAX_ODTS            4u
+/* One ODT per contiguous sub-block of Xcp_Data. The GUI currently uses four
+ * (core+baro / IMU / attitude / core-load+Ethernet) and had exactly filled the
+ * previous limit of 4, so the next signal group would have had no room. Eight
+ * costs 512 bytes of entry table instead of 256 and leaves headroom for the
+ * magnetometer, GNSS and ESC telemetry blocks. The transmit loop and the PID
+ * (= absolute ODT number, one byte) are generic, so nothing else caps this. */
+#define XCP_DAQ_MAX_ODTS            8u
 #define XCP_DAQ_MAX_ENTRIES         8u
 #define XCP_DAQ_MAX_ODT_DATA        63u     /* MAX_DTO - PID byte            */
 

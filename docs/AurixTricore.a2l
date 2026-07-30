@@ -2,7 +2,7 @@
  *
  * All objects live at fixed addresses (TASKING __at), so this file does not
  * depend on the link run:
- *   Xcp_Data  (measurements)          0x70030000, 52 bytes, Measurements.h
+ *   Xcp_Data  (measurements)          0x70030000, 180 bytes, Measurements.h
  *   Xcp_Cal   (calibration, RAM only) 0x70030100, 64 bytes, Diagnostics.h
  *   Xcp_Nvm   (persistent, DFLASH)    0x70030200, 12 bytes, Nvm.h
  *   Xcp_Gpio  (GPIO control, RAM only) 0x70030300, 52 bytes, gpio.h
@@ -198,19 +198,19 @@ ASAP2_VERSION 1 61
       PHYS_UNIT "g"
     /end MEASUREMENT
 
-    /begin MEASUREMENT ImuGyroX "MPU-6050 angular rate X"
+    /begin MEASUREMENT ImuGyroX "MPU-6050 angular rate X, bias corrected (raw = this + AhrsGyroBiasX)"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -2000 2000
       ECU_ADDRESS 0x70030044
       PHYS_UNIT "deg/s"
     /end MEASUREMENT
 
-    /begin MEASUREMENT ImuGyroY "MPU-6050 angular rate Y"
+    /begin MEASUREMENT ImuGyroY "MPU-6050 angular rate Y, bias corrected (raw = this + AhrsGyroBiasY)"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -2000 2000
       ECU_ADDRESS 0x70030048
       PHYS_UNIT "deg/s"
     /end MEASUREMENT
 
-    /begin MEASUREMENT ImuGyroZ "MPU-6050 angular rate Z"
+    /begin MEASUREMENT ImuGyroZ "MPU-6050 angular rate Z, bias corrected (raw = this + AhrsGyroBiasZ)"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -2000 2000
       ECU_ADDRESS 0x7003004C
       PHYS_UNIT "deg/s"
@@ -221,6 +221,200 @@ ASAP2_VERSION 1 61
       ECU_ADDRESS 0x70030050
       PHYS_UNIT "degC"
     /end MEASUREMENT
+
+    /* Attitude estimate (Ahrs.c), firmware >= v1.12.0.
+     * Angles and rates use the src/asw/flight_ctrl.h conventions:
+     * phi_ist = [roll, pitch, yaw] in rad, om_ist = [p, q, r] in rad/s. */
+
+    /begin MEASUREMENT AhrsState "attitude estimator state: 0 calibrating, 1 running, 2 no sensor"
+      UBYTE NO_COMPU_METHOD 0 0 0 2
+      ECU_ADDRESS 0x70030054
+    /end MEASUREMENT
+
+    /begin MEASUREMENT AhrsAccelTrusted "1 while |a| is near 1 g and the accelerometer is being fused"
+      UBYTE NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x70030055
+    /end MEASUREMENT
+
+    /begin MEASUREMENT AhrsRoll "estimated roll (phi), flight_ctrl phi_ist[0]"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -3.15 3.15
+      ECU_ADDRESS 0x70030058
+      PHYS_UNIT "rad"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT AhrsPitch "estimated pitch (theta), flight_ctrl phi_ist[1]"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -1.58 1.58
+      ECU_ADDRESS 0x7003005C
+      PHYS_UNIT "rad"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT AhrsYaw "estimated yaw (psi), flight_ctrl phi_ist[2] - gyro only, drifts"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -100 100
+      ECU_ADDRESS 0x70030060
+      PHYS_UNIT "rad"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT AhrsRateP "body roll rate p, bias corrected, flight_ctrl om_ist[0]"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -35 35
+      ECU_ADDRESS 0x70030064
+      PHYS_UNIT "rad/s"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT AhrsRateQ "body pitch rate q, bias corrected, flight_ctrl om_ist[1]"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -35 35
+      ECU_ADDRESS 0x70030068
+      PHYS_UNIT "rad/s"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT AhrsRateR "body yaw rate r, bias corrected, flight_ctrl om_ist[2]"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -35 35
+      ECU_ADDRESS 0x7003006C
+      PHYS_UNIT "rad/s"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT AhrsGyroBiasX "gyro bias X measured at start-up"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -50 50
+      ECU_ADDRESS 0x70030070
+      PHYS_UNIT "deg/s"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT AhrsGyroBiasY "gyro bias Y measured at start-up"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -50 50
+      ECU_ADDRESS 0x70030074
+      PHYS_UNIT "deg/s"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT AhrsGyroBiasZ "gyro bias Z measured at start-up"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -50 50
+      ECU_ADDRESS 0x70030078
+      PHYS_UNIT "deg/s"
+    /end MEASUREMENT
+
+    /* Per-core execution time (CoreStats.c). CoreAliveN increments once per
+     * 100 ms window; a frozen counter means that core has hung. */
+
+    /begin MEASUREMENT Core0ExecTime "CPU0 busy time in the last 100 ms window"
+      ULONG NO_COMPU_METHOD 0 0 0 100000
+      ECU_ADDRESS 0x7003007C
+      PHYS_UNIT "us"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Core1ExecTime "CPU1 busy time in the last 100 ms window"
+      ULONG NO_COMPU_METHOD 0 0 0 100000
+      ECU_ADDRESS 0x70030080
+      PHYS_UNIT "us"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Core2ExecTime "CPU2 busy time in the last 100 ms window"
+      ULONG NO_COMPU_METHOD 0 0 0 100000
+      ECU_ADDRESS 0x70030084
+      PHYS_UNIT "us"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Core3ExecTime "CPU3 busy time in the last 100 ms window"
+      ULONG NO_COMPU_METHOD 0 0 0 100000
+      ECU_ADDRESS 0x70030088
+      PHYS_UNIT "us"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Core4ExecTime "CPU4 busy time in the last 100 ms window"
+      ULONG NO_COMPU_METHOD 0 0 0 100000
+      ECU_ADDRESS 0x7003008C
+      PHYS_UNIT "us"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Core5ExecTime "CPU5 busy time in the last 100 ms window"
+      ULONG NO_COMPU_METHOD 0 0 0 100000
+      ECU_ADDRESS 0x70030090
+      PHYS_UNIT "us"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Core0Load "CPU0 busy fraction of the window"
+      UWORD NO_COMPU_METHOD 0 0 0 1000
+      ECU_ADDRESS 0x70030094
+      PHYS_UNIT "per mille"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Core1Load "CPU1 busy fraction of the window"
+      UWORD NO_COMPU_METHOD 0 0 0 1000
+      ECU_ADDRESS 0x70030096
+      PHYS_UNIT "per mille"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Core2Load "CPU2 busy fraction of the window"
+      UWORD NO_COMPU_METHOD 0 0 0 1000
+      ECU_ADDRESS 0x70030098
+      PHYS_UNIT "per mille"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Core3Load "CPU3 busy fraction of the window"
+      UWORD NO_COMPU_METHOD 0 0 0 1000
+      ECU_ADDRESS 0x7003009A
+      PHYS_UNIT "per mille"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Core4Load "CPU4 busy fraction of the window"
+      UWORD NO_COMPU_METHOD 0 0 0 1000
+      ECU_ADDRESS 0x7003009C
+      PHYS_UNIT "per mille"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Core5Load "CPU5 busy fraction of the window"
+      UWORD NO_COMPU_METHOD 0 0 0 1000
+      ECU_ADDRESS 0x7003009E
+      PHYS_UNIT "per mille"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Core0Alive "CPU0 liveness counter, frozen if the core hung"
+      UWORD NO_COMPU_METHOD 0 0 0 65535
+      ECU_ADDRESS 0x700300A0
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Core1Alive "CPU1 liveness counter, frozen if the core hung"
+      UWORD NO_COMPU_METHOD 0 0 0 65535
+      ECU_ADDRESS 0x700300A2
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Core2Alive "CPU2 liveness counter, frozen if the core hung"
+      UWORD NO_COMPU_METHOD 0 0 0 65535
+      ECU_ADDRESS 0x700300A4
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Core3Alive "CPU3 liveness counter, frozen if the core hung"
+      UWORD NO_COMPU_METHOD 0 0 0 65535
+      ECU_ADDRESS 0x700300A6
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Core4Alive "CPU4 liveness counter, frozen if the core hung"
+      UWORD NO_COMPU_METHOD 0 0 0 65535
+      ECU_ADDRESS 0x700300A8
+    /end MEASUREMENT
+
+    /begin MEASUREMENT Core5Alive "CPU5 liveness counter, frozen if the core hung"
+      UWORD NO_COMPU_METHOD 0 0 0 65535
+      ECU_ADDRESS 0x700300AA
+    /end MEASUREMENT
+
+    /* Ethernet link (EthStats.c), from the GETH MMC hardware counters */
+
+    /begin MEASUREMENT EthBytesPerSec "Ethernet throughput, transmit and receive summed"
+      ULONG NO_COMPU_METHOD 0 0 0 125000000
+      ECU_ADDRESS 0x700300AC
+      PHYS_UNIT "B/s"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EthUtilisation "link utilisation against the negotiated line rate"
+      UWORD NO_COMPU_METHOD 0 0 0 1000
+      ECU_ADDRESS 0x700300B0
+      PHYS_UNIT "per mille"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EthLinkSpeed "negotiated link rate"
+      UWORD NO_COMPU_METHOD 0 0 0 1000
+      ECU_ADDRESS 0x700300B2
+      PHYS_UNIT "Mbit/s"
+    /end MEASUREMENT
+
 
     /* individual diagnostics bits (BIT_MASK views on DiagStatus) */
 
