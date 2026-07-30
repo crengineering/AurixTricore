@@ -25,12 +25,17 @@
  *    for a heading-hold rate loop, useless as an absolute heading. Absolute yaw
  *    needs the planned MMC5983MA magnetometer (PINNING.md) or GPS course.
  *
- * 2. THE MOUNTING TRANSFORM IS NOT SET. Angles are computed in the SENSOR frame
- *    (MPU axes as marked on the GY-521, Z up when the chip faces up), because
- *    the airframe mounting is not decided yet. flight_ctrl.h uses NED (z DOWN).
- *    Before flight, set the AHRS_MOUNT_* mapping below to rotate sensor axes
- *    into the body frame — otherwise the controller will drive the wrong way.
- *    This is deliberately one small, obvious place to change.
+ * 2. THE MOUNTING TRANSFORM ASSUMES CHIP UP, SENSOR X FORWARD. Angles are in
+ *    the NED body frame flight_ctrl.h expects (x forward, y right, z DOWN),
+ *    reached by negating sensor Y and Z. If the IMU is mounted any other way,
+ *    change AHRS_MOUNT_S* in Ahrs.c -- and negate zero or two axes, never one,
+ *    or the frame becomes left-handed (the reasoning is in that comment).
+ *
+ *    BENCH CHECK after any remount, with the board held still:
+ *      level, chip up        -> roll ~0,    pitch ~0
+ *      nose (sensor X) up    -> pitch ~ +90 deg
+ *      right wing down       -> roll  ~ +90 deg
+ *    Wrong signs here mean the controller drives the wrong way.
  *
  * 3. GYRO BIAS IS CALIBRATED AT EVERY BOOT, not stored. Bias moves with
  *    temperature and part-to-part, so a frozen constant goes stale; the observed

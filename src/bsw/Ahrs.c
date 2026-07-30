@@ -45,17 +45,27 @@
 #define AHRS_DT_MIN_S         (0.0001f)
 
 /* --- mounting transform -------------------------------------------------
- * Maps SENSOR axes to BODY axes. Identity for now: the airframe mounting is not
- * decided, so angles come out in the GY-521's own frame (Z up when the chip
- * faces up), which is what the bench test checks.
+ * Maps SENSOR axes to BODY axes. Set for the MPU-6050 mounted CHIP UP with the
+ * sensor X arrow pointing FORWARD, giving the NED body frame that
+ * src/asw/flight_ctrl.h expects: x forward, y right, z DOWN.
  *
- * flight_ctrl.h uses NED with z DOWN. For a typical "chip up, X forward, Y
- * right" mounting the body vector is (X, -Y, -Z), i.e. set Y and Z to -1.0f.
- * Set these once the sensor is bolted down, then re-verify on the bench that
- * nose-up gives positive pitch and right-roll gives positive roll. */
-#define AHRS_MOUNT_SX         (1.0f)
-#define AHRS_MOUNT_SY         (1.0f)
-#define AHRS_MOUNT_SZ         (1.0f)
+ * The GY-521 frame is right-handed with Z up, so X forward puts sensor Y to the
+ * LEFT. Turning that into (forward, right, down) is a 180 degree rotation about
+ * X: negate Y and Z.
+ *
+ * NEGATE TWO AXES, NEVER ONE. A frame change must have determinant +1. Flipping
+ * a single axis gives -1, i.e. a left-handed frame, and then two things break:
+ * the Euler kinematics below assume right-handed, and the gyro is a PSEUDOvector
+ * -- under an improper transform it changes sign differently from the
+ * accelerometer, so the two halves of the filter would disagree about which way
+ * is up. If the sensor is remounted, pick the signs so exactly zero or two are
+ * negative, then re-verify on the bench (see the check in Ahrs.h).
+ *
+ * If X does not point forward, this needs a full axis permutation rather than
+ * sign flips alone. */
+#define AHRS_MOUNT_SX         ( 1.0f)
+#define AHRS_MOUNT_SY         (-1.0f)
+#define AHRS_MOUNT_SZ         (-1.0f)
 
 /* --- state --------------------------------------------------------------- */
 
@@ -203,8 +213,13 @@ void Ahrs_update(const float32 acc[3], const float32 gyro[3], float32 dt, boolea
                 if ((magSq > (AHRS_ACC_MIN_G * AHRS_ACC_MIN_G))
                     && (magSq < (AHRS_ACC_MAX_G * AHRS_ACC_MAX_G)))
                 {
-                    float32 phiAcc = atan2f(ay, az);
-                    float32 theAcc = atan2f(-ax, sqrtf((ay * ay) + (az * az)));
+                    /* Tilt from gravity, NED convention (z DOWN): at rest and
+                     * level the measured specific force is (0, 0, -g), so the
+                     * negations are what make level read 0 rather than 180 deg.
+                     * Nose up gives POSITIVE pitch, right wing down POSITIVE
+                     * roll -- the aerospace signs flight_ctrl assumes. */
+                    float32 phiAcc = atan2f(-ay, -az);
+                    float32 theAcc = atan2f(ax, sqrtf((ay * ay) + (az * az)));
                     float32 alpha  = AHRS_TAU_S / (AHRS_TAU_S + dt);
                     float32 beta   = 1.0f - alpha;
 
