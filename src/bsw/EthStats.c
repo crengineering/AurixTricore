@@ -25,9 +25,17 @@ void EthStats_init(void)
     /* Free-running counters: no reset-on-read (we take deltas ourselves), not
      * frozen, and allowed to roll over — unsigned subtraction handles the wrap.
      * CNTRST self-clears once the counters are zeroed. */
+    /* cppcheck-suppress misra-c2012-19.2 ; deviation: the union is
+     * inside the iLLD SFR definition (Ifx_GETH_*), not this code. */
     GETH_MMC_CONTROL.B.RSTONRD   = 0u;
+    /* cppcheck-suppress misra-c2012-19.2 ; deviation: the union is
+     * inside the iLLD SFR definition (Ifx_GETH_*), not this code. */
     GETH_MMC_CONTROL.B.CNTFREEZ  = 0u;
+    /* cppcheck-suppress misra-c2012-19.2 ; deviation: the union is
+     * inside the iLLD SFR definition (Ifx_GETH_*), not this code. */
     GETH_MMC_CONTROL.B.CNTSTOPRO = 0u;
+    /* cppcheck-suppress misra-c2012-19.2 ; deviation: the union is
+     * inside the iLLD SFR definition (Ifx_GETH_*), not this code. */
     GETH_MMC_CONTROL.B.CNTRST    = 1u;
 
     s_lastTx      = 0u;
@@ -43,10 +51,14 @@ uint16 EthStats_getLinkMbits(void)
 
     /* DWMAC speed encoding: PS = 0 -> gigabit (GMII/RGMII), PS = 1 -> MII, and
      * then FES picks 100 over 10. */
+    /* cppcheck-suppress misra-c2012-19.2 ; deviation: the union is
+     * inside the iLLD SFR definition (Ifx_GETH_*), not this code. */
     if (GETH_MAC_CONFIGURATION.B.PS == 0u)
     {
         mbits = 1000u;
     }
+    /* cppcheck-suppress misra-c2012-19.2 ; deviation: the union is
+     * inside the iLLD SFR definition (Ifx_GETH_*), not this code. */
     else if (GETH_MAC_CONFIGURATION.B.FES != 0u)
     {
         mbits = 100u;
@@ -71,7 +83,11 @@ void EthStats_update(void)
      * also keeps the counter deltas large enough to be meaningful. */
     if (elapsed >= ETH_TICKS_PER_SEC)
     {
+        /* cppcheck-suppress misra-c2012-19.2 ; deviation: the union is
+         * inside the iLLD SFR definition (Ifx_GETH_*), not this code. */
         uint32 tx    = GETH_TX_OCTET_COUNT_GOOD_BAD.U;
+        /* cppcheck-suppress misra-c2012-19.2 ; deviation: the union is
+         * inside the iLLD SFR definition (Ifx_GETH_*), not this code. */
         uint32 rx    = GETH_RX_OCTET_COUNT_GOOD_BAD.U;
         uint32 delta = (uint32)(tx - s_lastTx) + (uint32)(rx - s_lastRx);
         uint32 capacity;

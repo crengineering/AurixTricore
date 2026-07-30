@@ -1,6 +1,6 @@
 /**********************************************************************************************************************
  * \file Mpu6050.h
- * \brief InvenSense MPU-6050 6-axis IMU driver (3-axis gyro + 3-axis accel), I2C0.
+ * \brief InvenSense MPU-6050 6-axis IMU driver (3-axis gyro + 3-axis acc), I2C0.
  *
  * GY-521 breakout on the shared I2C0 bus (docs/PINNING.md 2.2/2.3/2.5), sharing
  * SCL/SDA with the BMP388 barometer. Uses the blocking I2c bus service. This is
@@ -32,7 +32,7 @@
 /** One IMU sample in physical units. */
 typedef struct
 {
-    float32 accel[3];   /* acceleration  [g]     order X, Y, Z */
+    float32 acc[3];   /* acceleration  [g]     order X, Y, Z */
     float32 gyro[3];    /* angular rate  [deg/s] order X, Y, Z */
     float32 tempC;      /* on-die temperature [degC] */
 } Mpu6050_Sample;
@@ -41,9 +41,6 @@ typedef struct
  *  \return TRUE if WHO_AM_I matched and configuration was ACKed. Safe to call
  *          with no sensor attached — it returns FALSE without hanging. */
 boolean Mpu6050_init(void);
-
-/** \return TRUE once Mpu6050_init() has succeeded. */
-boolean Mpu6050_isPresent(void);
 
 /** Read the WHO_AM_I register (0x75). Bring-up helper; MPU-6050 returns 0x68.
  *  (Some GY-521 clones carry an MPU-6500/9250 die returning 0x70/0x71 — see

@@ -40,7 +40,7 @@
  *
  *   --- attitude estimate (Ahrs.c), matches flight_ctrl.h conventions ---
  *   0x54  uint8    ahrsState   0 = calibrating, 1 = running, 2 = no sensor
- *   0x55  uint8    ahrsAccOk   1 while |a| ~= 1 g and the accel is trusted
+ *   0x55  uint8    ahrsAccOk   1 while |a| ~= 1 g and the acc is trusted
  *   0x56  uint8    ahrsReserved[2]
  *   0x58  float32  roll        phi   [rad]   -> flight_ctrl phi_ist[0]
  *   0x5C  float32  pitch       theta [rad]   -> flight_ctrl phi_ist[1]
@@ -133,8 +133,8 @@ void measurementsSetBaro(boolean present, float32 pressurePa, float32 temperatur
 
 /* Publish the latest IMU sample into the XCP block. Called by the IMU task;
  * pass present = FALSE to show "no sensor" (all axes + temp forced to 0).
- * accel is [g] and gyro is [deg/s] BIAS-CORRECTED, each in X,Y,Z order. */
-void measurementsSetImu(boolean present, const float32 accel[3], const float32 gyro[3],
+ * acc is [g] and gyro is [deg/s] BIAS-CORRECTED, each in X,Y,Z order. */
+void measurementsSetImu(boolean present, const float32 acc[3], const float32 gyro[3],
                         float32 temperatureC);
 
 /* Publish the attitude estimate (Ahrs.c) into the XCP block. */

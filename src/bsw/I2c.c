@@ -396,7 +396,9 @@ static i2c_XferResult i2c_xferWrite(uint16 devAddr8, const uint8 *data, uint16 l
     uint16           left  = (uint16)(len + 1u);   /* payload + address byte */
     boolean          addrPending = TRUE;
     IfxI2c_BusStatus bus   = IfxI2c_getBusStatus(i2c);
-    union { uint32 packet; uint8 b[4]; } tx;
+    const uint8     *src   = data;      /* local cursor: MISRA 17.8 forbids
+                                         * modifying the parameter itself */
+    uint32           txPacket;
 
     if ((bus != IfxI2c_BusStatus_idle) && (bus != IfxI2c_BusStatus_busyMaster))
     {
@@ -432,27 +434,33 @@ static i2c_XferResult i2c_xferWrite(uint16 devAddr8, const uint8 *data, uint16 l
 
                 for (w = 0u; w < burst; w++)
                 {
-                    tx.packet = 0u;
+                    txPacket = 0u;
                     for (c = 0u; c < 4u; c += inc)
                     {
+                        uint8 byteVal = 0u;
+
                         if (addrPending != FALSE)
                         {
-                            tx.b[c]     = (uint8)(devAddr8 & 0xFEu);   /* R/W = 0 */
+                            byteVal     = (uint8)(devAddr8 & 0xFEu);   /* R/W = 0 */
                             addrPending = FALSE;
                             left--;
                         }
                         else if (left > 0u)
                         {
-                            tx.b[c] = *data;
-                            data++;
+                            byteVal = *src;
+                            src++;
                             left--;
                         }
                         else
                         {
                             /* padding beyond the packet size — ignored by the FIFO */
                         }
+                        /* Byte c of the FIFO word. Explicit shifts rather than a
+                         * union: MISRA 19.2 forbids the union keyword, and the
+                         * TriCore is little-endian so byte c is bits [8c+7:8c]. */
+                        txPacket |= ((uint32)byteVal << (c * 8u));
                     }
-                    IfxI2c_writeFifo(i2c, tx.packet);
+                    IfxI2c_writeFifo(i2c, txPacket);
                 }
                 IfxI2c_clearAllDtrInterruptSources(i2c);
             }
@@ -483,7 +491,8 @@ static i2c_XferResult i2c_xferRead(uint16 devAddr8, uint8 *data, uint16 len)
     uint32           inc   = (uint32)1u << i2c->FIFOCFG.B.RXFA;
     uint16           left  = len;
     IfxI2c_BusStatus bus   = IfxI2c_getBusStatus(i2c);
-    union { uint32 packet; uint8 b[4]; } rx;
+    uint8           *dst   = data;      /* local cursor, see MISRA 17.8 above */
+    uint32           rxPacket;
 
     if ((bus != IfxI2c_BusStatus_idle) && (bus != IfxI2c_BusStatus_busyMaster))
     {
@@ -503,7 +512,8 @@ static i2c_XferResult i2c_xferRead(uint16 devAddr8, uint8 *data, uint16 len)
         {
             if (IfxI2c_isFifoRequest(i2c) != FALSE)
             {
-                IfxI2c_writeFifo(i2c, (uint32)(devAddr8 | 0x1u));
+                uint32 addrRd = (uint32)devAddr8 | 0x1u;
+                IfxI2c_writeFifo(i2c, addrRd);
                 IfxI2c_clearAllDtrInterruptSources(i2c);
             }
 
@@ -563,13 +573,13 @@ static i2c_XferResult i2c_xferRead(uint16 devAddr8, uint8 *data, uint16 len)
 
                         for (w = 0u; w < burst; w++)
                         {
-                            rx.packet = i2c->RXD.U;
+                            rxPacket = i2c->RXD.U;
                             for (c = 0u; c < 4u; c += inc)
                             {
                                 if (left > 0u)
                                 {
-                                    *data = rx.b[c];
-                                    data++;
+                                    *dst = (uint8)((rxPacket >> (c * 8u)) & 0xFFu);
+                                    dst++;
                                     left--;
                                 }
                                 else

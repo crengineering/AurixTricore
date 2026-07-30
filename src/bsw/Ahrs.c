@@ -59,13 +59,11 @@
 
 /* --- state --------------------------------------------------------------- */
 
-static Ahrs_State s_state;
+static Ahrs_State s_ahrsState;
 static float32    s_phi[3];          /* roll, pitch, yaw [rad]        */
 static float32    s_om[3];           /* p, q, r [rad/s], bias removed */
 static float32    s_bias[3];         /* gyro bias [deg/s]             */
 static float32    s_calSum[3];       /* bias accumulator              */
-static float32    s_calMin[3];       /* window extremes, for the      */
-static float32    s_calMax[3];       /* bias-independent motion gate  */
 static uint16     s_calCount;
 static boolean    s_accTrusted;
 
@@ -73,7 +71,7 @@ void Ahrs_init(void)
 {
     uint8 i;
 
-    s_state     = AHRS_CALIBRATING;
+    s_ahrsState     = AHRS_CALIBRATING;
     s_calCount  = 0u;
     s_accTrusted = FALSE;
 
@@ -90,6 +88,10 @@ void Ahrs_init(void)
  * because a biased bias is worse than none. */
 static void Ahrs_calibrate(const float32 gyro[3])
 {
+    /* Block scope (MISRA 8.9): the window extremes are used only here.
+     * static because they must survive across calls. */
+    static float32 s_calMin[3];
+    static float32 s_calMax[3];
     boolean moving = FALSE;
     uint8   i;
 
@@ -133,7 +135,7 @@ static void Ahrs_calibrate(const float32 gyro[3])
         {
             s_bias[i] = s_calSum[i] / (float32)s_calCount;
         }
-        s_state = AHRS_RUNNING;
+        s_ahrsState = AHRS_RUNNING;
     }
     else
     {
@@ -141,34 +143,34 @@ static void Ahrs_calibrate(const float32 gyro[3])
     }
 }
 
-void Ahrs_update(const float32 accel[3], const float32 gyro[3], float32 dt, boolean valid)
+void Ahrs_update(const float32 acc[3], const float32 gyro[3], float32 dt, boolean valid)
 {
     if (valid == FALSE)
     {
         /* Hold the last estimate rather than integrating garbage. Once the IMU
          * comes back (Mpu6050_read re-inits it), calibration starts over: the
          * device was power-cycled, so the old bias no longer applies. */
-        s_state      = AHRS_NO_SENSOR;
+        s_ahrsState      = AHRS_NO_SENSOR;
         s_calCount   = 0u;
         s_accTrusted = FALSE;
     }
     else
     {
-        if (s_state == AHRS_NO_SENSOR)
+        if (s_ahrsState == AHRS_NO_SENSOR)
         {
             Ahrs_init();
         }
 
-        if (s_state == AHRS_CALIBRATING)
+        if (s_ahrsState == AHRS_CALIBRATING)
         {
             Ahrs_calibrate(gyro);
         }
         else
         {
             /* Sensor -> body frame, bias removed, deg/s -> rad/s. */
-            float32 ax = accel[0] * AHRS_MOUNT_SX;
-            float32 ay = accel[1] * AHRS_MOUNT_SY;
-            float32 az = accel[2] * AHRS_MOUNT_SZ;
+            float32 ax = acc[0] * AHRS_MOUNT_SX;
+            float32 ay = acc[1] * AHRS_MOUNT_SY;
+            float32 az = acc[2] * AHRS_MOUNT_SZ;
             float32 p  = (gyro[0] - s_bias[0]) * AHRS_MOUNT_SX * AHRS_DEG_TO_RAD;
             float32 q  = (gyro[1] - s_bias[1]) * AHRS_MOUNT_SY * AHRS_DEG_TO_RAD;
             float32 r  = (gyro[2] - s_bias[2]) * AHRS_MOUNT_SZ * AHRS_DEG_TO_RAD;
@@ -208,7 +210,7 @@ void Ahrs_update(const float32 accel[3], const float32 gyro[3], float32 dt, bool
 
                     s_phi[0] = (alpha * s_phi[0]) + (beta * phiAcc);
                     s_phi[1] = (alpha * s_phi[1]) + (beta * theAcc);
-                    /* No accel correction for yaw — it is unobservable (Ahrs.h §1). */
+                    /* No acc correction for yaw — it is unobservable (Ahrs.h §1). */
                     s_accTrusted = TRUE;
                 }
                 else
@@ -222,7 +224,7 @@ void Ahrs_update(const float32 accel[3], const float32 gyro[3], float32 dt, bool
 
 Ahrs_State Ahrs_getState(void)
 {
-    return s_state;
+    return s_ahrsState;
 }
 
 void Ahrs_getAttitude(float32 phi[3])

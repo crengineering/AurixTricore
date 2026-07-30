@@ -8,7 +8,7 @@
  * MPU-6050 returns raw signed 16-bit counts, big-endian (high byte first), that
  * a fixed full-scale sensitivity converts to g / deg/s.
  *
- * Bring-up history: early versions read all-zero accel, gyro AND temperature
+ * Bring-up history: early versions read all-zero acc, gyro AND temperature
  * while WHO_AM_I and every config readback were correct, and the part was twice
  * misdiagnosed as a dead/counterfeit chip. The fault was NOT in this driver: the
  * I2C master never generated a STOP condition (iLLD defaults SOPE = 0), so the
@@ -26,8 +26,7 @@
 #define MPU6050_REG_CONFIG            (0x1Au)
 #define MPU6050_REG_GYRO_CONFIG       (0x1Bu)
 #define MPU6050_REG_ACCEL_CONFIG      (0x1Cu)
-#define MPU6050_REG_ACCEL_XOUT_H      (0x3Bu)   /* 14-byte burst: accel(6) temp(2) gyro(6) */
-#define MPU6050_REG_SIGNAL_PATH_RESET (0x68u)
+#define MPU6050_REG_ACCEL_XOUT_H      (0x3Bu)   /* 14-byte burst: acc(6) temp(2) gyro(6) */
 #define MPU6050_REG_USER_CTRL         (0x6Au)
 #define MPU6050_REG_PWR_MGMT_1        (0x6Bu)
 #define MPU6050_REG_PWR_MGMT_2        (0x6Cu)
@@ -39,16 +38,11 @@
  * used to kick a device whose sampling never started. */
 #define MPU6050_DEVICE_RESET      (0x80u)
 
-/* SIGNAL_PATH_RESET (RM §4.26): reset the gyro (bit2), accel (bit1) and temp
- * (bit0) analog signal paths. Some MPU-6050 clones need this after a device
- * reset before the data registers begin updating. */
-#define MPU6050_SIGNAL_PATH_RESET_ALL (0x07u)
-
 /* PWR_MGMT_1 (RM §4.28): clear SLEEP (reset default = 1), CLKSEL = 0 (internal
  * 8 MHz oscillator).
  *
  * CLKSEL = 0 is EMPIRICALLY PROVEN on this exact GY-521: a minimal Arduino
- * sketch whose only setup write is PWR_MGMT_1 = 0x00 streams valid accel / gyro
+ * sketch whose only setup write is PWR_MGMT_1 = 0x00 streams valid acc / gyro
  * / temperature from it. RM §4.28 recommends a gyro-PLL reference (CLKSEL = 1)
  * for stability; that is a legitimate future change, but re-validate on hardware
  * rather than assuming, and keep it a separate step from anything else.
@@ -62,9 +56,9 @@
  * silently-still-asleep device fails init instead of streaming zeros. */
 #define MPU6050_PWR1_CHECK_MASK   (0x4Fu)
 
-/* PWR_MGMT_2 (RM §4.29): STBY bits for all six accel/gyro axes = 0 -> every
+/* PWR_MGMT_2 (RM §4.29): STBY bits for all six acc/gyro axes = 0 -> every
  * axis active. Written explicitly so a stray standby state can't silently zero
- * the accel/gyro outputs while temperature still reads. */
+ * the acc/gyro outputs while temperature still reads. */
 #define MPU6050_PWR2_ALL_ACTIVE   (0x00u)
 
 /* USER_CTRL (RM §4.27) = 0: FIFO_EN, I2C_MST_EN and the aux-bus/FIFO resets all
@@ -76,7 +70,7 @@
  * written and included in Mpu6050_debugDump(). */
 #define MPU6050_USER_CTRL_VAL     (0x00u)
 
-/* CONFIG (RM §4.3): DLPF_CFG = 3 -> ~44 Hz accel / 42 Hz gyro bandwidth and a
+/* CONFIG (RM §4.3): DLPF_CFG = 3 -> ~44 Hz acc / 42 Hz gyro bandwidth and a
  * 1 kHz internal gyro output rate. Filters out frame/motor vibration well above
  * the attitude bandwidth of interest. */
 #define MPU6050_CONFIG_VAL        (0x03u)
@@ -120,8 +114,7 @@
  * without this it would stay dead until the next power cycle. */
 #define MPU6050_RECOVERY_PERIOD  (50u)
 
-static boolean s_present  = FALSE;
-static uint16  s_recovery = 0u;
+static boolean s_mpuPresent  = FALSE;
 
 static void Mpu6050_delayMs(uint32 ms)
 {
@@ -156,7 +149,8 @@ boolean Mpu6050_debugDump(uint8 *cfg4, uint8 *pwr3, uint8 *raw14)
 /* Assemble a big-endian signed 16-bit sample: raw[msbIndex] is the high byte. */
 static sint16 Mpu6050_be16(const uint8 *p, uint8 msbIndex)
 {
-    return (sint16)(((uint16)p[msbIndex] << 8) | (uint16)p[msbIndex + 1u]);
+    uint16 raw = (uint16)(((uint16)p[msbIndex] << 8) | (uint16)p[msbIndex + 1u]);
+    return (sint16)raw;
 }
 
 boolean Mpu6050_init(void)
@@ -164,7 +158,7 @@ boolean Mpu6050_init(void)
     uint8   whoAmI = 0u;
     boolean ok;
 
-    s_present = FALSE;
+    s_mpuPresent = FALSE;
 
     /* Full power-on reset, then wake. Safe now that the I2C master emits a real
      * STOP (I2c.c, stopOnPacketEnd) — before that fix DEVICE_RESET looked fatal,
@@ -225,7 +219,7 @@ boolean Mpu6050_init(void)
 
         /* Let the sample path settle before the first read. Straight after
          * DEVICE_RESET + configuration the first burst still carries a partial
-         * sample (accel Z ~0.1 g instead of 1 g). */
+         * sample (acc Z ~0.1 g instead of 1 g). */
         if (ok != FALSE)
         {
             Mpu6050_delayMs(MPU6050_SETTLE_MS);
@@ -236,21 +230,17 @@ boolean Mpu6050_init(void)
         ok = FALSE;      /* chip absent or wrong WHO_AM_I */
     }
 
-    s_present = ok;
+    s_mpuPresent = ok;
     return ok;
-}
-
-boolean Mpu6050_isPresent(void)
-{
-    return s_present;
 }
 
 boolean Mpu6050_read(Mpu6050_Sample *sample)
 {
+    static uint16 s_recovery = 0u;   /* block scope: used only here (MISRA 8.9) */
     uint8   raw[MPU6050_BURST_LEN];
     boolean ok = FALSE;
 
-    if (s_present == FALSE)
+    if (s_mpuPresent == FALSE)
     {
         /* Device missing: retry the bring-up periodically so it comes back on
          * its own once the wiring/supply is good again. */
@@ -268,16 +258,16 @@ boolean Mpu6050_read(Mpu6050_Sample *sample)
         {
             /* Lost it. Drop presence so the branch above re-runs the bring-up
              * instead of streaming stale values forever. */
-            s_present  = FALSE;
+            s_mpuPresent  = FALSE;
             s_recovery = 0u;
         }
         else
         {
             /* Burst layout (big-endian, RM §4.17-4.19):
-             *   accel X/Y/Z @ 0,2,4 | temp @ 6 | gyro X/Y/Z @ 8,10,12 */
-            sample->accel[0] = (float32)Mpu6050_be16(raw, 0u)  * MPU6050_ACCEL_SCALE;
-            sample->accel[1] = (float32)Mpu6050_be16(raw, 2u)  * MPU6050_ACCEL_SCALE;
-            sample->accel[2] = (float32)Mpu6050_be16(raw, 4u)  * MPU6050_ACCEL_SCALE;
+             *   acc X/Y/Z @ 0,2,4 | temp @ 6 | gyro X/Y/Z @ 8,10,12 */
+            sample->acc[0] = (float32)Mpu6050_be16(raw, 0u)  * MPU6050_ACCEL_SCALE;
+            sample->acc[1] = (float32)Mpu6050_be16(raw, 2u)  * MPU6050_ACCEL_SCALE;
+            sample->acc[2] = (float32)Mpu6050_be16(raw, 4u)  * MPU6050_ACCEL_SCALE;
 
             sample->tempC    = ((float32)Mpu6050_be16(raw, 6u) / MPU6050_TEMP_SENS)
                                + MPU6050_TEMP_OFFSET;

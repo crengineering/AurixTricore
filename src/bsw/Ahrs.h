@@ -55,12 +55,12 @@ typedef enum
 void Ahrs_init(void);
 
 /** Feed one IMU sample.
- *  \param accel  acceleration [g],     sensor frame, order X/Y/Z
+ *  \param acc  acceleration [g],     sensor frame, order X/Y/Z
  *  \param gyro   angular rate [deg/s], sensor frame, order X/Y/Z
  *  \param dt     elapsed time since the previous call [s]
  *  \param valid  FALSE when the IMU read failed — the estimate is frozen and
  *                the state falls back to AHRS_NO_SENSOR. */
-void Ahrs_update(const float32 accel[3], const float32 gyro[3], float32 dt, boolean valid);
+void Ahrs_update(const float32 acc[3], const float32 gyro[3], float32 dt, boolean valid);
 
 /** \return current estimator state. */
 Ahrs_State Ahrs_getState(void);

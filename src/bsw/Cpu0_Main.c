@@ -107,29 +107,31 @@ static void Task_Imu(void)
     boolean        present;
     static uint32  lastTicks = 0u;
     uint32         nowTicks;
+    uint32         elapsed;
     float32        dt;
 
     /* Called unconditionally: Mpu6050_read() owns the presence state and uses
      * these calls to re-run the bring-up periodically after the device drops
-     * off the bus. Gating on Mpu6050_isPresent() here would make that recovery
-     * unreachable. */
+     * off the bus. Gating on a presence flag here would make that recovery
+     * unreachable, which is why no such accessor exists any more. */
     present = Mpu6050_read(&sample);
 
     /* Measured dt, not the nominal 20 ms: the scheduler dispatches on a "period
      * elapsed" test, so the real interval jitters and integrating the nominal
      * value would bias the attitude. STM0 ticks are 10 ns. */
     nowTicks = SysTime_getTicks();
-    dt       = (float32)(nowTicks - lastTicks) * 1e-8f;
+    elapsed  = nowTicks - lastTicks;
+    dt       = (float32)elapsed * 1e-8f;
     lastTicks = nowTicks;
 
     /* AHRS first: it owns the gyro bias, and the published rates below are
      * bias-corrected using the value it measured at start-up. */
-    Ahrs_update(sample.accel, sample.gyro, dt, present);
+    Ahrs_update(sample.acc, sample.gyro, dt, present);
     measurementsSetAttitude();
 
     {
         float32 bias[3];
-        float32 gyroCorr[3];
+        float32 gyrCorr[3];
         uint8   i;
 
         /* Publish the CORRECTED rate, not the raw one. This unit has a ~21.8
@@ -140,9 +142,9 @@ static void Task_Imu(void)
         Ahrs_getGyroBias(bias);
         for (i = 0u; i < 3u; i++)
         {
-            gyroCorr[i] = sample.gyro[i] - bias[i];
+            gyrCorr[i] = sample.gyro[i] - bias[i];
         }
-        measurementsSetImu(present, sample.accel, gyroCorr, sample.tempC);
+        measurementsSetImu(present, sample.acc, gyrCorr, sample.tempC);
     }
 }
 

@@ -172,15 +172,15 @@ void measurementsSetBaro(boolean present, float32 pressurePa, float32 temperatur
     }
 }
 
-void measurementsSetImu(boolean present, const float32 accel[3], const float32 gyro[3],
+void measurementsSetImu(boolean present, const float32 acc[3], const float32 gyro[3],
                         float32 temperatureC)
 {
     if (present != FALSE)
     {
         g_xcpData.imuPresent = 1u;
-        g_xcpData.accelX     = accel[0];
-        g_xcpData.accelY     = accel[1];
-        g_xcpData.accelZ     = accel[2];
+        g_xcpData.accelX     = acc[0];
+        g_xcpData.accelY     = acc[1];
+        g_xcpData.accelZ     = acc[2];
         g_xcpData.gyroX      = gyro[0];
         g_xcpData.gyroY      = gyro[1];
         g_xcpData.gyroZ      = gyro[2];
