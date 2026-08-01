@@ -101,7 +101,9 @@ static boolean Icm42688_readRegs(uint8 reg, uint8 *data, uint8 len)
         }
         tx[0] = (uint8)((reg & ICM42688_ADDR_MASK) | ICM42688_SPI_READ);
 
-        ok = Spi_transfer(tx, rx, (uint16)(1u + len));
+        const uint16 frameLen = (uint16)len + 1u;   /* cast the object, not a
+                                                     * composite (MISRA 10.8) */
+        ok = Spi_transfer(tx, rx, frameLen);
         if (ok != FALSE)
         {
             for (i = 0u; i < len; i++)
@@ -194,7 +196,11 @@ boolean Icm42688_init(void)
 /* Assemble one big-endian signed 16-bit axis from the burst. */
 static sint16 Icm42688_be16(const uint8 *p, uint8 msbIndex)
 {
-    return (sint16)(((uint16)p[msbIndex] << 8) | (uint16)p[msbIndex + 1u]);
+    /* Assemble first, then cast the finished object: casting the composite
+     * expression to a different essential type breaks MISRA 10.8. */
+    const uint16 raw = (uint16)(((uint16)p[msbIndex] << 8)
+                                | (uint16)p[msbIndex + 1u]);
+    return (sint16)raw;
 }
 
 boolean Icm42688_read(Icm42688_Sample *sample)

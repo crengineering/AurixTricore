@@ -36,7 +36,8 @@
  *  both rather than guessing — see Icm42688_init(). */
 void Spi_setMode(uint8 spiMode);
 
-/** eturn the SPI mode currently configured (SPI_MODE_0 or SPI_MODE_3). */
+/** 
+eturn the SPI mode currently configured (SPI_MODE_0 or SPI_MODE_3). */
 uint8 Spi_getMode(void);
 
 /** Bring up the QSPI0 master: pins, TTL pads, baud rate and the IMU channel.
@@ -49,9 +50,5 @@ void Spi_init(void);
  *  \return TRUE if the transfer completed inside the deadline. */
 boolean Spi_transfer(const uint8 *tx, uint8 *rx, uint16 len);
 
-/** Diagnostic counters — separate a silent slave from a wedged master, the
- *  distinction that cost two days on the I2C bus. */
-uint32 Spi_getOkCount(void);
-uint32 Spi_getFailCount(void);
 
 #endif /* SPI_H */

@@ -49,21 +49,34 @@ static uint32                    s_spiOkCount = 0u;
 static uint32                    s_spiFailCount = 0u;
 
 /* The iLLD master finishes transfers in these three handlers; without them the
- * status never leaves "busy" and every transfer would hit the deadline. */
+ * status never leaves "busy" and every transfer would hit the deadline.
+ *
+ * Declared before use (MISRA 8.4). They keep external linkage because the
+ * interrupt vector table references them, not C code -- which is also why
+ * MISRA 8.7 is deviated rather than fixed: making them static would leave the
+ * vector entries unresolved. */
+void spiIsrTransmit(void);
+void spiIsrReceive(void);
+void spiIsrError(void);
+
 IFX_INTERRUPT(spiIsrTransmit, 0, ISR_PRIORITY_QSPI0_TX);
 IFX_INTERRUPT(spiIsrReceive,  0, ISR_PRIORITY_QSPI0_RX);
 IFX_INTERRUPT(spiIsrError,    0, ISR_PRIORITY_QSPI0_ER);
 
+/* cppcheck-suppress misra-c2012-8.7 ; deviation: referenced by the interrupt
+ * vector table, not by C code; static would break the vector entry. */
 void spiIsrTransmit(void)
 {
     IfxQspi_SpiMaster_isrTransmit(&s_spiMaster);
 }
 
+/* cppcheck-suppress misra-c2012-8.7 ; deviation: interrupt vector entry. */
 void spiIsrReceive(void)
 {
     IfxQspi_SpiMaster_isrReceive(&s_spiMaster);
 }
 
+/* cppcheck-suppress misra-c2012-8.7 ; deviation: interrupt vector entry. */
 void spiIsrError(void)
 {
     IfxQspi_SpiMaster_isrError(&s_spiMaster);
@@ -207,12 +220,3 @@ boolean Spi_transfer(const uint8 *tx, uint8 *rx, uint16 len)
     return ok;
 }
 
-uint32 Spi_getOkCount(void)
-{
-    return s_spiOkCount;
-}
-
-uint32 Spi_getFailCount(void)
-{
-    return s_spiFailCount;
-}
