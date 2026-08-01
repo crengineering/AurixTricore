@@ -30,17 +30,10 @@
 #include "Ifx_Cfg_Ssw.h"
 #include "Uart.h"
 #include "scheduler.h"
-#include "led.h"
 
 extern IfxCpu_syncEvent cpuSyncEvent;
 
 static Scheduler_t g_sched;
-static Led_t       g_led;
-
-static void Task_LedToggle(void)
-{
-    Led_toggle(&g_led);
-}
 
 static void Task_App10ms(void)
 {
@@ -57,10 +50,13 @@ void core2_main(void)
 
     Uart_println("CPU2 started");
 
-    Led_init(&g_led, &MODULE_P20, 13u);
+    /* D308 (P20.13) is now QSPI0 SCLK for the flight IMU on CPU0: P22.7/P22.8
+     * proved unusable on this board (pad self-test, 2026-08-01) and P20.13 is
+     * QSPI0's only other usable SCLK output. Driving it from here as well
+     * would be direct contention across cores, so CPU2 runs without an LED.
+     * CPU0 keeps D306; see docs/PINNING.md 1.1 and 2.2. */
 
     Scheduler_init(&g_sched, &MODULE_STM2, 2u);
-    Scheduler_addTask(&g_sched, Task_LedToggle, SCHED_MS(500u));
     Scheduler_addTask(&g_sched, Task_App10ms,   SCHED_MS(10u));
 
     while (TRUE)

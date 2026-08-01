@@ -54,7 +54,7 @@ Header names: **X701/X801** = BUS‑EXPANSION · **X702/X802** = PERIPHERALS ·
 |---|---|---|---|---|
 | P20.11 | D306 | CPU0 | X702·63 | impl |
 | P20.12 | D307 | CPU1 | X702·67 | impl |
-| P20.13 | D308 | CPU2 | X702·39 | impl |
+| ~~P20.13~~ | ~~D308~~ | **now QSPI0 SCLK** (§2.2) | X702·39 | **reassigned 2026‑08‑01** |
 | P20.14 | D309 | CPU3 | X702·65 | impl |
 
 *(CPU4/CPU5 sync + idle, no pins.)*
@@ -114,26 +114,60 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 
 | Pin | Function | iLLD object | Header·pin | Status |
 |---|---|---|---|---|
-| P22.8 | SCLK | `IfxQspi0_SCLK_P22_8_OUT` | X702·10 | plan |
-| P22.9 | MRST (MISO) | `IfxQspi0_MRST_P22_9_OUT` | X702·12 | plan |
-| P22.10 | MTSR (MOSI) | `IfxQspi0_MTSR_P22_10_OUT` | X702·14 | plan |
-| P22.11 | CS (SLSO10) | `IfxQspi0_SLSO10_P22_11_OUT` | X702·18 | plan |
-| P22.7 | INT1 (data‑ready) | GPIO input | X702·17 | plan |
+| **P20.13** | **SCLK** | `IfxQspi0_SCLK_P20_13_OUT` | (was D308) | **impl, HW-verified** |
+| P22.9 | MRST (MISO) | `IfxQspi0_MRSTB_P22_9_IN` | — | **impl, HW-verified** |
+| P22.10 | MTSR (MOSI) | `IfxQspi0_MTSR_P22_10_OUT` | — | **impl, HW-verified** |
+| P22.11 | CS (SLSO10) | `IfxQspi0_SLSO10_P22_11_OUT` | — | **impl, HW-verified** |
+| ~~P22.7~~ | ~~INT1~~ | — | — | ⚠️ **UNUSABLE, see below** |
 
-> **No IMU is fitted as of 2026‑07‑31.** The ICM‑42688‑P above is still `plan`
-> (not delivered), and the interim **MPU‑6050 (GY‑521)** that stood in for it on
-> the shared I2C0 bus at `0x68` has been **physically removed** along with the
-> BMP388. From firmware **v1.14.0** there is no `Task_Imu`: the IMU and attitude
-> fields of the XCP block are published as zero once at start‑up with
+> ⚠️ **P22.7 and P22.8 are UNUSABLE on this TriBoard — hardware-proven
+> 2026-08-01.** Driven as plain GPIO with **nothing attached** they read back
+> stuck-high, while three unwired neighbours (P22.4/5/6) on the same port drive
+> perfectly. Something on the board commits them. This cost most of a day: the
+> IMU returned `WHO_AM_I = 0x00` because SCLK never reached it.
+> **SCLK therefore moved to P20.13**, QSPI0's only other usable SCLK output.
+> That pad was **D308, CPU2's core-health LED**, so `Cpu2_Main.c` no longer
+> drives it and CPU2 runs without an LED (CPU0 keeps D306 — see §1.1).
+> INT1 is left unwired; the driver polls at 50 Hz and does not use it.
+> The **pad self-test** in `Cpu0_Main.c` (`padSelfTestPort()`) is how this was
+> found — drive a pin and read its own pad back via `IfxPort_getPinState()`,
+> always with unwired pins on the same port as a control group. Verified
+> working alternatives if ever needed: **all of P15.1–P15.8** (a complete QSPI2
+> set) and P20.11.
+>
+> ⚠️ **The X702 hole numbers previously listed here were never verified** and
+> have been removed rather than left to mislead. Wire by **pin name**. The only
+> hardware-proven header positions are P13.1/P13.2 = X702·29/·35 (§2.3).
+>
+> **Electrical plan lives in §2.5** — supply, dividers and pad modes are
+> specified there and §2.5 wins. Summary, with the evaluation‑board detail in
+> **`docs/ICM42688P.md`**:
+> - **Supply: inject +3V3 at JP2 pin 2 (`VDD`) and JP1 pin 2 (`VDDIO`), both
+>   jumpers left OPEN**, so the EVB's on‑board LDOs stay out of circuit. Fitting
+>   a jumper back‑drives an LDO output and would force VDD to 3.0 V. The die
+>   itself takes 1.71–3.6 V, so 3.3 V is in spec — the 1.8/3.0 V wording in
+>   AN‑000488 §2 describes the *board's* selector, not the chip.
+> - ⚠️ **CN1 pin 19 is the EVB's VIN and is deliberately NOT used** (it would
+>   route power through the 3.0 V LDO). Noted because **AN‑000488's connector
+>   table omits pin 19 entirely** — it is in neither the signal list nor the NC
+>   list; the schematic shows it feeding both LDOs. Leave it open.
+> - **MCU → IMU** (`SCLK` P22.8, `MTSR` P22.10, `CS` P22.11): 5 V VEXT out is
+>   above the part's VDDIO+0.3 V absolute maximum → **1 kΩ/2 kΩ divider per
+>   line** (§2.5, bench‑verified 3.30 V).
+> - **IMU → MCU** (`MRST` P22.9, `INT1` P22.7): direct, pads in **TTL mode**
+>   (`IfxPort_PadDriver_ttlSpeed1`, VIH = 2.0 V), plus a **10 kΩ pulldown on
+>   INT1**.
+> - Build gotcha: the iLLD **`Qspi` tree is `.cproject`‑excluded** and must be
+>   un‑excluded, exactly as `I2c` was.
+>
+> **The interim MPU‑6050 (GY‑521) was physically removed on 2026‑07‑31** along
+> with the BMP388. From firmware **v1.14.0** there is no `Task_Imu`: the IMU and
+> attitude fields of the XCP block are published as zero once at start‑up with
 > `imuPresent = 0` and `ahrsState = AHRS_NO_SENSOR`, and the `PERIPH_DIAG_IMU`
 > slot is declared **unfitted** (`PeriphDiag_setFitted()`) so it raises no
-> diagnostics bits.
->
-> `src/bsw/Mpu6050.c` stays in‑tree as the I2C fallback and as the start of the
-> driver pool — it was hardware‑validated on 2026‑07‑30 (v1.11.0), and wiring /
-> address / power remain in **`docs/MPU6050.md`**. It currently has **no caller**;
-> see `docs/BMP581.md` §9 for the MISRA 8.7 consequence and the planned fix.
-> When the ICM‑42688‑P arrives it moves to QSPI0 as planned here.
+> diagnostics bits. `src/bsw/Mpu6050.c` stays in‑tree as the I2C fallback and as
+> part of the peripheral driver pool (wiring: **`docs/MPU6050.md`**); it has no
+> caller and carries a justified MISRA 8.7 deviation.
 
 ### 2.3 Baro / Mag / GNSS — **I2C0**, shared bus (electrical: §2.5)
 
