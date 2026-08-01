@@ -99,16 +99,25 @@ boolean Mmc5983_init(void)
     (void)I2c_writeByte(MMC5983_I2C_ADDR, MMC5983_REG_CTRL1, MMC5983_CTRL1_SW_RST);
     Mmc5983_delayMs(MMC5983_RESET_MS);
 
+    /* Single exit (MISRA 15.5): every stage below is guarded on ok rather than
+     * returning early, so the function has one return and s_mmc5983Present is
+     * always assigned from the same place. */
     ok = Mmc5983_readProductId(&productId);
-    if ((ok == FALSE) || (productId != MMC5983_PRODUCT_ID))
+    if (ok != FALSE)
     {
-        return FALSE;
+        if (productId != MMC5983_PRODUCT_ID)
+        {
+            ok = FALSE;
+        }
     }
 
     /* Automatic set/reset first: it must be armed before the device starts
      * producing samples, otherwise the first samples carry the uncorrected
      * bridge offset. */
-    ok = I2c_writeByte(MMC5983_I2C_ADDR, MMC5983_REG_CTRL0, MMC5983_CTRL0_AUTO_SR_EN);
+    if (ok != FALSE)
+    {
+        ok = I2c_writeByte(MMC5983_I2C_ADDR, MMC5983_REG_CTRL0, MMC5983_CTRL0_AUTO_SR_EN);
+    }
     if (ok != FALSE)
     {
         ok = I2c_writeByte(MMC5983_I2C_ADDR, MMC5983_REG_CTRL1, MMC5983_CTRL1_BW_100HZ);
@@ -121,11 +130,6 @@ boolean Mmc5983_init(void)
 
     s_mmc5983Present = ok;
     return ok;
-}
-
-boolean Mmc5983_isPresent(void)
-{
-    return s_mmc5983Present;
 }
 
 /* Reassemble one 18-bit axis: [17:10] in msb, [9:2] in lsb, [1:0] in the

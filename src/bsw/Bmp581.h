@@ -49,11 +49,11 @@
  *          hanging. */
 boolean Bmp581_init(void);
 
-/** \return TRUE while the device is answering. Cleared when a read fails, set
- *  again once the periodic probe in Bmp581_read() finds it back on the bus.
- *  Diagnostic only — do NOT gate Bmp581_read() on this, that would make the
- *  hot-plug recovery unreachable. */
-boolean Bmp581_isPresent(void);
+/* There is deliberately no Bmp581_isPresent(). Presence is owned inside
+ * Bmp581_read(), which uses its own calls to probe for a reconnected sensor.
+ * An accessor would invite callers to gate the read on it, which is exactly
+ * what made hot-plug recovery unreachable on the BMP388. Presence reaches the
+ * outside world through measurementsSetBaro() and PeriphDiag instead. */
 
 /** Read the CHIP_ID register (0x01). Bring-up helper; a BMP581 returns
  *  BMP581_CHIP_ID_PRIMARY or BMP581_CHIP_ID_SECONDARY. */
