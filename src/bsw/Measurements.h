@@ -21,22 +21,28 @@
  *   0x20  uint8    rawVdd      raw 8-bit monitor-ADC codes, for verifying
  *   0x21  uint8    rawVddp3    the voltage scale factors against nominals
  *   0x22  uint8    rawVext
- *   0x23  uint8    baroPresent 1 if the BMP388 answered at init, else 0
+ *   0x23  uint8    baroPresent 1 if the BMP581 answered at init, else 0
  *   0x24  uint32   diagStatus  diagnostics bitmask, see DIAGNOSTICS.md
- *   0x28  float32  baroPressPa BMP388 pressure [Pa]    (0 when not present)
- *   0x2C  float32  baroTempC   BMP388 temperature [degC] (0 when not present)
+ *   0x28  float32  baroPressPa BMP581 pressure [Pa]    (0 when not present)
+ *   0x2C  float32  baroTempC   BMP581 temperature [degC] (0 when not present)
  *   0x30  float32  baroAltM    pressure altitude [m] vs standard 1013.25 hPa
  *                              (0 when not present; see measurementsSetBaro)
- *   0x34  uint8    imuPresent  1 if the MPU-6050 answered at init, else 0
+ *
+ *   --- IMU block. No IMU has been fitted since 2026-07-31 (the MPU-6050 came
+ *       off with the BMP388); every field below is published as zero once at
+ *       start-up and never updated, until the ICM-42688-P arrives on QSPI0.
+ *       The layout is deliberately unchanged so the A2L and the GUI keep
+ *       working across the swap. ---
+ *   0x34  uint8    imuPresent  1 if an IMU answered at init, else 0
  *   0x35  uint8    imuReserved[3]  padding to 4-byte float alignment
- *   0x38  float32  accelX      MPU-6050 acceleration X [g]     (0 when absent)
- *   0x3C  float32  accelY      MPU-6050 acceleration Y [g]
- *   0x40  float32  accelZ      MPU-6050 acceleration Z [g]
- *   0x44  float32  gyroX       MPU-6050 angular rate X [deg/s], BIAS-CORRECTED
+ *   0x38  float32  accelX      acceleration X [g]              (0 when absent)
+ *   0x3C  float32  accelY      acceleration Y [g]
+ *   0x40  float32  accelZ      acceleration Z [g]
+ *   0x44  float32  gyroX       angular rate X [deg/s], BIAS-CORRECTED
  *                              (raw = this + biasX; 0 when absent)
- *   0x48  float32  gyroY       MPU-6050 angular rate Y [deg/s]
- *   0x4C  float32  gyroZ       MPU-6050 angular rate Z [deg/s]
- *   0x50  float32  imuTempC    MPU-6050 die temperature [degC] (0 when absent)
+ *   0x48  float32  gyroY       angular rate Y [deg/s]
+ *   0x4C  float32  gyroZ       angular rate Z [deg/s]
+ *   0x50  float32  imuTempC    IMU die temperature [degC]      (0 when absent)
  *
  *   --- attitude estimate (Ahrs.c), matches flight_ctrl.h conventions ---
  *   0x54  uint8    ahrsState   0 = calibrating, 1 = running, 2 = no sensor
@@ -62,8 +68,25 @@
  *   0xB0  uint16   ethUtilPmil      link utilisation [per mille, 0..1000]
  *   0xB2  uint16   ethLinkMbits     negotiated link rate [Mbit/s]
  *
- * Total size 0xB4 = 180 bytes. Exceeds XCP MAX_CTO (64), so clients read it in
+ *   --- magnetometer (Mmc5983.c), appended in v1.15.0 ---
+ *   Appended at the END on purpose: every address above keeps its value, so
+ *   the existing A2L entries and the GUI need no rework to stay correct.
+ *   0xB4  uint8    magPresent  1 if the MMC5983MA answered at init, else 0
+ *   0xB5  uint8    magReserved[3]  padding to 4-byte float alignment
+ *   0xB8  float32  magX        field X [gauss] (1 G = 100 uT; 0 when absent)
+ *   0xBC  float32  magY        field Y [gauss]
+ *   0xC0  float32  magZ        field Z [gauss]
+ *   0xC4  float32  magFieldG   |B| [gauss] — the orientation-INDEPENDENT
+ *                              magnitude, ~0.48 G in Munich. The single most
+ *                              useful number here: it must not change as the
+ *                              board is rotated, so it validates scaling and
+ *                              axis assembly at a glance (docs/MMC5983MA.md 8.5)
+ *   0xC8  float32  magHeadingDeg  0..360, LEVEL-ONLY and uncalibrated, no
+ *                              declination — a bring-up aid, not navigation
+ *
+ * Total size 0xCC = 204 bytes. Exceeds XCP MAX_CTO (64), so clients read it in
  * several SHORT_UPLOADs — AurixGUI already does this for the IMU sub-block.
+ * DAQ has room: 8 ODTs x 63 B = 504 B (see XCP_DAQ_MAX_ODTS in Xcp.c).
  */
 #define XCP_DATA_ADDR   0x70030000u
 #define XCP_DATA_MAGIC  0x41555258u
@@ -122,6 +145,16 @@ typedef struct
     uint32  ethBytesPerSec;
     uint16  ethUtilPmil;
     uint16  ethLinkMbits;
+
+    /* magnetometer — see Mmc5983.h. Appended last to keep every address above
+     * unchanged; do the same for the next sensor. */
+    uint8   magPresent;
+    uint8   magReserved[3];
+    float32 magX;
+    float32 magY;
+    float32 magZ;
+    float32 magFieldG;
+    float32 magHeadingDeg;
 } Xcp_Data;
 
 void measurementsInit(void);    /* DTS + DTSC + EVR monitor init (CPU0)  */
@@ -130,6 +163,12 @@ void measurementsUpdate(void);  /* call cyclically, e.g. every 100 ms    */
 /* Publish the latest barometer sample into the XCP block. Called by the baro
  * task; pass present = FALSE to show "no sensor" (pressure/temp forced to 0). */
 void measurementsSetBaro(boolean present, float32 pressurePa, float32 temperatureC);
+
+/* Publish the latest magnetometer sample into the XCP block. Called by the mag
+ * task; pass present = FALSE to show "no sensor" (all fields forced to 0).
+ * mag is [gauss] in X,Y,Z order; the magnitude is computed here so every
+ * consumer sees the same definition. */
+void measurementsSetMag(boolean present, const float32 mag[3], float32 headingDeg);
 
 /* Publish the latest IMU sample into the XCP block. Called by the IMU task;
  * pass present = FALSE to show "no sensor" (all axes + temp forced to 0).

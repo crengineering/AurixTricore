@@ -40,13 +40,27 @@
 /** Monitored peripherals. Add new devices here and in s_bits[] in PeriphDiag.c. */
 typedef enum
 {
-    PERIPH_DIAG_BARO = 0,   /**< BMP388 barometer, I2C0 0x77  */
-    PERIPH_DIAG_IMU  = 1,   /**< MPU-6050 IMU,     I2C0 0x68  */
+    PERIPH_DIAG_BARO = 0,   /**< BMP581 barometer,     I2C0 0x47 */
+    PERIPH_DIAG_IMU  = 1,   /**< IMU slot — nothing fitted since 2026-07-31 */
+    PERIPH_DIAG_MAG  = 2,   /**< MMC5983MA magnetometer, I2C0 0x30 */
     PERIPH_DIAG_COUNT
 } PeriphDiag_Id;
 
-/** Reset all peripheral state. Call once at start-up, before the scheduler. */
+/** Reset all peripheral state. Call once at start-up, before the scheduler.
+ *  Leaves every peripheral UNFITTED — the build declares what it expects with
+ *  PeriphDiag_setFitted() rather than this module assuming the full list. */
 void PeriphDiag_init(void);
+
+/** Declare whether \p id is expected to be present in this build.
+ *
+ *  An unfitted peripheral contributes no diagStatus bits at all. Without this
+ *  a slot whose hardware has been removed reports NO_RESPONSE forever, and a
+ *  diagnostics word that is permanently red is a diagnostics word nobody
+ *  reads. It is also the hook the planned driver pool needs: which devices are
+ *  connected is configuration, not a compile-time fact about the code.
+ *
+ *  Call after PeriphDiag_init() and before the scheduler starts. */
+void PeriphDiag_setFitted(PeriphDiag_Id id, boolean fitted);
 
 /** Report the outcome of one peripheral access. Call at the sensor's poll rate.
  *

@@ -172,6 +172,32 @@ void measurementsSetBaro(boolean present, float32 pressurePa, float32 temperatur
     }
 }
 
+void measurementsSetMag(boolean present, const float32 mag[3], float32 headingDeg)
+{
+    if (present != FALSE)
+    {
+        g_xcpData.magPresent = 1u;
+        g_xcpData.magX       = mag[0];
+        g_xcpData.magY       = mag[1];
+        g_xcpData.magZ       = mag[2];
+        /* |B| is computed here rather than in the driver so that every
+         * consumer — diagnostics, GUI, later the AHRS — uses one definition.
+         * It is the orientation-independent check that validates scaling. */
+        g_xcpData.magFieldG  = sqrtf((mag[0] * mag[0]) + (mag[1] * mag[1])
+                                     + (mag[2] * mag[2]));
+        g_xcpData.magHeadingDeg = headingDeg;
+    }
+    else
+    {
+        g_xcpData.magPresent    = 0u;
+        g_xcpData.magX          = 0.0f;
+        g_xcpData.magY          = 0.0f;
+        g_xcpData.magZ          = 0.0f;
+        g_xcpData.magFieldG     = 0.0f;
+        g_xcpData.magHeadingDeg = 0.0f;
+    }
+}
+
 void measurementsSetImu(boolean present, const float32 acc[3], const float32 gyro[3],
                         float32 temperatureC)
 {
