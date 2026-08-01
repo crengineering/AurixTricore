@@ -320,7 +320,12 @@ static void Task_Imu(void)
      * "period elapsed" test, so the real interval jitters and integrating the
      * nominal value would bias the attitude. STM0 ticks are 10 ns. */
     nowTicks  = SysTime_getTicks();
-    dt        = (float32)(nowTicks - lastTicks) * 1e-8f;
+    {
+        /* Elapsed lands in an object before the cast (MISRA 10.8). Unsigned
+         * subtraction is wrap-safe across the STM rollover. */
+        const uint32 elapsed = nowTicks - lastTicks;
+        dt = (float32)elapsed * 1e-8f;
+    }
     lastTicks = nowTicks;
 
     /* AHRS first: it owns the gyro bias, and the rates published below are
