@@ -46,9 +46,9 @@ typedef struct
  *          hanging. */
 boolean Mmc5983_init(void);
 
-/** \return TRUE while the device is answering. Diagnostic only — do NOT gate
- *  Mmc5983_read() on this, that would make the hot-plug recovery unreachable. */
-boolean Mmc5983_isPresent(void);
+/* There is deliberately no Mmc5983_isPresent() — see the note in Bmp581.h:
+ * presence is owned inside Mmc5983_read() so that hot-plug recovery stays
+ * reachable, and it reaches the outside world via measurementsSetMag(). */
 
 /** Read the PRODUCT_ID register (0x2F). Bring-up helper; returns 0x30. */
 boolean Mmc5983_readProductId(uint8 *productId);

@@ -223,6 +223,12 @@ boolean Bmp388_init(void)
  * 20 ms baro task) while the device is missing. */
 #define BMP388_RECOVERY_PERIOD  (50u)      /* ~1 s */
 
+/* cppcheck-suppress misra-c2012-8.7 ; deviation: retained in the peripheral
+ * driver pool. The hardware was removed on 2026-07-31, so this function has
+ * no caller today, but external linkage is intentional — the driver is kept
+ * so the device can be re-fitted by configuration rather than by rewriting
+ * it. See docs/PINNING.md 2.2/2.3. Remove the deviation once the driver
+ * registration table gives every pool driver a caller. */
 boolean Bmp388_read(float32 *pressurePa, float32 *temperatureC)
 {
     /* Block scope (MISRA 8.9): only this function drives the retry. */

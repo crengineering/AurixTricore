@@ -135,14 +135,20 @@ boolean Bmp581_init(void)
      * than merely being ACKed. Bmp581_debugDump() reads it instead, so the
      * boot dump still shows it. */
 
+    /* Single exit (MISRA 15.5): every stage below is guarded on ok rather than
+     * returning early, so the function has one return and s_bmp581Present is
+     * always assigned from the same place. */
     ok = Bmp581_readChipId(&chipId);
-    if ((ok == FALSE) || (bmp581_idIsValid(chipId) == FALSE))
+    if (ok != FALSE)
     {
-        return FALSE;
+        ok = bmp581_idIsValid(chipId);
     }
 
     /* Trim must be loaded and error-free before any output is trustworthy. */
-    ok = I2c_readReg(BMP581_I2C_ADDR, BMP581_REG_STATUS, &status, 1u);
+    if (ok != FALSE)
+    {
+        ok = I2c_readReg(BMP581_I2C_ADDR, BMP581_REG_STATUS, &status, 1u);
+    }
     if (ok != FALSE)
     {
         if (((status & BMP581_STATUS_NVM_RDY) == 0u)
@@ -174,11 +180,6 @@ boolean Bmp581_init(void)
 
     s_bmp581Present = ok;
     return ok;
-}
-
-boolean Bmp581_isPresent(void)
-{
-    return s_bmp581Present;
 }
 
 boolean Bmp581_read(float32 *pressurePa, float32 *temperatureC)
@@ -227,13 +228,18 @@ boolean Bmp581_read(float32 *pressurePa, float32 *temperatureC)
             /* 24-bit little-endian: temperature = [0..2], pressure = [3..5]. */
             uint32 tRaw = ((uint32)raw[2] << 16) | ((uint32)raw[1] << 8) | (uint32)raw[0];
             uint32 pRaw = ((uint32)raw[5] << 16) | ((uint32)raw[4] << 8) | (uint32)raw[3];
-            sint32 tSigned = (sint32)tRaw;
+            uint32 tExt = tRaw;
+            sint32 tSigned;
 
-            /* temperature is signed 24-bit two's complement — sign-extend to 32 */
+            /* temperature is signed 24-bit two's complement — sign-extend to 32.
+             * The sign extension is done on the unsigned value and only the
+             * finished object is cast (MISRA 10.8: a composite expression must
+             * not be cast to a different essential type category). */
             if ((tRaw & BMP581_SIGN_BIT_24) != 0u)
             {
-                tSigned = (sint32)(tRaw | BMP581_SIGN_EXT_24);
+                tExt = tRaw | BMP581_SIGN_EXT_24;
             }
+            tSigned = (sint32)tExt;
 
             *temperatureC = (float32)tSigned / BMP581_TEMP_DIV;
             *pressurePa   = (float32)pRaw    / BMP581_PRESS_DIV;

@@ -126,6 +126,12 @@ boolean Mpu6050_readWhoAmI(uint8 *whoAmI)
     return I2c_readReg(MPU6050_I2C_ADDR, MPU6050_REG_WHO_AM_I, whoAmI, 1u);
 }
 
+/* cppcheck-suppress misra-c2012-8.7 ; deviation: retained in the peripheral
+ * driver pool. The hardware was removed on 2026-07-31, so this function has
+ * no caller today, but external linkage is intentional — the driver is kept
+ * so the device can be re-fitted by configuration rather than by rewriting
+ * it. See docs/PINNING.md 2.2/2.3. Remove the deviation once the driver
+ * registration table gives every pool driver a caller. */
 boolean Mpu6050_debugDump(uint8 *cfg4, uint8 *pwr3, uint8 *raw14)
 {
     boolean ok;
@@ -234,6 +240,12 @@ boolean Mpu6050_init(void)
     return ok;
 }
 
+/* cppcheck-suppress misra-c2012-8.7 ; deviation: retained in the peripheral
+ * driver pool. The hardware was removed on 2026-07-31, so this function has
+ * no caller today, but external linkage is intentional — the driver is kept
+ * so the device can be re-fitted by configuration rather than by rewriting
+ * it. See docs/PINNING.md 2.2/2.3. Remove the deviation once the driver
+ * registration table gives every pool driver a caller. */
 boolean Mpu6050_read(Mpu6050_Sample *sample)
 {
     static uint16 s_recovery = 0u;   /* block scope: used only here (MISRA 8.9) */

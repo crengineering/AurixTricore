@@ -139,9 +139,9 @@ static void Task_Baro(void)
     boolean present;
 
     /* Called unconditionally: Bmp581_read() owns the presence state and uses
-     * these calls to probe for a reconnected sensor. Gating on
-     * Bmp581_isPresent() here would make that recovery unreachable, which is
-     * exactly why a replugged barometer never came back. */
+     * these calls to probe for a reconnected sensor. Gating on a presence flag
+     * here would make that recovery unreachable — which is exactly why a
+     * replugged barometer never came back, and why no such accessor exists. */
     present = Bmp581_read(&pressPa, &tempC);
     measurementsSetBaro(present, pressPa, tempC);
 
