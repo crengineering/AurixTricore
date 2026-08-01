@@ -32,17 +32,36 @@ Adresse: `Xcp_Data + 0x24` (Basis `0x70030000`, also `0x70030024`).
 | 12 | `0x00001000` | NVM-Fehler (ab v1.5.0) — DFLASH-Datensatz beim Boot korrupt oder letztes `SAVE` fehlgeschlagen | wird durch erfolgreiches `SAVE` gelöscht |
 | 13 | `0x00002000` | I2C0 **SCL dauerhaft LOW** (ab v1.13.0) — Kurzschluss nach GND oder Slave hängt in Clock-Stretching | > 0,3 s bei ruhendem Bus |
 | 14 | `0x00004000` | I2C0 **SDA dauerhaft LOW** — Kurzschluss nach GND oder Slave mitten im Byte blockiert | > 0,3 s bei ruhendem Bus |
-| 15 | `0x00008000` | **BMP388 antwortet nie** seit dem Start — nicht verdrahtet, falsche Adresse oder defekt (Leitungsbruch) | kein ACK seit Boot |
-| 16 | `0x00010000` | **BMP388 Kommunikations-Timeout** — hat geantwortet, ist jetzt still (Leitung ab, Stecker locker) | > 1 s kein erfolgreicher Read |
-| 17 | `0x00020000` | **BMP388 Daten eingefroren** — Bus gesund, Wert ändert sich nicht mehr | > 5 s bit-identischer Wert |
-| 18 | `0x00040000` | **BMP388 unplausibel** — Druck außerhalb 300–1200 hPa oder Temperatur außerhalb −40…85 °C | > 1 s außerhalb |
-| 19 | `0x00080000` | **MPU-6050 antwortet nie** seit dem Start | kein ACK seit Boot |
-| 20 | `0x00100000` | **MPU-6050 Kommunikations-Timeout** | > 1 s kein erfolgreicher Read |
-| 21 | `0x00200000` | **MPU-6050 Daten eingefroren** — genau der Fehler vom 30.07.2026 (Register standen still, Bus meldete OK) | > 5 s bit-identischer Wert |
-| 22 | `0x00400000` | **MPU-6050 unplausibel** — \|a\| außerhalb 0,05…13 g oder Temperatur außerhalb −40…85 °C | > 1 s außerhalb |
+| 15 | `0x00008000` | **BMP581 antwortet nie** seit dem Start — nicht verdrahtet, falsche Adresse oder defekt (Leitungsbruch) | kein ACK seit Boot |
+| 16 | `0x00010000` | **BMP581 Kommunikations-Timeout** — hat geantwortet, ist jetzt still (Leitung ab, Stecker locker) | > 1 s kein erfolgreicher Read |
+| 17 | `0x00020000` | **BMP581 Daten eingefroren** — Bus gesund, Wert ändert sich nicht mehr | > 5 s bit-identischer Wert |
+| 18 | `0x00040000` | **BMP581 unplausibel** — Druck außerhalb 300–1200 hPa oder Temperatur außerhalb −40…85 °C | > 1 s außerhalb |
+| 19 | `0x00080000` | **IMU antwortet nie** seit dem Start | kein ACK seit Boot |
+| 20 | `0x00100000` | **IMU Kommunikations-Timeout** | > 1 s kein erfolgreicher Read |
+| 21 | `0x00200000` | **IMU Daten eingefroren** — genau der Fehler vom 30.07.2026 (Register standen still, Bus meldete OK) | > 5 s bit-identischer Wert |
+| 22 | `0x00400000` | **IMU unplausibel** — \|a\| außerhalb 0,05…13 g oder Temperatur außerhalb −40…85 °C | > 1 s außerhalb |
+| 23 | `0x00800000` | **MMC5983MA antwortet nie** seit dem Start (ab v1.15.0) — Verdrahtung, oder **CS nicht auf +3V3 gelegt** (häufigste Ursache, siehe MMC5983MA.md §3) | kein ACK seit Boot |
+| 24 | `0x01000000` | **MMC5983MA Kommunikations-Timeout** | > 1 s kein erfolgreicher Read |
+| 25 | `0x02000000` | **MMC5983MA Daten eingefroren** | > 5 s bit-identischer Wert |
+| 26 | `0x04000000` | **MMC5983MA unplausibel** — \|B\| außerhalb 0,15…2,0 G. Das ist der schärfste Test im ganzen Wort: \|B\| ist eine Eigenschaft des **Ortes**, nicht der Lage, muss also beim Drehen des Boards konstant bleiben (~0,48 G in München). Ein Wert, der um einen glatten Faktor daneben liegt, bedeutet falsche Skalierung oder falsch zusammengesetztes 18-Bit-Wort | > 1 s außerhalb |
 | 31 | `0x80000000` | Kalibrierblock ungültig — Defaults wurden neu geladen | Magic-Wort zerstört |
 
-Bits 23–30 sind reserviert (immer 0).
+⚠️ **Bits 27–30 sind die LETZTEN vier freien Bits** — Platz für genau **ein**
+weiteres Gerät. Es fehlen noch GNSS (NEO-M9N), Flight-IMU (ICM-42688-P) und
+4× ESC-Telemetrie: sechs Geräte, die 24 Bits bräuchten. **Vor dem übernächsten
+Gerät** müssen die gerätespezifischen Fehler aus diesem gemeinsamen Wort heraus
+in ein Status-Array pro Peripherie (indiziert über `PeriphDiag_Id`) wandern;
+`diagStatus` bleibt dann für Board-Fehler. Das ändert `Xcp_Data`, das A2L und
+die `BIT_MASK`-Zeilen der GUI gemeinsam.
+
+> **Ab v1.14.0:** Der Barometer-Slot (Bits 15–18) wird vom **BMP581** (I2C0
+> `0x47`) bedient — die Bitbelegung ist unverändert. Der **IMU-Slot (Bits
+> 19–22) ist stillgelegt**: seit dem 31.07.2026 ist kein IMU verbaut, und der
+> Slot wird per `PeriphDiag_setFitted(PERIPH_DIAG_IMU, FALSE)` als *nicht
+> bestückt* deklariert. Ein nicht bestücktes Peripheriegerät setzt **keine
+> Bits** — sonst stünde `IMU antwortet nie` dauerhaft an und ein permanent
+> rotes Diagnosewort liest niemand mehr. Die Bits kommen zurück, sobald der
+> ICM-42688-P (QSPI0) bestückt und als bestückt deklariert wird.
 
 ### Peripherie-Diagnose lesen (ab v1.13.0)
 

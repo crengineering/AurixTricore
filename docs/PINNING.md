@@ -120,14 +120,20 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 | P22.11 | CS (SLSO10) | `IfxQspi0_SLSO10_P22_11_OUT` | X702·18 | plan |
 | P22.7 | INT1 (data‑ready) | GPIO input | X702·17 | plan |
 
-> **Interim IMU in code — MPU‑6050 (GY‑521) on I2C0, not this QSPI plan.** The
-> ICM‑42688‑P above is still `plan` (not delivered). A borrowed **MPU‑6050** stands
-> in as the flyable IMU and rides the **shared I2C0 bus** (§2.3) at address **`0x68`**
-> — no new MCU pins, no clash with the BMP388 (`0x77`). Driver `src/bsw/Mpu6050.c`,
-> read at 50 Hz, exposed over XCP (`accelX…`, `gyroX…`, `imuTempC`, firmware ≥ v1.10.0).
-> **Hardware‑unverified.** Bring‑up gate = `Mpu6050_readWhoAmI()` == 0x68. Wiring /
-> address / power: **`docs/MPU6050.md`**. When the ICM‑42688‑P arrives it moves to
-> QSPI0 as planned here; the MPU‑6050 driver stays in‑tree as the I2C fallback.
+> **No IMU is fitted as of 2026‑07‑31.** The ICM‑42688‑P above is still `plan`
+> (not delivered), and the interim **MPU‑6050 (GY‑521)** that stood in for it on
+> the shared I2C0 bus at `0x68` has been **physically removed** along with the
+> BMP388. From firmware **v1.14.0** there is no `Task_Imu`: the IMU and attitude
+> fields of the XCP block are published as zero once at start‑up with
+> `imuPresent = 0` and `ahrsState = AHRS_NO_SENSOR`, and the `PERIPH_DIAG_IMU`
+> slot is declared **unfitted** (`PeriphDiag_setFitted()`) so it raises no
+> diagnostics bits.
+>
+> `src/bsw/Mpu6050.c` stays in‑tree as the I2C fallback and as the start of the
+> driver pool — it was hardware‑validated on 2026‑07‑30 (v1.11.0), and wiring /
+> address / power remain in **`docs/MPU6050.md`**. It currently has **no caller**;
+> see `docs/BMP581.md` §9 for the MISRA 8.7 consequence and the planned fix.
+> When the ICM‑42688‑P arrives it moves to QSPI0 as planned here.
 
 ### 2.3 Baro / Mag / GNSS — **I2C0**, shared bus (electrical: §2.5)
 
@@ -142,22 +148,35 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 > clear the kernel, both of which cost days). The iLLD `I2c` source tree was
 > un-excluded in `.cproject`.
 >
-> **From 2026-07-31 the active baro is the BMP581 at `0x46`** (`src/bsw/Bmp581.c`,
-> wiring **`docs/BMP581.md`**). It replaces the BMP388/CJMCU-388 (`0x77`,
-> `docs/BMP388.md`) and the interim MPU-6050/GY-521 IMU (`0x68`,
-> `docs/MPU6050.md`), **both physically removed**. Those two are hardware-validated
-> and their docs stay as reference; the BMP581 driver is written but
-> **hardware-unverified**, every register marked `TODO(hw)`.
+> **From 2026-07-31 the active baro is the BMP581 at `0x47`** (Adafruit BMP581
+> STEMMA QT, `src/bsw/Bmp581.c`, wiring **`docs/BMP581.md`**). It replaces the
+> BMP388/CJMCU-388 (`0x77`, `docs/BMP388.md`) and the interim MPU-6050/GY-521 IMU
+> (`0x68`, `docs/MPU6050.md`), **both physically removed**. Those two are
+> hardware-validated and their docs stay as reference. The BMP581 driver shipped
+> in firmware v1.14.0 and is **hardware-validated 2026-08-01** (954.60 hPa /
+> 27.80 °C, cross-checked against the BMP388's 956 hPa / 26.8 °C on 2026-07-30).
 >
-> The flight IMU (ICM-42688-P, §2.2), mag (MMC5983MA `0x30`) and GNSS (NEO-M9N
-> `0x42`) are still `plan`. All four addresses are distinct, so no collision.
+> ⚠️ **`0x47`, not `0x46`.** The Adafruit board straps SDO high — its silkscreen
+> reads `Default I2C addr 0x47`, the opposite of the bare-die default. The `addr`
+> jumper on the back moves it to `0x46`.
 >
-> ⚠️ **Bus loading changed.** The old bus was held up by two breakouts in parallel
-> — CJMCU-388 ~10 kΩ and GY-521 ~4.7 kΩ, about **3.2 kΩ**. Removing both removes
-> **all** pull-up: whatever the BMP581 breakout carries is now the entire bus. If
-> it has none, the bus never idles high and nothing ACKs, which looks exactly like
-> a dead sensor — add **4.7 kΩ from SCL and SDA to +3V3**. The boot line
-> `I2C0 bus idle (SCL+SDA released)` confirms it either way.
+> **The magnetometer joined on 2026-08-01: MMC5983MA at `0x30`** (MEMSIC
+> MMC5983-B prototyping board, `src/bsw/Mmc5983.c`, firmware v1.15.0, wiring
+> **`docs/MMC5983MA.md`**). ⚠️ **Its `CS` has NO on-board pull-up and must be
+> tied to +3V3** or the part answers on SPI and never ACKs — unlike the Adafruit
+> BMP581, this board does not strap it for you. Address is fixed (no select
+> pin). **Hardware-unverified** at the time of writing.
+>
+> The flight IMU (ICM-42688-P, §2.2) and GNSS (NEO-M9N `0x42`) are still `plan`.
+> All addresses are distinct, so no collision.
+>
+> **Bus loading changed.** The old bus was held up by two breakouts in parallel
+> — CJMCU-388 ~10 kΩ and GY-521 ~4.7 kΩ, about **3.2 kΩ**. Removing both removed
+> all of it; the BMP581 breakout is now the entire bus. STEMMA QT boards carry
+> 10 kΩ on SDA and SCL, which is weaker than before but comfortable at 100 kHz.
+> Confirm rather than assume: a bus with no pull-up never idles high and nothing
+> ACKs, which looks exactly like a dead sensor. The boot line
+> `I2C0 bus idle (SCL+SDA released)` settles it either way.
 
 ### 2.4 Actuator companion signals — ESC current sense + telemetry
 
@@ -186,13 +205,19 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 | Role | Part | Bus | iLLD driver | Rate |
 |---|---|---|---|---|
 | IMU (planned) | ICM‑42688‑P (EV board) | **QSPI0** (SPI) | `Qspi/SpiMaster/IfxQspi_SpiMaster.c` | 1 kHz |
-| IMU (interim, in code) | MPU‑6050 (GY‑521) | **I2C0** (shared) | `I2c/I2c/IfxI2c_I2c.c` | 50 Hz |
-| Baro | BMP388 (BMP581 planned) | **I2C0** (shared) | `I2c/I2c/IfxI2c_I2c.c` | 50 Hz |
-| Mag | MMC5983MA | **I2C0** (shared) | (shared) | 100 Hz |
+| IMU (interim) | MPU‑6050 (GY‑521) | **I2C0** (shared) | `I2c/I2c/IfxI2c_I2c.c` | — removed 2026‑07‑31 |
+| Baro | **BMP581** (Adafruit STEMMA QT) | **I2C0** (shared) | `I2c/I2c/IfxI2c_I2c.c` | 50 Hz |
+| Mag | **MMC5983MA** (MMC5983-B board) | **I2C0** (shared) | `I2c/I2c/IfxI2c_I2c.c` | 50 Hz |
 | GNSS | u‑blox NEO‑M9N | **I2C0** (DDC, shared) | (shared) | 10 Hz |
 
-**I2C addresses (no collisions):** MPU‑6050 `0x68`/`0x69`, BMP388 `0x77`/`0x76`
-(BMP581 `0x46`/`0x47`), MMC5983MA `0x30`, NEO‑M9N `0x42`.
+**I2C addresses (no collisions):** BMP581 **`0x47`**/`0x46` and MMC5983MA
+**`0x30`** (both active), MPU‑6050 `0x68`/`0x69` and BMP388 `0x77`/`0x76`
+(both removed), NEO‑M9N `0x42` (planned).
+
+**Bus pull-up budget** — track this on every device change, it has cost days
+before: BMP388+MPU‑6050 ≈ 3.2 kΩ → BMP581 alone 10 kΩ → **BMP581 + MMC5983MA
+≈ 2.1 kΩ** (the MMC5983‑B carries 2.7 kΩ on SDA and SCL, read off its
+schematic). ~1.6 mA per line at 3.3 V, well within the pads.
 
 **Supply — tap the regulated +3V3 rail** (X702·78/80 or X703·70), **not** `VCC_IN`
 (X702·5‑8, raw board input 3.5–40 V) and **not** `V_UC` (MCU supply, 5 V here). All

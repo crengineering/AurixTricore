@@ -19,12 +19,11 @@
 #include "Version.h"
 #include "gpio.h"
 #include "I2c.h"
-#include "Bmp388.h"
-#include "Mpu6050.h"
+#include "Bmp581.h"
+#include "Mmc5983.h"
 #include "Ahrs.h"
 #include "PeriphDiag.h"
 #include "EthStats.h"
-#include "SysTime.h"
 #include "CtrlReplay.h"     /* ASW replay harness; single BSW->ASW init
                              * callout — documented deviation, see
                              * docs/CTRL_REPLAY.md                      */
@@ -45,37 +44,81 @@ static void uartHexByte(uint8 v)
     Uart_print(buf);
 }
 
-/* One-time raw MPU-6050 register dump at boot for bring-up diagnosis.
- * If the burst ever reads all-zero or never changes between resets, read
- * docs/MPU6050.md section 7 before suspecting the sensor hardware. */
-static void mpuDebugDump(void)
+/* One-time raw BMP581 register dump at boot for bring-up diagnosis.
+ *
+ * Every register value in Bmp581.c was written from the BMP5 register map
+ * without the datasheet in hand (docs/BMP581.md section 10), so this dump is how
+ * those assumptions get checked against silicon. Read it in the order the
+ * bring-up fails — see the Bmp581_debugDump() comment in Bmp581.h for what each
+ * field should read; the short version is INT_STATUS bit 4 set (reset landed),
+ * STATUS = nvm_rdy without nvm_err, OSR bit 6 set (pressure enabled) and ODR
+ * bits 1:0 = 1 (converting). A burst that is all-zero or identical across two
+ * resets means the device is not converting, not that the scaling is wrong. */
+static void bmp581DebugDump(void)
 {
-    uint8 cfg[4] = { 0u, 0u, 0u, 0u };
-    uint8 pwr[3] = { 0u, 0u, 0u };
-    uint8 raw[14];
+    uint8 cfg[BMP581_DUMP_CFG_LEN];
+    uint8 osrEff = 0u;
+    uint8 raw[6];
 
-    if (Mpu6050_debugDump(cfg, pwr, raw) != FALSE)
+    if (Bmp581_debugDump(cfg, &osrEff, raw) != FALSE)
     {
         uint8 i;
-        Uart_print("MPU cfg(SMPLRT/CFG/GYRO/ACCEL)=");
-        for (i = 0u; i < 4u; i++)
+        Uart_print("BMP581 CHIP/REV/INT_STAT/STAT/IIR/OSR/ODR=");
+        for (i = 0u; i < BMP581_DUMP_CFG_LEN; i++)
         {
             uartHexByte(cfg[i]);
             Uart_print(" ");
         }
-        Uart_print("USER_CTRL/PWR1/PWR2=");
-        for (i = 0u; i < 3u; i++)
-        {
-            uartHexByte(pwr[i]);
-            Uart_print(" ");
-        }
-        Uart_print("burst=");
-        for (i = 0u; i < 14u; i++)
+        Uart_print("OSR_EFF=");
+        uartHexByte(osrEff);
+        Uart_print(" burst(T,P)=");
+        for (i = 0u; i < 6u; i++)
         {
             uartHexByte(raw[i]);
             Uart_print(" ");
         }
         Uart_println("");
+    }
+    else
+    {
+        Uart_println("BMP581 dump failed - no ACK on the bus");
+    }
+}
+
+/* One-time raw MMC5983MA register dump at boot, for the same reason as the
+ * BMP581's: no device datasheet exists (docs/MMC5983MA.md section 6 — the PDF
+ * is the prototyping board's guide and carries no register information), so
+ * every constant in Mmc5983.c is unverified until silicon says otherwise.
+ *
+ * PRODUCT_ID must read 0x30; that one value proves the whole I2C path including
+ * the CS strap. CTRL0/1/2 reading 0x00 is EXPECTED and not a failed write —
+ * the control registers are write-only on this part. The data block is the real
+ * evidence, and |B| in the measurement block is the decisive test. */
+static void mmc5983DebugDump(void)
+{
+    uint8 cfg[MMC5983_DUMP_CFG_LEN];
+    uint8 raw[7];
+
+    if (Mmc5983_debugDump(cfg, raw) != FALSE)
+    {
+        uint8 i;
+        Uart_print("MMC5983 PID/STATUS/CTRL0/CTRL1/CTRL2=");
+        for (i = 0u; i < MMC5983_DUMP_CFG_LEN; i++)
+        {
+            uartHexByte(cfg[i]);
+            Uart_print(" ");
+        }
+        Uart_print(" burst=");
+        for (i = 0u; i < 7u; i++)
+        {
+            uartHexByte(raw[i]);
+            Uart_print(" ");
+        }
+        Uart_println("");
+    }
+    else
+    {
+        Uart_println("MMC5983 dump failed - no ACK on the bus");
     }
 }
 
@@ -95,16 +138,16 @@ static void Task_Baro(void)
     float32 tempC   = 0.0f;
     boolean present;
 
-    /* Called unconditionally, like Task_Imu: Bmp388_read() owns the presence
-     * state and uses these calls to probe for a reconnected sensor. Gating on
-     * Bmp388_isPresent() here would make that recovery unreachable, which is
+    /* Called unconditionally: Bmp581_read() owns the presence state and uses
+     * these calls to probe for a reconnected sensor. Gating on
+     * Bmp581_isPresent() here would make that recovery unreachable, which is
      * exactly why a replugged barometer never came back. */
-    present = Bmp388_read(&pressPa, &tempC);
+    present = Bmp581_read(&pressPa, &tempC);
     measurementsSetBaro(present, pressPa, tempC);
 
     /* Plausibility bands are the sensor's physical envelope, not tuning:
      * 300..1200 hPa spans sea level to well above any altitude this airframe
-     * reaches, and the BMP388 is specified from -40 to +85 degC. The liveness
+     * reaches, and the BMP581 is specified from -40 to +85 degC. The liveness
      * sum moves with sensor noise on every sample, so a frozen value is a real
      * fault rather than a quiet signal. */
     {
@@ -118,71 +161,56 @@ static void Task_Baro(void)
     }
 }
 
-static void Task_Imu(void)
+static void Task_Mag(void)
 {
-    Mpu6050_Sample sample = { { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 0.0f };
+    Mmc5983_Sample sample = { { 0.0f, 0.0f, 0.0f }, 0.0f };
     boolean        present;
-    static uint32  lastTicks = 0u;
-    uint32         nowTicks;
-    uint32         elapsed;
-    float32        dt;
 
-    /* Called unconditionally: Mpu6050_read() owns the presence state and uses
-     * these calls to re-run the bring-up periodically after the device drops
-     * off the bus. Gating on a presence flag here would make that recovery
-     * unreachable, which is why no such accessor exists any more. */
-    present = Mpu6050_read(&sample);
-
-    /* Measured dt, not the nominal 20 ms: the scheduler dispatches on a "period
-     * elapsed" test, so the real interval jitters and integrating the nominal
-     * value would bias the attitude. STM0 ticks are 10 ns. */
-    nowTicks = SysTime_getTicks();
-    elapsed  = nowTicks - lastTicks;
-    dt       = (float32)elapsed * 1e-8f;
-    lastTicks = nowTicks;
-
-    /* AHRS first: it owns the gyro bias, and the published rates below are
-     * bias-corrected using the value it measured at start-up. */
-    Ahrs_update(sample.acc, sample.gyro, dt, present);
-    measurementsSetAttitude();
+    /* Called unconditionally, like Task_Baro: Mmc5983_read() owns the presence
+     * state and uses these calls to probe for a reconnected sensor. */
+    present = Mmc5983_read(&sample);
+    measurementsSetMag(present, sample.mag, sample.headingDeg);
 
     {
-        float32 bias[3];
-        float32 gyrCorr[3];
-        uint8   i;
-
-        /* Publish the CORRECTED rate, not the raw one. This unit has a ~21.8
-         * deg/s offset on Y; showing it raw makes a stationary board look like
-         * it is yawing. The bias itself stays visible separately (biasX/Y/Z),
-         * so the raw value is still recoverable as corrected + bias.
-         * Zero until calibration finishes, so this is a no-op until then. */
-        Ahrs_getGyroBias(bias);
-        for (i = 0u; i < 3u; i++)
-        {
-            gyrCorr[i] = sample.gyro[i] - bias[i];
-        }
-        measurementsSetImu(present, sample.acc, gyrCorr, sample.tempC);
-
-        /* |a| must stay inside the +/-8 g full scale; a sustained 0 g means a
-         * dead element rather than free fall, which never lasts seconds on the
-         * bench. Temperature bounds are the MPU-6050's specified range. The
-         * liveness sum spans every axis, so it only freezes if the whole
-         * sample block stops updating -- exactly the failure that hid for days
-         * on 2026-07-30 while the bus and presence flag looked healthy. */
-        const float32 accMagSq = (sample.acc[0] * sample.acc[0])
-                               + (sample.acc[1] * sample.acc[1])
-                               + (sample.acc[2] * sample.acc[2]);
+        /* The plausibility test here is stronger than the barometer's, because
+         * |B| is a property of the LOCATION and not of the orientation: it must
+         * stay put however the board is turned. Earth's field spans ~0.25..0.65
+         * G worldwide (~0.48 G in Munich), and the band below is widened to
+         * 0.15..2.0 G to tolerate the hard-iron offset of the board's own
+         * magnetics without accepting a value that is wrong by a clean factor —
+         * which is exactly what a bad scaling constant or a mis-assembled
+         * 18-bit word would produce. */
+        const float32 fieldSq = (sample.mag[0] * sample.mag[0])
+                              + (sample.mag[1] * sample.mag[1])
+                              + (sample.mag[2] * sample.mag[2]);
         boolean plausible = FALSE;
-        if ((accMagSq > 0.0025f) && (accMagSq < 169.0f)
-            && (sample.tempC > -40.0f) && (sample.tempC < 85.0f))
+        if ((fieldSq > 0.0225f) && (fieldSq < 4.0f))
         {
             plausible = TRUE;
         }
-        const float32 liveness = sample.acc[0] + sample.acc[1] + sample.acc[2]
-                               + sample.gyro[0] + sample.gyro[1] + sample.gyro[2]
-                               + sample.tempC;
-        PeriphDiag_report(PERIPH_DIAG_IMU, present, plausible, liveness);
+        /* Liveness spans all three axes, so it only freezes if the whole sample
+         * block stops updating. Heading is deliberately excluded: it is derived
+         * from X and Y, so it would add no independent information. */
+        PeriphDiag_report(PERIPH_DIAG_MAG, present, plausible,
+                          sample.mag[0] + sample.mag[1] + sample.mag[2]);
     }
+}
+
+/* Publish "no IMU fitted" once at start-up.
+ *
+ * The MPU-6050 came off the bus on 2026-07-31 and its replacement (ICM-42688-P
+ * on QSPI0) is not here yet, so there is no Task_Imu to run. Without this the
+ * IMU and attitude fields of the XCP block would simply never be written and
+ * the GUI would show whatever the RAM powered up with. Writing them once says
+ * the true thing instead: absent, zeroed, AHRS in AHRS_NO_SENSOR. */
+static void publishNoImu(void)
+{
+    static const float32 zero3[3] = { 0.0f, 0.0f, 0.0f };
+
+    Ahrs_init();
+    Ahrs_update(zero3, zero3, 0.0f, FALSE);   /* valid = FALSE -> AHRS_NO_SENSOR */
+    measurementsSetAttitude();
+    measurementsSetImu(FALSE, zero3, zero3, 0.0f);
 }
 
 static void Task_Measure100ms(void)
@@ -223,7 +251,7 @@ int core0_main(void)
     Scheduler_addTask(&g_sched, Task_LedToggle, SCHED_MS(500u));
     Scheduler_addTask(&g_sched, Task_App10ms,   SCHED_MS(10u));
     (void)Scheduler_addTask(&g_sched, Task_Baro, SCHED_MS(20u));  /* 50 Hz barometer */
-    (void)Scheduler_addTask(&g_sched, Task_Imu,  SCHED_MS(20u));  /* 50 Hz IMU */
+    (void)Scheduler_addTask(&g_sched, Task_Mag,  SCHED_MS(20u));  /* 50 Hz magnetometer */
     Scheduler_addTask(&g_sched, Task_Measure100ms, SCHED_MS(100u));
 
     /* init persistent memory*/
@@ -231,7 +259,10 @@ int core0_main(void)
     diagnosticsInit();      /* before measurementsInit: provides ADC scales */
     measurementsInit();
 
-    /* init shared I2C0 sensor bus + first sensor (BMP388 barometer, CJMCU-388) */
+    /* init shared I2C0 sensor bus + the barometer (Adafruit BMP581 STEMMA QT).
+     * Since the BMP388 and MPU-6050 came off on 2026-07-31 this breakout is the
+     * only device on the bus, so its own 10 kOhm pull-ups are the only ones
+     * holding the lines up — the idle check below is what proves that. */
     I2c_init();
     if (I2c_busIsIdle() != FALSE)
     {
@@ -241,25 +272,38 @@ int core0_main(void)
     {
         Uart_println("I2C0 bus HELD - a slave is pulling SCL/SDA low");
     }
-    if (Bmp388_init() != FALSE)
+    if (Bmp581_init() != FALSE)
     {
-        Uart_println("BMP388 detected (CHIP_ID 0x50)");
+        Uart_println("BMP581 detected (CHIP_ID 0x50/0x51)");
     }
     else
     {
-        Uart_println("BMP388 not found - check wiring/address (0x77 vs 0x76)");
+        Uart_println("BMP581 not found - check wiring/address (0x47 default, 0x46 via addr jumper)");
     }
+    bmp581DebugDump();  /* one-time register dump for bring-up diagnosis */
 
-    /* second sensor on the shared I2C0 bus: MPU-6050 IMU (GY-521), address 0x68 */
-    if (Mpu6050_init() != FALSE)
+    /* Second device on the shared I2C0 bus: MMC5983MA magnetometer at 0x30.
+     * Brought up after the barometer so the UART order matches the debug order
+     * in docs/MMC5983MA.md 8.2 — if adding this device broke the BMP581, that
+     * is visible above before the magnetometer is even mentioned. */
+    if (Mmc5983_init() != FALSE)
     {
-        Uart_println("MPU-6050 detected (WHO_AM_I 0x68)");
+        Uart_println("MMC5983 detected (PRODUCT_ID 0x30)");
     }
     else
     {
-        Uart_println("MPU-6050 not found - check wiring/address (0x68 vs 0x69)");
+        Uart_println("MMC5983 not found - check wiring/CS strap (CS must be tied to +3V3)");
     }
-    mpuDebugDump();     /* one-time raw register dump for bring-up diagnosis */
+    mmc5983DebugDump();
+
+    /* Tell the peripheral diagnostics what this build actually expects to find.
+     * The IMU slot must be declared unfitted or it would assert NO_RESPONSE
+     * forever and leave the diagnostics permanently red over hardware that is
+     * deliberately absent. */
+    PeriphDiag_setFitted(PERIPH_DIAG_BARO, TRUE);
+    PeriphDiag_setFitted(PERIPH_DIAG_IMU,  FALSE);
+    PeriphDiag_setFitted(PERIPH_DIAG_MAG,  TRUE);
+    publishNoImu();
 
     /* STM0 Comparator 0 als 1-ms-Tick für den lwIP-Stack scharf schalten
      * (ohne initCompare feuert updateLwIPStackISR nie -> keine TCP/ARP-Timer) */
@@ -292,9 +336,8 @@ int core0_main(void)
     xcpInit();
     CtrlReplay_init();
     EthStats_init();        /* MMC octet counters; after the MAC is up */
-    Ahrs_init();            /* starts the gyro-bias calibration - hold still */
     Uart_println("Ethernet started");
-    Uart_println("AHRS calibrating gyro bias - keep the board still ~2 s");
+    Uart_println("No IMU fitted - attitude held at zero (AHRS_NO_SENSOR)");
 
     while (TRUE)
     {

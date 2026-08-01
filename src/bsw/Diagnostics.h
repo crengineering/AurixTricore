@@ -86,6 +86,19 @@ typedef struct
 #define DIAG_IMU_TIMEOUT        0x00100000u     /* bit 20                    */
 #define DIAG_IMU_STUCK_DATA     0x00200000u     /* bit 21                    */
 #define DIAG_IMU_IMPLAUSIBLE    0x00400000u     /* bit 22                    */
+#define DIAG_MAG_NO_RESPONSE    0x00800000u     /* bit 23 MMC5983MA          */
+#define DIAG_MAG_TIMEOUT        0x01000000u     /* bit 24                    */
+#define DIAG_MAG_STUCK_DATA     0x02000000u     /* bit 25                    */
+#define DIAG_MAG_IMPLAUSIBLE    0x04000000u     /* bit 26                    */
+
+/* ⚠️ Bits 27-30 are the LAST four free bits: room for exactly ONE more
+ * peripheral in this scheme. Still to come are the GNSS (NEO-M9N), the flight
+ * IMU (ICM-42688-P) and 4x ESC telemetry — six devices needing 24 bits into 4.
+ * Before adding the device after next, move the per-device faults OUT of this
+ * shared word into a per-peripheral status array indexed by PeriphDiag_Id, and
+ * leave diagStatus for board-level faults. That change touches Xcp_Data, the
+ * A2L and the GUI's BIT_MASK rows together, so it wants doing deliberately
+ * rather than under pressure. See docs/DIAGNOSTICS.md. */
 
 #define DIAG_CAL_INVALID        0x80000000u     /* bit 31 */
 

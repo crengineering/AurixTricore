@@ -36,6 +36,7 @@ typedef struct
 
 typedef struct
 {
+    boolean fitted;          /* this build expects the device to be present   */
     boolean everOk;          /* a read has succeeded at least once since boot */
     boolean sawOk;           /* a read succeeded since the last update()      */
     boolean sawImplausible;  /* a successful read carried a bad value         */
@@ -56,6 +57,10 @@ void PeriphDiag_init(void)
 
     for (i = 0u; i < (uint8)PERIPH_DIAG_COUNT; i++)
     {
+        /* Unfitted by default: the caller declares what this build expects, so
+         * adding an enum entry for a device that is not wired up yet cannot
+         * light up the diagnostics on its own. */
+        s_periph[i].fitted           = FALSE;
         s_periph[i].everOk           = FALSE;
         s_periph[i].sawOk            = FALSE;
         s_periph[i].sawImplausible   = FALSE;
@@ -67,6 +72,14 @@ void PeriphDiag_init(void)
     }
     s_sclLowTicks = 0u;
     s_sdaLowTicks = 0u;
+}
+
+void PeriphDiag_setFitted(PeriphDiag_Id id, boolean fitted)
+{
+    if ((uint8)id < (uint8)PERIPH_DIAG_COUNT)
+    {
+        s_periph[id].fitted = fitted;
+    }
 }
 
 void PeriphDiag_report(PeriphDiag_Id id, boolean readOk, boolean plausible, float32 liveness)
@@ -129,6 +142,7 @@ uint32 PeriphDiag_update(void)
     {
         { DIAG_BARO_NO_RESPONSE, DIAG_BARO_TIMEOUT, DIAG_BARO_STUCK_DATA, DIAG_BARO_IMPLAUSIBLE },
         { DIAG_IMU_NO_RESPONSE,  DIAG_IMU_TIMEOUT,  DIAG_IMU_STUCK_DATA,  DIAG_IMU_IMPLAUSIBLE  },
+        { DIAG_MAG_NO_RESPONSE,  DIAG_MAG_TIMEOUT,  DIAG_MAG_STUCK_DATA,  DIAG_MAG_IMPLAUSIBLE  },
     };
 
     uint32  status = 0u;
@@ -164,39 +178,45 @@ uint32 PeriphDiag_update(void)
         PeriphDiag_State      *st = &s_periph[i];
         const PeriphDiag_Bits *bt = &s_bits[i];
 
-        cond = FALSE;
-        if (st->sawOk == FALSE) { cond = TRUE; }
-        pd_track(&st->silentTicks, cond);
-        pd_track(&st->implausibleTicks, st->sawImplausible);
+        /* An unfitted peripheral contributes no bits. Its counters are left
+         * alone rather than reset, so a device declared unfitted after it has
+         * been running keeps its history for inspection. */
+        if (st->fitted != FALSE)
+        {
+            cond = FALSE;
+            if (st->sawOk == FALSE) { cond = TRUE; }
+            pd_track(&st->silentTicks, cond);
+            pd_track(&st->implausibleTicks, st->sawImplausible);
 
-        if (st->everOk == FALSE)
-        {
-            /* Never answered since boot. Reported on its own rather than as a
-             * timeout: this is a wiring or addressing problem, not a device
-             * that failed in service. */
-            status |= bt->noResponse;
-        }
-        else if (st->silentTicks >= PD_TIMEOUT_TICKS)
-        {
-            status |= bt->timeout;
-        }
-        else
-        {
-            /* communicating */
-        }
+            if (st->everOk == FALSE)
+            {
+                /* Never answered since boot. Reported on its own rather than as
+                 * a timeout: this is a wiring or addressing problem, not a
+                 * device that failed in service. */
+                status |= bt->noResponse;
+            }
+            else if (st->silentTicks >= PD_TIMEOUT_TICKS)
+            {
+                status |= bt->timeout;
+            }
+            else
+            {
+                /* communicating */
+            }
 
-        if (st->frozenTicks >= PD_STUCK_TICKS)
-        {
-            status |= bt->stuck;
-        }
-        if (st->implausibleTicks >= PD_IMPLAUSIBLE_TICKS)
-        {
-            status |= bt->implausible;
-        }
+            if (st->frozenTicks >= PD_STUCK_TICKS)
+            {
+                status |= bt->stuck;
+            }
+            if (st->implausibleTicks >= PD_IMPLAUSIBLE_TICKS)
+            {
+                status |= bt->implausible;
+            }
 
-        /* Consume the per-window flags; the counters above carry the history. */
-        st->sawOk          = FALSE;
-        st->sawImplausible = FALSE;
+            /* Consume the per-window flags; the counters carry the history. */
+            st->sawOk          = FALSE;
+            st->sawImplausible = FALSE;
+        }
     }
 
     return status;
