@@ -45,8 +45,6 @@ static boolean                   s_spiReady = FALSE;
 static uint8                     s_spiMode = SPI_MODE_0;
 
 static void spi_initChannel(uint8 spiMode);
-static uint32                    s_spiOkCount = 0u;
-static uint32                    s_spiFailCount = 0u;
 
 /* The iLLD master finishes transfers in these three handlers; without them the
  * status never leaves "busy" and every transfer would hit the deadline.
@@ -59,9 +57,13 @@ void spiIsrTransmit(void);
 void spiIsrReceive(void);
 void spiIsrError(void);
 
+/* cppcheck-suppress-begin misra-c2012-17.3 ; deviation: IFX_INTERRUPT is an
+ * iLLD macro that emits the vector-table entry; the handlers themselves are
+ * prototyped immediately above. */
 IFX_INTERRUPT(spiIsrTransmit, 0, ISR_PRIORITY_QSPI0_TX);
 IFX_INTERRUPT(spiIsrReceive,  0, ISR_PRIORITY_QSPI0_RX);
 IFX_INTERRUPT(spiIsrError,    0, ISR_PRIORITY_QSPI0_ER);
+/* cppcheck-suppress-end misra-c2012-17.3 */
 
 /* cppcheck-suppress misra-c2012-8.7 ; deviation: referenced by the interrupt
  * vector table, not by C code; static would break the vector entry. */
@@ -176,7 +178,10 @@ boolean Spi_transfer(const uint8 *tx, uint8 *rx, uint16 len)
         /* A discarded read still needs somewhere to land: the iLLD driver
          * always moves the received items, so give it a sink rather than a
          * NULL pointer. */
-        static uint8 s_spiSink[32];
+        /* Block scope (MISRA 8.9): only this function touches them. */
+        static uint32 s_spiOkCount   = 0u;
+        static uint32 s_spiFailCount = 0u;
+        static uint8  s_spiSink[32];
         uint8       *dest = rx;
 
         if (dest == NULL_PTR)
@@ -207,16 +212,12 @@ boolean Spi_transfer(const uint8 *tx, uint8 *rx, uint16 len)
                 }
             }
         }
+
+        /* Counters separate a silent slave from a wedged master -- the
+         * distinction that cost two days on the I2C bus. */
+        if (ok != FALSE) { s_spiOkCount++; } else { s_spiFailCount++; }
     }
 
-    if (ok != FALSE)
-    {
-        s_spiOkCount++;
-    }
-    else
-    {
-        s_spiFailCount++;
-    }
     return ok;
 }
 
