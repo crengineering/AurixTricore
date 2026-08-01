@@ -21,7 +21,14 @@
 #include "I2c.h"
 #include "Bmp581.h"
 #include "Mmc5983.h"
+#include "Spi.h"
+#include "Icm42688.h"
+
+/* Temporary bring-up switch: 1 = drive P22.8/P22.7 as GPIO instead of starting
+ * the QSPI, to prove whether those pads can drive at all. Set back to 0. */
+#define SPI_PAD_TEST  (0)
 #include "Ahrs.h"
+#include "SysTime.h"
 #include "PeriphDiag.h"
 #include "EthStats.h"
 #include "CtrlReplay.h"     /* ASW replay harness; single BSW->ASW init
@@ -122,9 +129,109 @@ static void mmc5983DebugDump(void)
     }
 }
 
+/* One-time raw ICM-42688-P register dump at boot. Third sensor in a row with
+ * no device datasheet available (docs/ICM42688P.md 4 — the PDF is the EVB
+ * user guide), so this is again how the register assumptions meet silicon.
+ *
+ * WHO_AM_I must read 0x47. A 0x00 or 0xFF means nothing is coming back at all,
+ * and on this bus that points at the MRST pad mode or the level shifters
+ * before it points at the part. PWR_MGMT0 = 0x0F is the other one worth
+ * checking: leave it at its reset value and every axis reads zero forever
+ * while the bus looks perfectly healthy. */
+static void icm42688DebugDump(void)
+{
+    uint8 cfg[ICM42688_DUMP_CFG_LEN];
+    uint8 raw[14];
+
+    if (Icm42688_debugDump(cfg, raw) != FALSE)
+    {
+        uint8 i;
+        Uart_print("ICM42688 WHO/PWR/GYRO/ACCEL/INT=");
+        for (i = 0u; i < ICM42688_DUMP_CFG_LEN; i++)
+        {
+            uartHexByte(cfg[i]);
+            Uart_print(" ");
+        }
+        Uart_print(" burst(T,A,G)=");
+        for (i = 0u; i < 14u; i++)
+        {
+            uartHexByte(raw[i]);
+            Uart_print(" ");
+        }
+        Uart_println("");
+    }
+    else
+    {
+        Uart_println("ICM42688 dump failed - no response on QSPI0");
+    }
+}
+
+#if SPI_PAD_TEST
+/* Drive each Port 22 pin high then low as plain GPIO and read the pad back.
+ * A pad that drives reports hi=1/lo=0. A pad that cannot drive (owned by
+ * another function, or not actually this pin) reports whatever the external
+ * network imposes — for the SCLK/MOSI/CS lines that is the 1k/2k divider with
+ * the EVB's 10k pull-up, which sits at 0.5 V and reads back as 0. */
+static void padSelfTestPort(Ifx_P *port, const char *name,
+                            const uint8 *padPins, uint8 count)
+{
+    uint8 i;
+
+    Uart_print("PAD SELF-TEST ");
+    Uart_println(name);
+    for (i = 0u; i < count; i++)
+    {
+        const uint8 pin = padPins[i];
+        uint8       hi;
+        uint8       lo;
+
+        IfxPort_setPinModeOutput(port, pin, IfxPort_OutputMode_pushPull,
+                                 IfxPort_OutputIdx_general);
+        IfxPort_setPinPadDriver(port, pin, IfxPort_PadDriver_ttlSpeed1);
+
+        IfxPort_setPinHigh(port, pin);
+        IfxStm_waitTicks(&MODULE_STM0, 100000u);      /* 1 ms settle */
+        hi = (uint8)IfxPort_getPinState(port, pin);
+
+        IfxPort_setPinLow(port, pin);
+        IfxStm_waitTicks(&MODULE_STM0, 100000u);
+        lo = (uint8)IfxPort_getPinState(port, pin);
+
+        Uart_print("  pin ");
+        uartHexByte(pin);
+        Uart_print(" hi=");
+        uartHexByte(hi);
+        Uart_print(" lo=");
+        uartHexByte(lo);
+        Uart_println((hi == 1u) && (lo == 0u) ? "  DRIVES" : "  NOT DRIVING");
+
+        /* hand the pin back as an input so Spi_init() can claim it cleanly */
+        IfxPort_setPinMode(port, pin, IfxPort_Mode_inputNoPullDevice);
+    }
+}
+
+static void padSelfTest(void)
+{
+    /* Port 22: 4,5,6 are unwired and act as the control group. */
+    static const uint8 p22[] = { 4u, 5u, 6u, 7u, 8u, 9u, 10u, 11u };
+    /* Port 15: the candidate QSPI2 set (SCLK 3/6/8, MOSI 5/6, MISO 7, CS 2). */
+    static const uint8 p15[] = { 1u, 2u, 3u, 5u, 6u, 7u, 8u };
+
+    /* Port 20: QSPI0's other SCLK pins are P20.11 and P20.13 (the core-health
+     * LEDs D306/D308). The user has cleared using them, and keeping QSPI0
+     * turns a four-wire relocation into moving SCLK alone. */
+    static const uint8 p20[] = { 11u, 13u };
+
+    padSelfTestPort(&MODULE_P22, "P22.x", p22, (uint8)(sizeof(p22)));
+    padSelfTestPort(&MODULE_P15, "P15.x", p15, (uint8)(sizeof(p15)));
+    padSelfTestPort(&MODULE_P20, "P20.x (QSPI0 SCLK alternates)", p20, (uint8)(sizeof(p20)));
+}
+#endif  /* SPI_PAD_TEST */
+
 static void Task_LedToggle(void)
 {
     Led_toggle(&g_led);
+
 }
 
 static void Task_App10ms(void)
@@ -196,21 +303,67 @@ static void Task_Mag(void)
     }
 }
 
-/* Publish "no IMU fitted" once at start-up.
- *
- * The MPU-6050 came off the bus on 2026-07-31 and its replacement (ICM-42688-P
- * on QSPI0) is not here yet, so there is no Task_Imu to run. Without this the
- * IMU and attitude fields of the XCP block would simply never be written and
- * the GUI would show whatever the RAM powered up with. Writing them once says
- * the true thing instead: absent, zeroed, AHRS in AHRS_NO_SENSOR. */
-static void publishNoImu(void)
+static void Task_Imu(void)
 {
-    static const float32 zero3[3] = { 0.0f, 0.0f, 0.0f };
+    Icm42688_Sample sample = { { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 0.0f };
+    boolean         present;
+    static uint32   lastTicks = 0u;
+    uint32          nowTicks;
+    float32         dt;
 
-    Ahrs_init();
-    Ahrs_update(zero3, zero3, 0.0f, FALSE);   /* valid = FALSE -> AHRS_NO_SENSOR */
+    /* Called unconditionally, like the other sensor tasks: Icm42688_read()
+     * owns the presence state and uses these calls to probe for a reconnected
+     * sensor. */
+    present = Icm42688_read(&sample);
+
+    /* Measured dt, not the nominal 20 ms: the scheduler dispatches on a
+     * "period elapsed" test, so the real interval jitters and integrating the
+     * nominal value would bias the attitude. STM0 ticks are 10 ns. */
+    nowTicks  = SysTime_getTicks();
+    dt        = (float32)(nowTicks - lastTicks) * 1e-8f;
+    lastTicks = nowTicks;
+
+    /* AHRS first: it owns the gyro bias, and the rates published below are
+     * corrected with the value it measured at start-up. */
+    Ahrs_update(sample.acc, sample.gyro, dt, present);
     measurementsSetAttitude();
-    measurementsSetImu(FALSE, zero3, zero3, 0.0f);
+
+    {
+        float32 bias[3];
+        float32 gyrCorr[3];
+        uint8   i;
+
+        /* Publish the CORRECTED rate, not the raw one: a stationary board with
+         * an uncorrected gyro offset looks like it is slowly yawing. The bias
+         * stays visible separately as biasX/Y/Z, so the raw value is still
+         * recoverable as corrected + bias. */
+        Ahrs_getGyroBias(bias);
+        for (i = 0u; i < 3u; i++)
+        {
+            gyrCorr[i] = sample.gyro[i] - bias[i];
+        }
+        measurementsSetImu(present, sample.acc, gyrCorr, sample.tempC);
+
+        /* |a| must stay inside the configured +/-16 g full scale; a sustained
+         * 0 g means a dead element rather than free fall, which never lasts
+         * seconds on the bench. The liveness sum spans every axis, so it only
+         * freezes if the whole sample block stops updating -- exactly the
+         * failure that hid for days on the MPU-6050 while the bus and the
+         * presence flag both looked healthy. */
+        const float32 accMagSq = (sample.acc[0] * sample.acc[0])
+                               + (sample.acc[1] * sample.acc[1])
+                               + (sample.acc[2] * sample.acc[2]);
+        boolean plausible = FALSE;
+        if ((accMagSq > 0.0025f) && (accMagSq < 289.0f)
+            && (sample.tempC > -40.0f) && (sample.tempC < 105.0f))
+        {
+            plausible = TRUE;
+        }
+        const float32 liveness = sample.acc[0] + sample.acc[1] + sample.acc[2]
+                               + sample.gyro[0] + sample.gyro[1] + sample.gyro[2]
+                               + sample.tempC;
+        PeriphDiag_report(PERIPH_DIAG_IMU, present, plausible, liveness);
+    }
 }
 
 static void Task_Measure100ms(void)
@@ -252,6 +405,7 @@ int core0_main(void)
     Scheduler_addTask(&g_sched, Task_App10ms,   SCHED_MS(10u));
     (void)Scheduler_addTask(&g_sched, Task_Baro, SCHED_MS(20u));  /* 50 Hz barometer */
     (void)Scheduler_addTask(&g_sched, Task_Mag,  SCHED_MS(20u));  /* 50 Hz magnetometer */
+    (void)Scheduler_addTask(&g_sched, Task_Imu,  SCHED_MS(20u));  /* 50 Hz IMU (QSPI0) */
     Scheduler_addTask(&g_sched, Task_Measure100ms, SCHED_MS(100u));
 
     /* init persistent memory*/
@@ -301,9 +455,41 @@ int core0_main(void)
      * forever and leave the diagnostics permanently red over hardware that is
      * deliberately absent. */
     PeriphDiag_setFitted(PERIPH_DIAG_BARO, TRUE);
-    PeriphDiag_setFitted(PERIPH_DIAG_IMU,  FALSE);
+    PeriphDiag_setFitted(PERIPH_DIAG_IMU,  TRUE);
     PeriphDiag_setFitted(PERIPH_DIAG_MAG,  TRUE);
-    publishNoImu();
+
+    /* Flight IMU on its own bus: QSPI0, nothing shared with the I2C sensors.
+     * Brought up after them so a failure here cannot be confused with a
+     * problem on the shared bus. */
+#if SPI_PAD_TEST
+    padSelfTest();
+#endif
+
+    Spi_init();
+    if (Icm42688_init() != FALSE)
+    {
+        Uart_print("ICM-42688-P detected (WHO_AM_I 0x47) in SPI mode ");
+        uartHexByte(Spi_getMode());
+        Uart_println("");
+    }
+    else
+    {
+        uint8 who = 0u;
+
+        Uart_println("ICM-42688-P not found");
+        Spi_setMode(SPI_MODE_0);
+        (void)Icm42688_readWhoAmI(&who);
+        Uart_print("  WHO_AM_I mode0=");
+        uartHexByte(who);
+        who = 0u;
+        Spi_setMode(SPI_MODE_3);
+        (void)Icm42688_readWhoAmI(&who);
+        Uart_print("  mode3=");
+        uartHexByte(who);
+        Uart_println("");
+    }
+    icm42688DebugDump();
+    Ahrs_init();            /* starts the gyro-bias calibration - hold still */
 
     /* STM0 Comparator 0 als 1-ms-Tick für den lwIP-Stack scharf schalten
      * (ohne initCompare feuert updateLwIPStackISR nie -> keine TCP/ARP-Timer) */
@@ -337,7 +523,7 @@ int core0_main(void)
     CtrlReplay_init();
     EthStats_init();        /* MMC octet counters; after the MAC is up */
     Uart_println("Ethernet started");
-    Uart_println("No IMU fitted - attitude held at zero (AHRS_NO_SENSOR)");
+    Uart_println("AHRS calibrating gyro bias - keep the board still ~2 s");
 
     while (TRUE)
     {

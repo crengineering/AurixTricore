@@ -173,52 +173,52 @@ ASAP2_VERSION 1 61
       PHYS_UNIT "m"
     /end MEASUREMENT
 
-    /* IMU block. Nothing fitted since 2026-07-31 (the MPU-6050/GY-521 came off
-       with the BMP388); the fields are published as zero with ImuPresent = 0
-       until the ICM-42688-P lands on QSPI0. Layout unchanged. */
+    /* IMU block. ICM-42688-P on QSPI0 from firmware v1.16.0, replacing the
+       MPU-6050/GY-521 that came off I2C0 with the BMP388 on 2026-07-31.
+       Addresses and layout unchanged across both sensors. */
 
-    /begin MEASUREMENT ImuPresent "1 if an IMU answered at init, else 0 (no IMU fitted since 2026-07-31)"
+    /begin MEASUREMENT ImuPresent "1 if the ICM-42688-P answered at init, else 0"
       UBYTE NO_COMPU_METHOD 0 0 0 1
       ECU_ADDRESS 0x70030034
     /end MEASUREMENT
 
-    /begin MEASUREMENT ImuAccelX "IMU acceleration X"
+    /begin MEASUREMENT ImuAccelX "ICM-42688-P acceleration X"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -8 8
       ECU_ADDRESS 0x70030038
       PHYS_UNIT "g"
     /end MEASUREMENT
 
-    /begin MEASUREMENT ImuAccelY "IMU acceleration Y"
+    /begin MEASUREMENT ImuAccelY "ICM-42688-P acceleration Y"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -8 8
       ECU_ADDRESS 0x7003003C
       PHYS_UNIT "g"
     /end MEASUREMENT
 
-    /begin MEASUREMENT ImuAccelZ "IMU acceleration Z"
+    /begin MEASUREMENT ImuAccelZ "ICM-42688-P acceleration Z"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -8 8
       ECU_ADDRESS 0x70030040
       PHYS_UNIT "g"
     /end MEASUREMENT
 
-    /begin MEASUREMENT ImuGyroX "IMU angular rate X, bias corrected (raw = this + AhrsGyroBiasX)"
+    /begin MEASUREMENT ImuGyroX "ICM-42688-P angular rate X, bias corrected (raw = this + AhrsGyroBiasX)"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -2000 2000
       ECU_ADDRESS 0x70030044
       PHYS_UNIT "deg/s"
     /end MEASUREMENT
 
-    /begin MEASUREMENT ImuGyroY "IMU angular rate Y, bias corrected (raw = this + AhrsGyroBiasY)"
+    /begin MEASUREMENT ImuGyroY "ICM-42688-P angular rate Y, bias corrected (raw = this + AhrsGyroBiasY)"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -2000 2000
       ECU_ADDRESS 0x70030048
       PHYS_UNIT "deg/s"
     /end MEASUREMENT
 
-    /begin MEASUREMENT ImuGyroZ "IMU angular rate Z, bias corrected (raw = this + AhrsGyroBiasZ)"
+    /begin MEASUREMENT ImuGyroZ "ICM-42688-P angular rate Z, bias corrected (raw = this + AhrsGyroBiasZ)"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -2000 2000
       ECU_ADDRESS 0x7003004C
       PHYS_UNIT "deg/s"
     /end MEASUREMENT
 
-    /begin MEASUREMENT ImuTemperature "IMU die temperature"
+    /begin MEASUREMENT ImuTemperature "ICM-42688-P die temperature"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -40 85
       ECU_ADDRESS 0x70030050
       PHYS_UNIT "degC"
@@ -575,25 +575,25 @@ ASAP2_VERSION 1 61
       BIT_MASK 0x00040000
     /end MEASUREMENT
 
-    /begin MEASUREMENT Diag_ImuNoResponse "IMU slot: never answered since boot (suppressed while declared unfitted)"
+    /begin MEASUREMENT Diag_ImuNoResponse "ICM-42688-P never answered since boot: level shifters, CS, SPI mode or MRST pad"
       ULONG NO_COMPU_METHOD 0 0 0 1
       ECU_ADDRESS 0x70030024
       BIT_MASK 0x00080000
     /end MEASUREMENT
 
-    /begin MEASUREMENT Diag_ImuTimeout "IMU answered before and is now silent for > 1 s"
+    /begin MEASUREMENT Diag_ImuTimeout "ICM-42688-P answered before and is now silent for > 1 s"
       ULONG NO_COMPU_METHOD 0 0 0 1
       ECU_ADDRESS 0x70030024
       BIT_MASK 0x00100000
     /end MEASUREMENT
 
-    /begin MEASUREMENT Diag_ImuStuckData "IMU bus healthy but the sample block stopped changing for > 5 s"
+    /begin MEASUREMENT Diag_ImuStuckData "ICM-42688-P bus healthy but the sample block stopped changing for > 5 s"
       ULONG NO_COMPU_METHOD 0 0 0 1
       ECU_ADDRESS 0x70030024
       BIT_MASK 0x00200000
     /end MEASUREMENT
 
-    /begin MEASUREMENT Diag_ImuImplausible "IMU |a| outside 0.05..13 g or temperature outside -40..85 degC"
+    /begin MEASUREMENT Diag_ImuImplausible "ICM-42688-P |a| outside 0.05..17 g or temperature outside -40..85 degC"
       ULONG NO_COMPU_METHOD 0 0 0 1
       ECU_ADDRESS 0x70030024
       BIT_MASK 0x00400000

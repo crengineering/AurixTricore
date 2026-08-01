@@ -34,5 +34,8 @@
 #define ISR_PRIORITY_OS_TICK        99                          /* Define the timer interrupt priority              */
 #define ISR_PRIORITY_GETH_TX        100                         /* Define the Ethernet transmit interrupt priority  */
 #define ISR_PRIORITY_GETH_RX        101                         /* Define the Ethernet receive interrupt priority   */
+#define ISR_PRIORITY_QSPI0_TX       102                         /* QSPI0 master transmit (flight IMU, src/bsw/Spi.c) */
+#define ISR_PRIORITY_QSPI0_RX       103                         /* QSPI0 master receive                             */
+#define ISR_PRIORITY_QSPI0_ER       104                         /* QSPI0 master error                               */
 
 #endif
