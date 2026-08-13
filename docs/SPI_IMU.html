@@ -1,0 +1,783 @@
+<title>SPI to the flight IMU — AurixTricore</title>
+
+<style>
+  /* ---- tokens: light is the bare :root, dark redefines tokens only ---- */
+  :root {
+    --ground:      #eceef0;
+    --panel:       #f7f8f9;
+    --panel-2:     #e3e6e9;
+    --rule:        #ccd1d6;
+    --rule-soft:   #dde1e5;
+    --ink:         #14171a;
+    --ink-2:       #454c54;
+    --ink-3:       #6c757e;
+    --mcu:         #9a5400;   /* lines the TC399 drives  */
+    --mcu-soft:    #f0e0cc;
+    --imu:         #1a6480;   /* the line the IMU drives */
+    --imu-soft:    #d6e5ec;
+    --fault:       #9e2b2b;
+    --fault-soft:  #f0dada;
+    --ok:          #2f6b46;
+    --shadow:      0 1px 2px rgba(20,23,26,.07), 0 6px 18px -10px rgba(20,23,26,.18);
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+    --serif: Charter, "Bitstream Charter", "Iowan Old Style", Georgia, "Times New Roman", serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:     #131619;
+      --panel:      #1b1f23;
+      --panel-2:    #24292e;
+      --rule:       #333a41;
+      --rule-soft:  #262b31;
+      --ink:        #e5e8ea;
+      --ink-2:      #b3bac1;
+      --ink-3:      #869099;
+      --mcu:        #e0a054;
+      --mcu-soft:   #3a2c19;
+      --imu:        #74bcd8;
+      --imu-soft:   #17303a;
+      --fault:      #e8877f;
+      --fault-soft: #3a2020;
+      --ok:         #7dc79b;
+      --shadow:     0 1px 2px rgba(0,0,0,.4), 0 6px 18px -10px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:     #131619;
+    --panel:      #1b1f23;
+    --panel-2:    #24292e;
+    --rule:       #333a41;
+    --rule-soft:  #262b31;
+    --ink:        #e5e8ea;
+    --ink-2:      #b3bac1;
+    --ink-3:      #869099;
+    --mcu:        #e0a054;
+    --mcu-soft:   #3a2c19;
+    --imu:        #74bcd8;
+    --imu-soft:   #17303a;
+    --fault:      #e8877f;
+    --fault-soft: #3a2020;
+    --ok:         #7dc79b;
+    --shadow:     0 1px 2px rgba(0,0,0,.4), 0 6px 18px -10px rgba(0,0,0,.7);
+  }
+
+  /* ---- page ---- */
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 56px 24px 120px;
+    display: flex;
+    flex-direction: column;
+    gap: 46px;
+  }
+  .measure { max-width: 63ch; }
+
+  p { margin: 0 0 0.85em; }
+  p:last-child { margin-bottom: 0; }
+  a { color: var(--imu); }
+
+  /* ---- type ---- */
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  h1 {
+    font-family: var(--mono);
+    font-size: clamp(30px, 5.4vw, 46px);
+    font-weight: 700;
+    letter-spacing: -.035em;
+    line-height: 1.04;
+    text-wrap: balance;
+    margin: .28em 0 0;
+  }
+  h2 {
+    font-family: var(--mono);
+    font-size: 21px;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    line-height: 1.2;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h3 {
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: .01em;
+    margin: 0 0 .4em;
+  }
+  .standfirst {
+    font-size: 19px;
+    line-height: 1.55;
+    color: var(--ink-2);
+    max-width: 58ch;
+    margin-top: .9em;
+  }
+  code, .m { font-family: var(--mono); font-size: .86em; }
+  p code, li code, td code, th code, dd code, dt code {
+    background: var(--panel-2);
+    border-radius: 3px;
+    padding: .08em .34em;
+    white-space: nowrap;
+  }
+
+  /* ---- section scaffold ---- */
+  section { display: flex; flex-direction: column; gap: 18px; }
+  .sec-head { display: flex; flex-direction: column; gap: 6px; border-top: 2px solid var(--ink); padding-top: 12px; }
+
+  header.masthead { border-bottom: 1px solid var(--rule); padding-bottom: 34px; }
+
+  /* ---- panels ---- */
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--rule-soft);
+    border-radius: 4px;
+    box-shadow: var(--shadow);
+    padding: 20px 22px;
+    overflow-x: auto;
+  }
+
+  /* ---- key facts ---- */
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1px; background: var(--rule-soft); border: 1px solid var(--rule-soft); border-radius: 4px; overflow: hidden; }
+  .fact { background: var(--panel); padding: 13px 16px; display: flex; flex-direction: column; gap: 3px; }
+  .fact dt { font-family: var(--mono); font-size: 10.5px; letter-spacing: .13em; text-transform: uppercase; color: var(--ink-3); }
+  .fact dd { margin: 0; font-family: var(--mono); font-size: 14px; font-weight: 600; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+
+  /* ---- figures ---- */
+  figure { margin: 0; display: flex; flex-direction: column; gap: 10px; }
+  figure .frame { background: var(--panel); border: 1px solid var(--rule-soft); border-radius: 4px; padding: 18px 16px; overflow-x: auto; box-shadow: var(--shadow); }
+  figure svg { display: block; max-width: 100%; height: auto; margin: 0 auto; color: var(--ink); }
+  figcaption { font-size: 14.5px; line-height: 1.5; color: var(--ink-3); max-width: 62ch; }
+  figcaption b { color: var(--ink-2); font-weight: 600; }
+  .svg-box { fill: var(--panel-2); stroke: var(--rule); }
+  .svg-t { font-family: var(--mono); font-size: 12px; font-weight: 600; fill: currentColor; }
+  .svg-s { font-family: var(--mono); font-size: 10.5px; fill: var(--ink-3); }
+  .svg-l { font-family: var(--mono); font-size: 10.5px; fill: var(--ink-3); }
+  .svg-line { stroke: currentColor; stroke-width: 1.4; fill: none; }
+
+  /* ---- code ---- */
+  pre {
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.62;
+    background: var(--panel);
+    border: 1px solid var(--rule-soft);
+    border-left: 3px solid var(--rule);
+    border-radius: 4px;
+    padding: 15px 17px;
+    overflow-x: auto;
+    margin: 0;
+    box-shadow: var(--shadow);
+  }
+  pre .c { color: var(--ink-3); }
+  pre .k { color: var(--mcu); font-weight: 600; }
+  pre .f { color: var(--imu); }
+
+  /* ---- tables ---- */
+  .tbl-wrap { overflow-x: auto; border: 1px solid var(--rule-soft); border-radius: 4px; box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; background: var(--panel); font-size: 14px; }
+  th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  thead th { font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); background: var(--panel-2); border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: none; }
+  td.fn { font-family: var(--mono); font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+  td.hex { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.note { color: var(--ink-2); font-size: 14px; }
+
+  /* ---- ordered sequences (used only where order is real) ---- */
+  ol.seq { list-style: none; counter-reset: step; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+  ol.seq > li { counter-increment: step; display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start; }
+  ol.seq > li::before {
+    content: counter(step, decimal-leading-zero);
+    font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .04em;
+    color: var(--ink-3); background: var(--panel-2);
+    border-radius: 3px; padding: 4px 0; text-align: center;
+  }
+  ol.seq p { max-width: 58ch; }
+
+  ul.plain { margin: 0; padding-left: 1.15em; display: flex; flex-direction: column; gap: 8px; max-width: 60ch; }
+
+  /* ---- callout ---- */
+  .callout { border: 1px solid var(--rule); border-left: 3px solid var(--fault); background: var(--panel); border-radius: 4px; padding: 15px 18px; max-width: 66ch; }
+  .callout.neutral { border-left-color: var(--ink-3); }
+  .callout .tag { font-family: var(--mono); font-size: 10.5px; letter-spacing: .13em; text-transform: uppercase; color: var(--fault); display: block; margin-bottom: 6px; font-weight: 700; }
+  .callout.neutral .tag { color: var(--ink-3); }
+  .callout p { font-size: 15.5px; }
+
+  .chan { font-family: var(--mono); font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 3px; letter-spacing: .04em; white-space: nowrap; }
+  .chan.mcu { color: var(--mcu); background: var(--mcu-soft); }
+  .chan.imu { color: var(--imu); background: var(--imu-soft); }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 13.5px; color: var(--ink-3); }
+
+  footer { border-top: 1px solid var(--rule); padding-top: 18px; font-family: var(--mono); font-size: 12px; color: var(--ink-3); line-height: 1.7; }
+
+  :focus-visible { outline: 2px solid var(--imu); outline-offset: 2px; }
+  @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <div class="eyebrow">AurixTricore · BSW · QSPI0</div>
+    <h1>SPI to the flight IMU</h1>
+    <p class="standfirst">How <code>Task_Imu()</code> gets six axes out of an ICM-42688-P: the call chain from the 50&nbsp;Hz scheduler down to the QSPI0 shift register, the bytes that actually go on the wire, and the three interrupts that let a blocking API stay bounded.</p>
+  </header>
+
+  <section>
+    <dl class="facts">
+      <div class="fact"><dt>Module</dt><dd>QSPI0 master</dd></div>
+      <div class="fact"><dt>SCLK</dt><dd>P20.13</dd></div>
+      <div class="fact"><dt>MTSR · MOSI</dt><dd>P22.10</dd></div>
+      <div class="fact"><dt>MRST · MISO</dt><dd>P22.9</dd></div>
+      <div class="fact"><dt>CS</dt><dd>SLSO10 · P22.11</dd></div>
+      <div class="fact"><dt>Baud rate</dt><dd>1 MHz</dd></div>
+      <div class="fact"><dt>Framing</dt><dd>8 bit, MSB first</dd></div>
+      <div class="fact"><dt>Clock mode</dt><dd>0 or 3 (probed)</dd></div>
+      <div class="fact"><dt>Transport</dt><dd>3× ISR, no DMA</dd></div>
+      <div class="fact"><dt>Cadence</dt><dd>50 Hz · 15 B burst</dd></div>
+      <div class="fact"><dt>Bus time</dt><dd>≈120 µs / 0.6 %</dd></div>
+      <div class="fact"><dt>Deadline</dt><dd>10 ms per transfer</dd></div>
+    </dl>
+  </section>
+
+  <!-- ============================ 1. THE STACK ============================ -->
+  <section>
+    <div class="sec-head">
+      <div class="eyebrow">Layer 1</div>
+      <h2>Four files, one transfer</h2>
+    </div>
+    <div class="measure">
+      <p>Nothing in this path is clever, and that is the design. Each layer knows exactly one thing and hands the rest down: the task knows <em>when</em>, the device driver knows <em>which register</em>, the bus service knows <em>how long to wait</em>, and iLLD knows the QSPI0 register map. The one non-obvious piece is at the bottom — <code>IfxQspi_SpiMaster_exchange()</code> does not perform the transfer. It arms it and returns immediately; the bytes move under three interrupts, and <code>Spi_transfer()</code> stands there polling the channel status until they say they are done.</p>
+    </div>
+
+    <figure>
+      <div class="frame">
+        <svg viewBox="0 0 780 500" role="img" aria-label="Call chain from Task_Imu down through Icm42688_read, Icm42688_readRegs, Spi_transfer and IfxQspi_SpiMaster_exchange to the QSPI0 peripheral, with the three interrupt handlers returning completion by clearing the channel busy status that Spi_transfer polls.">
+          <defs>
+            <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+            </marker>
+            <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--imu)"/>
+            </marker>
+          </defs>
+
+          <!-- left column boxes -->
+          <g>
+            <rect class="svg-box" x="40" y="24"  width="300" height="50" rx="3"/>
+            <text class="svg-t" x="56" y="46">Task_Imu()</text>
+            <text class="svg-s" x="56" y="63">Cpu0_Main.c · scheduler slot, every 20 ms</text>
+
+            <rect class="svg-box" x="40" y="106" width="300" height="50" rx="3"/>
+            <text class="svg-t" x="56" y="128">Icm42688_read()</text>
+            <text class="svg-s" x="56" y="145">presence, scaling, hot-plug recovery</text>
+
+            <rect class="svg-box" x="40" y="188" width="300" height="50" rx="3"/>
+            <text class="svg-t" x="56" y="210">Icm42688_readRegs()</text>
+            <text class="svg-s" x="56" y="227">builds the frame, strips the turnaround</text>
+
+            <rect class="svg-box" x="40" y="270" width="300" height="50" rx="3"/>
+            <text class="svg-t" x="56" y="292">Spi_transfer()</text>
+            <text class="svg-s" x="56" y="309">Spi.c · owns the 10 ms deadline</text>
+
+            <rect class="svg-box" x="40" y="352" width="300" height="50" rx="3"/>
+            <text class="svg-t" x="56" y="374">IfxQspi_SpiMaster_exchange()</text>
+            <text class="svg-s" x="56" y="391">iLLD · arms the FIFO, returns at once</text>
+
+            <rect class="svg-box" x="40" y="434" width="300" height="50" rx="3"/>
+            <text class="svg-t" x="56" y="456">QSPI0 + SLSO10</text>
+            <text class="svg-s" x="56" y="473">silicon · shifts bits, asserts CS</text>
+          </g>
+
+          <!-- down arrows -->
+          <g class="svg-line" marker-end="url(#a1)">
+            <line x1="190" y1="74"  x2="190" y2="100"/>
+            <line x1="190" y1="156" x2="190" y2="182"/>
+            <line x1="190" y1="238" x2="190" y2="264"/>
+            <line x1="190" y1="320" x2="190" y2="346"/>
+            <line x1="190" y1="402" x2="190" y2="428"/>
+          </g>
+          <g class="svg-l">
+            <text x="200" y="92">&amp;sample</text>
+            <text x="200" y="174">reg 0x1D, len 14</text>
+            <text x="200" y="256">tx[15], rx[15]</text>
+            <text x="200" y="338">channel, tx, rx, len</text>
+            <text x="200" y="420">SLSO10 low, 8 bit</text>
+          </g>
+
+          <!-- ISR block -->
+          <rect x="470" y="434" width="270" height="50" rx="3" fill="var(--imu-soft)" stroke="var(--imu)"/>
+          <text class="svg-t" x="486" y="456" fill="var(--imu)">spiIsrTransmit / Receive / Error</text>
+          <text class="svg-s" x="486" y="473" fill="var(--imu)">Spi.c · prio 102 / 103 / 104, CPU0</text>
+
+          <!-- interrupt path: QSPI0 -> ISR -> back into Spi_transfer -->
+          <g fill="none" stroke="var(--imu)" stroke-width="1.6">
+            <line x1="340" y1="459" x2="464" y2="459" marker-end="url(#a2)"/>
+            <path d="M 605 434 L 605 295 L 346 295" marker-end="url(#a2)"/>
+          </g>
+          <g class="svg-l" fill="var(--imu)">
+            <text x="352" y="450">IRQ</text>
+            <text x="615" y="378">isrReceive()</text>
+            <text x="615" y="392">clears busy</text>
+            <text x="356" y="288">status</text>
+          </g>
+
+          <!-- poll self-loop -->
+          <path d="M 40 282 C 8 282, 8 312, 40 312" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="3 3" marker-end="url(#a1)"/>
+          <text class="svg-l" x="34" y="336" text-anchor="end">poll</text>
+        </svg>
+      </div>
+      <figcaption>The call goes straight down and returns straight up, but completion comes back sideways: <b>QSPI0 raises TX/RX/ER interrupts, the three handlers in <code>Spi.c</code> feed them to iLLD, and iLLD flips the channel out of <span class="m">busy</span></b> — which is the only thing <code>Spi_transfer()</code>'s poll loop is watching for. Delete those three handlers and every transfer would sit in the poll loop until the 10 ms deadline expired.</figcaption>
+    </figure>
+
+    <div class="measure">
+      <p>The handlers are three lines each and exist purely to route the vector to iLLD:</p>
+    </div>
+<pre><span class="c">/* cppcheck-suppress misra-c2012-17.3 ; IFX_INTERRUPT emits the vector entry */</span>
+<span class="f">IFX_INTERRUPT</span>(spiIsrTransmit, 0, ISR_PRIORITY_QSPI0_TX);
+<span class="f">IFX_INTERRUPT</span>(spiIsrReceive,  0, ISR_PRIORITY_QSPI0_RX);
+<span class="f">IFX_INTERRUPT</span>(spiIsrError,    0, ISR_PRIORITY_QSPI0_ER);
+
+<span class="k">void</span> <span class="f">spiIsrReceive</span>(<span class="k">void</span>) { <span class="f">IfxQspi_SpiMaster_isrReceive</span>(&amp;s_spiMaster); }</pre>
+    <div class="measure">
+      <p>They keep external linkage on purpose. The vector table references them from assembly, not from C, so making them <code>static</code> would leave the vector entries unresolved — hence the MISRA 8.7 deviation on each one rather than a fix.</p>
+    </div>
+  </section>
+
+  <!-- ============================ 2. THE WIRE ============================ -->
+  <section>
+    <div class="sec-head">
+      <div class="eyebrow">Layer 0</div>
+      <h2>The bus is not electrically symmetric</h2>
+    </div>
+    <div class="measure">
+      <p>Before any code matters: Port 22 sits in the TC399's 5&nbsp;V VEXT domain and the IMU's absolute maximum on any pin is VDDIO&nbsp;+&nbsp;0.3&nbsp;V, so the three lines the MCU drives are divided down <em>outside</em> the chip. Software cannot substitute for those resistors. The single line the IMU drives has the opposite problem — 3.3&nbsp;V into a pad whose default threshold is about 3.5&nbsp;V — and that one <em>is</em> fixed in software, in one field of the pin-set struct.</p>
+    </div>
+
+    <figure>
+      <div class="frame">
+        <svg viewBox="0 0 760 268" role="img" aria-label="Four wires between the TC399 and the ICM-42688-P evaluation board. SCLK, MOSI and CS run from the MCU through 1k/2k dividers; MISO runs from the IMU directly into a pad configured in TTL mode.">
+          <defs>
+            <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--mcu)"/>
+            </marker>
+            <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--imu)"/>
+            </marker>
+          </defs>
+
+          <rect class="svg-box" x="20" y="22" width="150" height="222" rx="3"/>
+          <text class="svg-t" x="95" y="48" text-anchor="middle">TC399</text>
+          <text class="svg-s" x="95" y="65" text-anchor="middle">QSPI0 · 5 V VEXT</text>
+
+          <rect class="svg-box" x="590" y="22" width="150" height="222" rx="3"/>
+          <text class="svg-t" x="665" y="48" text-anchor="middle">ICM-42688-P</text>
+          <text class="svg-s" x="665" y="65" text-anchor="middle">EVB · 3.3 V VDDIO</text>
+
+          <!-- three MCU-driven lines with divider glyph -->
+          <g stroke="var(--mcu)" stroke-width="1.6" fill="none">
+            <line x1="170" y1="104" x2="584" y2="104" marker-end="url(#a3)"/>
+            <line x1="170" y1="146" x2="584" y2="146" marker-end="url(#a3)"/>
+            <line x1="170" y1="188" x2="584" y2="188" marker-end="url(#a3)"/>
+          </g>
+          <!-- divider glyphs: series box + shunt to ground rail -->
+          <g stroke="var(--mcu)" stroke-width="1.4" fill="var(--panel)">
+            <rect x="330" y="97"  width="30" height="14"/>
+            <rect x="330" y="139" width="30" height="14"/>
+            <rect x="330" y="181" width="30" height="14"/>
+          </g>
+          <g stroke="var(--mcu)" stroke-width="1.4" fill="var(--panel)">
+            <line x1="392" y1="104" x2="392" y2="212"/>
+            <line x1="392" y1="146" x2="392" y2="212"/>
+            <line x1="392" y1="188" x2="392" y2="212"/>
+            <rect x="385" y="216" width="14" height="8" fill="var(--mcu)" stroke="none"/>
+          </g>
+          <g class="svg-l" fill="var(--mcu)" text-anchor="middle">
+            <text x="345" y="92">1k0</text>
+            <text x="345" y="134">1k0</text>
+            <text x="345" y="176">1k0</text>
+            <text x="392" y="240">2k0 to GND</text>
+          </g>
+
+          <!-- IMU-driven line -->
+          <line x1="584" y1="62" x2="176" y2="62" stroke="var(--imu)" stroke-width="1.6" marker-end="url(#a4)"/>
+
+          <g class="svg-t" text-anchor="start">
+            <text x="180" y="56" fill="var(--imu)">MRST · P22.9</text>
+            <text x="180" y="98" fill="var(--mcu)">SCLK · P20.13</text>
+            <text x="180" y="140" fill="var(--mcu)">MTSR · P22.10</text>
+            <text x="180" y="182" fill="var(--mcu)">SLSO10 · P22.11</text>
+          </g>
+          <g class="svg-l" text-anchor="end">
+            <text x="580" y="56" fill="var(--imu)">AP_SDO → CN1 20</text>
+            <text x="580" y="98" fill="var(--mcu)">AP_SCLK → CN1 16</text>
+            <text x="580" y="140" fill="var(--mcu)">AP_SDIO → CN1 18</text>
+            <text x="580" y="182" fill="var(--mcu)">AP_CS → CN1 4</text>
+          </g>
+          <text class="svg-l" x="380" y="42" text-anchor="middle" fill="var(--imu)">no divider — pad set to ttlSpeed1, VIH 2.0 V</text>
+        </svg>
+      </div>
+      <figcaption>
+        <span class="legend">
+          <span class="chan mcu">MCU drives</span> divided 5 V → 3.3 V in hardware
+          <span class="chan imu">IMU drives</span> undivided 3.3 V, pad threshold lowered in software
+        </span>
+      </figcaption>
+    </figure>
+
+<pre><span class="k">const</span> IfxQspi_SpiMaster_Pins pins =
+{
+    &amp;IfxQspi0_SCLK_P20_13_OUT, IfxPort_OutputMode_pushPull,
+    &amp;IfxQspi0_MTSR_P22_10_OUT, IfxPort_OutputMode_pushPull,
+    &amp;IfxQspi0_MRSTB_P22_9_IN,  IfxPort_InputMode_noPullDevice,
+    IfxPort_PadDriver_ttlSpeed1     <span class="c">/* &lt;- the whole reason MISO reads back */</span>
+};</pre>
+    <div class="measure">
+      <p>That last field is the failure that looks exactly like a dead part: clocks come out, CS asserts, every transfer reports success, and MISO reads a flat <code>0x00</code> forever. <code>I2c.c</code> uses the same trick for the 3.3&nbsp;V sensor bus.</p>
+    </div>
+    <div class="callout neutral">
+      <span class="tag">SCLK is P20.13, not P22.8</span>
+      <p>P22.7 and P22.8 are committed on this TriBoard — a pad self-test showed them stuck high when driven as plain GPIO with nothing attached. P20.13 is QSPI0's other usable SCLK output, and it used to be D308, CPU2's health LED, which is why <code>Cpu2_Main.c</code> no longer claims that pad. Note that the file-header comments in <code>Spi.h</code> and at the top of <code>Spi.c</code> still say P22.8 and P20.11 respectively; the pin-set struct above is what actually binds.</p>
+    </div>
+  </section>
+
+  <!-- ============================ 3. THE FRAME ============================ -->
+  <section>
+    <div class="sec-head">
+      <div class="eyebrow">Protocol</div>
+      <h2>What goes on the wire</h2>
+    </div>
+    <div class="measure">
+      <p>The device protocol is one rule wide: <b>byte 0 is the register address, and its MSB is the direction</b> — set for a read, clear for a write. Everything after that is payload. Because SPI is full duplex, a read still has to send something for every byte it wants back, so <code>Icm42688_readRegs()</code> sends zeros as filler; and because the slave needs the address byte before it can answer, the first byte coming <em>in</em> is turnaround garbage and gets dropped.</p>
+    </div>
+
+    <figure>
+      <div class="frame">
+        <svg viewBox="0 0 780 372" role="img" aria-label="Three SPI frames drawn as aligned byte cells. A register write is two bytes out with the received bytes discarded. A WHO_AM_I read is two bytes with the answer in the second received byte. The sample burst is fifteen bytes: one address byte plus fourteen filler bytes, returning temperature, accelerometer and gyroscope data.">
+          <defs>
+            <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+              <line x1="0" y1="0" x2="0" y2="6" stroke="var(--rule)" stroke-width="3"/>
+            </pattern>
+          </defs>
+
+          <!-- ---------- frame 1: write ---------- -->
+          <text class="svg-t" x="150" y="26">Icm42688_writeReg(0x4E, 0x0F)</text>
+          <g stroke="currentColor" stroke-width="1.2" fill="none">
+            <path d="M 150 44 L 150 36 L 230 36 L 230 44"/>
+          </g>
+          <text class="svg-l" x="240" y="40">CS low for the whole frame</text>
+          <g>
+            <rect class="svg-box" x="150" y="48" width="40" height="28"/>
+            <rect class="svg-box" x="190" y="48" width="40" height="28"/>
+            <text class="svg-t" x="170" y="67" text-anchor="middle">4E</text>
+            <text class="svg-t" x="210" y="67" text-anchor="middle">0F</text>
+            <rect x="150" y="76" width="80" height="28" fill="url(#hatch)" stroke="var(--rule)"/>
+          </g>
+          <text class="svg-l" x="240" y="67">addr, MSB=0 → write · value</text>
+          <text class="svg-l" x="240" y="95">rx = NULL → lands in s_spiSink[]</text>
+          <g class="svg-l" text-anchor="end">
+            <text x="144" y="67">MOSI</text>
+            <text x="144" y="95">MISO</text>
+          </g>
+
+          <!-- ---------- frame 2: WHO_AM_I ---------- -->
+          <text class="svg-t" x="150" y="146">Icm42688_readWhoAmI() — reg 0x75</text>
+          <g stroke="currentColor" stroke-width="1.2" fill="none">
+            <path d="M 150 164 L 150 156 L 230 156 L 230 164"/>
+          </g>
+          <g>
+            <rect class="svg-box" x="150" y="168" width="40" height="28"/>
+            <rect class="svg-box" x="190" y="168" width="40" height="28"/>
+            <text class="svg-t" x="170" y="187" text-anchor="middle">F5</text>
+            <text class="svg-t" x="210" y="187" text-anchor="middle">00</text>
+            <rect x="150" y="196" width="40" height="28" fill="url(#hatch)" stroke="var(--rule)"/>
+            <rect x="190" y="196" width="40" height="28" fill="var(--imu-soft)" stroke="var(--imu)"/>
+            <text class="svg-t" x="210" y="215" text-anchor="middle" fill="var(--imu)">47</text>
+          </g>
+          <text class="svg-l" x="240" y="187">0x75 | 0x80 → read · filler</text>
+          <text class="svg-l" x="240" y="215">rx[0] turnaround, discarded · rx[1] = data[0]</text>
+          <g class="svg-l" text-anchor="end">
+            <text x="144" y="187">MOSI</text>
+            <text x="144" y="215">MISO</text>
+          </g>
+
+          <!-- ---------- frame 3: burst ---------- -->
+          <text class="svg-t" x="150" y="266">Icm42688_read() — burst from 0x1D, 14 bytes</text>
+          <g stroke="currentColor" stroke-width="1.2" fill="none">
+            <path d="M 150 284 L 150 276 L 750 276 L 750 284"/>
+          </g>
+          <g>
+            <rect class="svg-box" x="150" y="288" width="40" height="28"/>
+            <text class="svg-t" x="170" y="307" text-anchor="middle">9D</text>
+            <rect x="190" y="288" width="560" height="28" class="svg-box"/>
+            <text class="svg-s" x="470" y="306" text-anchor="middle">14 × 00 filler — the master must clock for every byte it wants back</text>
+
+            <rect x="150" y="316" width="40" height="28" fill="url(#hatch)" stroke="var(--rule)"/>
+            <g fill="var(--imu-soft)" stroke="var(--imu)">
+              <rect x="190" y="316" width="80" height="28"/>
+              <rect x="270" y="316" width="240" height="28"/>
+              <rect x="510" y="316" width="240" height="28"/>
+            </g>
+            <g class="svg-t" fill="var(--imu)" text-anchor="middle">
+              <text x="230" y="335">TEMP</text>
+              <text x="390" y="335">ACCEL X · Y · Z</text>
+              <text x="630" y="335">GYRO X · Y · Z</text>
+            </g>
+          </g>
+          <g class="svg-l" text-anchor="end">
+            <text x="144" y="307">MOSI</text>
+            <text x="144" y="335">MISO</text>
+          </g>
+          <g class="svg-l" text-anchor="middle" fill="var(--ink-3)">
+            <text x="230" y="360">raw[0..1]</text>
+            <text x="390" y="360">raw[2..7]</text>
+            <text x="630" y="360">raw[8..13]</text>
+          </g>
+        </svg>
+      </div>
+      <figcaption>All three frames start the same way and are drawn on the same byte grid. <b>Hatched cells are received bytes with no meaning</b> — the write's entire return, and the turnaround byte at the head of every read. That single offset is why <code>readRegs()</code> copies <code>rx[i + 1]</code> into <code>data[i]</code>, and why the frame is always <code>len + 1</code> bytes long.</figcaption>
+    </figure>
+
+<pre><span class="k">static boolean</span> <span class="f">Icm42688_readRegs</span>(uint8 reg, uint8 *data, uint8 len)
+{
+    uint8 tx[1u + ICM42688_BURST_LEN];
+    uint8 rx[1u + ICM42688_BURST_LEN];
+    ...
+    <span class="k">for</span> (i = 0u; i &lt; (1u + len); i++) { tx[i] = 0u; }      <span class="c">/* filler   */</span>
+    tx[0] = (uint8)((reg &amp; 0x7Fu) | 0x80u);                <span class="c">/* addr | R */</span>
+
+    <span class="k">const</span> uint16 frameLen = (uint16)len + 1u;
+    ok = <span class="f">Spi_transfer</span>(tx, rx, frameLen);
+    <span class="k">if</span> (ok != FALSE)
+    {
+        <span class="k">for</span> (i = 0u; i &lt; len; i++) { data[i] = rx[i + 1u]; } <span class="c">/* drop turnaround */</span>
+    }
+}</pre>
+
+    <div class="measure">
+      <p>The 14 payload bytes are six signed 16-bit axes plus temperature, sent <em>high byte first</em> — unlike the MPU-6050 this board replaced. <code>Icm42688_be16()</code> reassembles each one into a <code>uint16</code> object before casting to <code>sint16</code>, because casting the composite shift expression directly would trip MISRA 10.8. Scaling is then a single multiply: full scale is fixed at ±16&nbsp;g and ±2000&nbsp;dps, so <span class="m">counts × (16.0f / 32768.0f)</span> gives g, with no compensation polynomial anywhere.</p>
+    </div>
+  </section>
+
+  <!-- ============================ 4. BRING-UP ============================ -->
+  <section>
+    <div class="sec-head">
+      <div class="eyebrow">Boot · runs once, before the scheduler</div>
+      <h2>Bring-up, in order</h2>
+    </div>
+    <ol class="seq">
+      <li><div>
+        <h3>Spi_init()</h3>
+        <p><code>IfxQspi_SpiMaster_initModuleConfig()</code> fills a config with iLLD defaults; the file overrides the three ISR priorities, sets <code>isrProvider = IfxSrc_Tos_cpu0</code> so the interrupts land on core 0, sets 1&nbsp;MHz, points <code>cfg.pins</code> at the pin set above, and disables DMA. <code>IfxQspi_SpiMaster_initModule()</code> then applies it and configures the pads.</p>
+      </div></li>
+      <li><div>
+        <h3>spi_initChannel(SPI_MODE_0)</h3>
+        <p>The channel carries the per-slave settings: baud rate, 8-bit data width, MSB first, clock polarity and phase, CS active low, and the SLSO pin. <code>channelId</code> is deliberately left unset — iLLD overrides it from the SLSO pin's <span class="m">slsoNr</span> whenever <code>sls.output.pin</code> is non-NULL, so <code>SLSO10</code> becomes channel 10 on its own. Setting it by hand would be silently ignored.</p>
+      </div></li>
+      <li><div>
+        <h3>Icm42688_init() → probe on mode 0</h3>
+        <p>Write <code>DEVICE_CONFIG = 0x01</code> (soft reset), wait 10&nbsp;ms, then read <code>WHO_AM_I</code>. That one transfer proves pins, pad modes, level shifting, CS, clock mode and driver all at once — which is why it is the bring-up gate.</p>
+      </div></li>
+      <li><div>
+        <h3>Fall back to mode 3 if it did not answer 0x47</h3>
+        <p>The part accepts clock mode 0 or 3 and the datasheet was not available to say which this board powers up expecting. <code>Spi_setMode(SPI_MODE_3)</code> re-runs <code>spi_initChannel()</code> only — the module stays up — and the probe repeats. Guessing wrong here is invisible without a scope: every transfer still "succeeds", and MISO reads flat <code>0x00</code> because the slave never recognised the address byte and never drove SDO.</p>
+      </div></li>
+      <li><div>
+        <h3>Wake, then configure</h3>
+        <p><code>PWR_MGMT0 = 0x0F</code> puts gyro and accel in low-noise mode; 10&nbsp;ms settle; then <code>GYRO_CONFIG0</code> and <code>ACCEL_CONFIG0</code> at <code>0x06</code> for 1&nbsp;kHz ODR at full scale. Order matters — the ranges apply to an already-running front end. Skip the wake write and every sample reads zero while the bus looks perfectly healthy.</p>
+      </div></li>
+      <li><div>
+        <h3>Icm42688_debugDump(), then Ahrs_init()</h3>
+        <p>Five configuration registers plus the 14-byte block, printed over UART. <code>WHO_AM_I = 0x47</code> makes everything below it meaningful; <code>PWR_MGMT0 = 0x00</code> means the part is still asleep. A gyro reading <code>0x8000</code> in this dump is normal — that is its power-on value and gyro start-up takes 30&nbsp;ms, so the accelerometer is valid before it is.</p>
+      </div></li>
+    </ol>
+  </section>
+
+  <!-- ============================ 5. THE 20 ms CYCLE ============================ -->
+  <section>
+    <div class="sec-head">
+      <div class="eyebrow">Steady state · 50 Hz</div>
+      <h2>One transfer, start to finish</h2>
+    </div>
+    <ol class="seq">
+      <li><div><p>The scheduler dispatches <code>Task_Imu()</code>. It calls <code>Icm42688_read()</code> unconditionally — even when the device is known absent — because that call is also the recovery probe.</p></div></li>
+      <li><div><p><code>Icm42688_readRegs(0x1D, raw, 14)</code> builds a 15-byte <code>tx[]</code>: <code>0x9D</code> then fourteen zeros.</p></div></li>
+      <li><div><p><code>Spi_transfer()</code> checks the channel is ready and the length fits, substitutes the static sink if <code>rx</code> is NULL, then calls <code>IfxQspi_SpiMaster_exchange()</code>, which arms the transfer and returns immediately.</p></div></li>
+      <li><div><p>QSPI0 pulls SLSO10 low and starts shifting. Each byte moved raises a TX or RX interrupt into <code>spiIsrTransmit</code>/<code>spiIsrReceive</code>, which hand it to iLLD to refill the FIFO and store the received byte.</p></div></li>
+      <li><div><p>Meanwhile <code>Spi_transfer()</code> spins on <code>IfxQspi_SpiMaster_getStatus()</code>, comparing STM0 ticks against a 10&nbsp;ms budget on every pass. At 1&nbsp;MHz the 15 bytes take about 120&nbsp;µs, so the deadline is roughly eighty times the real duration and only ever fires on a genuine fault.</p></div></li>
+      <li><div><p>The last RX interrupt clears <span class="m">busy</span>, the loop exits, CS releases, and <code>Spi_transfer()</code> returns TRUE after bumping <code>s_spiOkCount</code>.</p></div></li>
+      <li><div><p><code>Icm42688_read()</code> drops <code>rx[0]</code>, assembles seven big-endian words, scales them, and fills the sample. <code>Task_Imu()</code> measures the real <span class="m">dt</span> from <code>SysTime_getTicks()</code>, feeds <code>Ahrs_update()</code>, publishes the bias-corrected rates through <code>measurementsSetImu()</code>, and hands a plausibility verdict plus a liveness sum to <code>PeriphDiag_report()</code>.</p></div></li>
+    </ol>
+    <div class="measure">
+      <p>Total bus occupancy: about 120&nbsp;µs out of every 20&nbsp;ms, or 0.6&nbsp;% of CPU0 — and unlike the I2C sensors, that time is not shared with anything else, because the IMU is alone on QSPI0.</p>
+    </div>
+  </section>
+
+  <!-- ============================ 6. THE DEADLINE ============================ -->
+  <section>
+    <div class="sec-head">
+      <div class="eyebrow">The one rule this file exists to enforce</div>
+      <h2>Every wait is bounded</h2>
+    </div>
+    <div class="measure">
+      <p>iLLD ships its own wait helpers, and they spin unbounded. During the I2C bring-up that hung CPU0 forever — with both watchdogs disabled there was nothing left to recover it. So <code>Spi.c</code> does not use them. It polls the status itself against an STM0 deadline, and a transfer that does not finish in time fails and returns rather than never returning at all.</p>
+    </div>
+<pre>uint32 start = <span class="f">IfxStm_getLower</span>(&amp;MODULE_STM0);
+uint32 limit = (uint32)SPI_XFER_DEADLINE_MS * SPI_STM_TICKS_PER_MS;
+
+ok = TRUE;
+<span class="k">while</span> (<span class="f">IfxQspi_SpiMaster_getStatus</span>(&amp;s_spiImuChannel) == IfxQspi_Status_busy)
+{
+    <span class="k">if</span> ((<span class="f">IfxStm_getLower</span>(&amp;MODULE_STM0) - start) &gt; limit)   <span class="c">/* wrap-safe */</span>
+    {
+        ok = FALSE;
+        <span class="k">break</span>;
+    }
+}</pre>
+    <div class="measure">
+      <p>The subtraction is unsigned, so an STM rollover in the middle of a transfer produces a correct small difference rather than a huge one — the loop cannot be tricked into spinning forever by a timer wrap. Alongside it, <code>s_spiOkCount</code> and <code>s_spiFailCount</code> separate a silent slave from a wedged master, which is the distinction that cost two days on the I2C bus.</p>
+    </div>
+  </section>
+
+  <!-- ============================ 7. FAILURE ============================ -->
+  <section>
+    <div class="sec-head">
+      <div class="eyebrow">Resilience</div>
+      <h2>When it breaks</h2>
+    </div>
+    <div class="measure">
+      <p>A failed transfer does not just return FALSE and get retried at 50&nbsp;Hz forever. <code>Icm42688_read()</code> owns a presence flag, and losing the device flips it — which switches the function from reading to probing, at a much lower rate. Recovery is deliberately a <em>full</em> re-init, not a resumed read: a part that browned out comes back awake but unconfigured, so simply resuming the burst would return zeros indefinitely.</p>
+    </div>
+
+    <figure>
+      <div class="frame">
+        <svg viewBox="0 0 780 250" role="img" aria-label="State flow: while present, the burst read succeeds and publishes a sample; a failed transfer clears the presence flag; while absent, a counter reaches fifty calls, roughly one second, and issues a WHO_AM_I probe; a correct 0x47 answer triggers a full re-initialisation that restores the present state.">
+          <defs>
+            <marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+            </marker>
+            <marker id="a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fault)"/>
+            </marker>
+            <marker id="a7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ok)"/>
+            </marker>
+          </defs>
+
+          <rect x="24" y="40" width="180" height="52" rx="3" class="svg-box"/>
+          <text class="svg-t" x="114" y="62" text-anchor="middle">present = TRUE</text>
+          <text class="svg-s" x="114" y="79" text-anchor="middle">burst read every 20 ms</text>
+
+          <rect x="288" y="40" width="180" height="52" rx="3" fill="var(--fault-soft)" stroke="var(--fault)"/>
+          <text class="svg-t" x="378" y="62" text-anchor="middle" fill="var(--fault)">present = FALSE</text>
+          <text class="svg-s" x="378" y="79" text-anchor="middle" fill="var(--fault)">recovery = 0</text>
+
+          <rect x="552" y="40" width="204" height="52" rx="3" class="svg-box"/>
+          <text class="svg-t" x="654" y="62" text-anchor="middle">recovery++ each call</text>
+          <text class="svg-s" x="654" y="79" text-anchor="middle">50 calls ≈ 1 s</text>
+
+          <rect x="552" y="158" width="204" height="52" rx="3" class="svg-box"/>
+          <text class="svg-t" x="654" y="180" text-anchor="middle">readWhoAmI()</text>
+          <text class="svg-s" x="654" y="197" text-anchor="middle">single 2-byte frame</text>
+
+          <rect x="24" y="158" width="444" height="52" rx="3" fill="var(--imu-soft)" stroke="var(--imu)"/>
+          <text class="svg-t" x="246" y="180" text-anchor="middle" fill="var(--imu)">Icm42688_init() — reset · probe mode · wake · configure</text>
+          <text class="svg-s" x="246" y="197" text-anchor="middle" fill="var(--imu)">full bring-up, because a power-cycled part lost its configuration</text>
+
+          <g class="svg-line" marker-end="url(#a5)">
+            <path d="M 204 66 L 282 66" stroke="var(--fault)" marker-end="url(#a6)"/>
+            <line x1="468" y1="66" x2="546" y2="66"/>
+            <path d="M 654 92 L 654 152"/>
+            <path d="M 552 184 L 474 184" stroke="var(--ok)" marker-end="url(#a7)"/>
+            <path d="M 24 184 L 12 184 L 12 66 L 18 66" stroke="var(--ok)" marker-end="url(#a7)"/>
+          </g>
+
+          <g class="svg-l" text-anchor="middle">
+            <text x="243" y="56" fill="var(--fault)">Spi_transfer fails</text>
+            <text x="507" y="56">next call</text>
+            <text x="668" y="126" text-anchor="start">at 50</text>
+            <text x="513" y="174" fill="var(--ok)">= 0x47</text>
+            <text x="115" y="228" fill="var(--ok)">back in service</text>
+          </g>
+        </svg>
+      </div>
+      <figcaption>The presence flag is private to <code>Icm42688.c</code> — there is deliberately no <span class="m">isPresent()</span> accessor, so the recovery path stays reachable and the outside world learns about presence through <code>measurementsSetImu()</code> instead.</figcaption>
+    </figure>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>Symptom</th><th>What it usually means</th><th>Where it is caught</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="hex">WHO_AM_I = 0x00</td><td class="note">No data coming back at all — missing clock, missing MISO, wrong clock mode, or the TTL pad driver not applied. CS deasserted leaves SDO high-Z and the EVB's 100&nbsp;kΩ pulldown holds the line low, so a dead part and a dead wire look identical.</td><td class="note">boot dump, both modes printed</td></tr>
+          <tr><td class="hex">WHO_AM_I = 0xFF</td><td class="note">Same class of problem, opposite bias on the line.</td><td class="note">boot dump</td></tr>
+          <tr><td class="hex">PWR_MGMT0 = 0x00</td><td class="note">Part is still asleep; every axis will read exactly zero while the bus looks perfect.</td><td class="note">boot dump</td></tr>
+          <tr><td class="hex">Gyro = 0x8000</td><td class="note">Normal at boot — power-on value, gyro start-up is 30 ms.</td><td class="note">expected, not a fault</td></tr>
+          <tr><td class="hex">Transfer times out</td><td class="note">Genuine bus fault: 10 ms is ~80× the real transfer time.</td><td class="note"><span class="m">s_spiFailCount</span>, then presence drops</td></tr>
+          <tr><td class="hex">Values frozen</td><td class="note">Sample block stopped updating while the bus stayed healthy — the exact failure that hid for days on the MPU-6050.</td><td class="note"><span class="m">PeriphDiag</span> STUCK_DATA after 5 s</td></tr>
+          <tr><td class="hex">|a| implausible</td><td class="note">Outside 0.05–17 g, or die temperature outside −40…105 °C.</td><td class="note"><span class="m">PeriphDiag_report</span> plausibility</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================ 8. REFERENCE ============================ -->
+  <section>
+    <div class="sec-head">
+      <div class="eyebrow">Reference</div>
+      <h2>Every function in the path</h2>
+    </div>
+
+    <h3 style="font-family:var(--mono);color:var(--ink-3);letter-spacing:.12em;text-transform:uppercase;font-size:11px;">src/bsw/Spi.c — bus service</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Function</th><th>Called by</th><th>Does</th></tr></thead>
+        <tbody>
+          <tr><td class="fn">Spi_init()</td><td class="note">core0_main, once</td><td class="note">Configures QSPI0: pins, TTL pad driver, 1 MHz, ISR priorities on CPU0, DMA off. Then opens the IMU channel in mode 0.</td></tr>
+          <tr><td class="fn">spi_initChannel()</td><td class="note">Spi_init, Spi_setMode</td><td class="note">Static. Builds the channel config — baud, 8-bit MSB-first, polarity/phase, CS active low, SLSO10 — and sets <span class="m">s_spiReady</span> if iLLD accepts it.</td></tr>
+          <tr><td class="fn">Spi_setMode()</td><td class="note">Icm42688_init, boot diagnostics</td><td class="note">Re-opens the channel in mode 0 or 3 without touching the module.</td></tr>
+          <tr><td class="fn">Spi_getMode()</td><td class="note">boot UART print</td><td class="note">Reports which mode the probe settled on.</td></tr>
+          <tr><td class="fn">Spi_transfer()</td><td class="note">Icm42688 read/write helpers</td><td class="note">The workhorse. Validates, substitutes the 32-byte sink for a NULL <span class="m">rx</span>, calls <code>exchange()</code>, then polls status against the 10 ms deadline and counts the outcome.</td></tr>
+          <tr><td class="fn">spiIsrTransmit / Receive / Error</td><td class="note">interrupt vector table</td><td class="note">Forward the vector into iLLD. External linkage is required; MISRA 8.7 is deviated, not fixed.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="font-family:var(--mono);color:var(--ink-3);letter-spacing:.12em;text-transform:uppercase;font-size:11px;margin-top:8px;">src/bsw/Icm42688.c — device driver</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Function</th><th>Called by</th><th>Does</th></tr></thead>
+        <tbody>
+          <tr><td class="fn">Icm42688_readRegs()</td><td class="note">all reads</td><td class="note">Static. Builds <span class="m">addr|0x80</span> plus filler, transfers <span class="m">len + 1</span> bytes, shifts the turnaround byte off the result.</td></tr>
+          <tr><td class="fn">Icm42688_writeReg()</td><td class="note">init, probe</td><td class="note">Static. Two bytes out, received bytes discarded (<span class="m">rx = NULL</span>).</td></tr>
+          <tr><td class="fn">Icm42688_probe()</td><td class="note">Icm42688_init</td><td class="note">Static. Soft reset, 10 ms wait, WHO_AM_I must equal 0x47.</td></tr>
+          <tr><td class="fn">Icm42688_init()</td><td class="note">core0_main, recovery</td><td class="note">Probes mode 0 then mode 3, wakes the front end, sets ranges and ODR, sets the presence flag.</td></tr>
+          <tr><td class="fn">Icm42688_readWhoAmI()</td><td class="note">bring-up, recovery</td><td class="note">One-register read — the bring-up gate.</td></tr>
+          <tr><td class="fn">Icm42688_read()</td><td class="note">Task_Imu, 50 Hz</td><td class="note">Present: 14-byte burst, assemble, scale, fill the sample. Absent: count to 50 and re-probe.</td></tr>
+          <tr><td class="fn">Icm42688_be16()</td><td class="note">Icm42688_read</td><td class="note">Static. High byte first into a <span class="m">uint16</span> object, then cast to <span class="m">sint16</span> — object, not composite, for MISRA 10.8.</td></tr>
+          <tr><td class="fn">Icm42688_debugDump()</td><td class="note">core0_main, once</td><td class="note">Five config registers plus the raw block, for the UART boot dump.</td></tr>
+          <tr><td class="fn">Icm42688_delayMs()</td><td class="note">init, probe</td><td class="note">Static. <code>IfxStm_waitTicks</code> on STM0 — boot only, never in the 50 Hz path.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    src/bsw/Spi.{c,h} · src/bsw/Icm42688.{c,h} · src/bsw/Cpu0_Main.c<br>
+    docs/ICM42688P.md (wiring, jumpers, bring-up order) · docs/PINNING.md §2.2, §2.5 (pin SSoT)<br>
+    Hardware-validated 2026-08-01, firmware v1.17.0 — |a| = 0.998 g at rest, diagStatus = 0.
+  </footer>
+
+</div>
