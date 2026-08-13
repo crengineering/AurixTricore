@@ -4,6 +4,8 @@ Unit Tests for C Code
 import sys
 import subprocess
 from pathlib import Path
+import argparse
+import shutil
 
 # Paths in dependency to this script
 ROOT      = Path(__file__).resolve().parents[1]
@@ -19,6 +21,20 @@ def run(cmd):
     if proc.returncode != 0:
         sys.exit(proc.returncode)
 
+def parse_args():
+    """
+    parse arguments from function python script call
+    Currently supported:
+    --clean           : deletes Build-Folder
+    -R <testname>     : a choosen test will be executed
+    """
+    p = argparse.ArgumentParser(description="Build and run the C unit tests")
+    p.add_argument("--clean", action="store_true",
+                   help="Build-Verzeichnis vorher loeschen")
+    p.add_argument("-R", "--filter",
+                   help="only tests, which names fit a real test")
+    return p.parse_args()
+
 def main():
     """
         Step 1: Configuration
@@ -28,9 +44,22 @@ def main():
         Step 3: Execution
                 Runs tests
     """
+    # clean before building
+    args = parse_args()
+    if args.clean and BUILD_DIR.exists():
+        print(f"> removing {BUILD_DIR}", flush=True)
+        shutil.rmtree(BUILD_DIR)
+
+    # regular build 
     run(["cmake", "-S", TEST_DIR, "-B", BUILD_DIR, "-G", "Ninja"])
     run(["cmake", "--build", BUILD_DIR])
-    run(["ctest", "--test-dir", BUILD_DIR, "--output-on-failure"])
+
+    ctest_cmd = ["ctest", "--test-dir", BUILD_DIR, "--output-on-failure"]
+    if args.filter:
+        ctest_cmd += ["-R", args.filter]
+    run(ctest_cmd)
+
+    return 0
 
 if __name__ == "__main__":
     sys.exit(main())
