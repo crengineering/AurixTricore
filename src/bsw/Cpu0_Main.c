@@ -23,6 +23,7 @@
 #include "Mmc5983.h"
 #include "Spi.h"
 #include "Icm42688.h"
+#include "GnssM9N.h"
 
 /* Temporary bring-up switch: 1 = drive P22.8/P22.7 as GPIO instead of starting
  * the QSPI, to prove whether those pads can drive at all. Set back to 0. */
@@ -495,6 +496,9 @@ int core0_main(void)
     }
     icm42688DebugDump();
     Ahrs_init();            /* starts the gyro-bias calibration - hold still */
+
+    /* init of the GNSS*/
+    GnssM9N_init();
 
     /* STM0 Comparator 0 als 1-ms-Tick für den lwIP-Stack scharf schalten
      * (ohne initCompare feuert updateLwIPStackISR nie -> keine TCP/ARP-Timer) */

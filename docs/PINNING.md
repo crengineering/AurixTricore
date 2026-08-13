@@ -6,8 +6,9 @@
 
 - Actuator / DShot pins, driver & level shifting → §2.1 / §2.4 / §2.6 below
   (**DSHOT_PINS.md retired — folded in here**)
-- IMU / baro / mag / GNSS sensor pins & electrical → §2.2 / §2.3 / §2.5 below
+- IMU / baro / mag sensor pins & electrical → §2.2 / §2.3 / §2.5 below
   (**SENSORS.md retired — folded in here**)
+- GNSS (NEO‑M9N, UART) → §2.7
 - Diagnostics / cal blocks → `docs/DIAGNOSTICS.md`
 
 > **Maintenance rule:** when you add or move a peripheral pin, update *this* file in
@@ -169,7 +170,7 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 > part of the peripheral driver pool (wiring: **`docs/MPU6050.md`**); it has no
 > caller and carries a justified MISRA 8.7 deviation.
 
-### 2.3 Baro / Mag / GNSS — **I2C0**, shared bus (electrical: §2.5)
+### 2.3 Baro / Mag — **I2C0**, shared bus (electrical: §2.5)
 
 | Pin | Function | iLLD object | Header·pin | Status |
 |---|---|---|---|---|
@@ -201,8 +202,10 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 > BMP581, this board does not strap it for you. Address is fixed (no select
 > pin). **Hardware-unverified** at the time of writing.
 >
-> The flight IMU (ICM-42688-P, §2.2) and GNSS (NEO-M9N `0x42`) are still `plan`.
-> All addresses are distinct, so no collision.
+> **The GNSS left this bus on 2026-08-06** — the NEO-M9N moved to **UART/ASCLIN4,
+> see §2.7**. Its DDC address `0x42` is therefore no longer claimed. The flight IMU
+> (ICM-42688-P, §2.2) is on QSPI0. All remaining addresses are distinct, so no
+> collision.
 >
 > **Bus loading changed.** The old bus was held up by two breakouts in parallel
 > — CJMCU-388 ~10 kΩ and GY-521 ~4.7 kΩ, about **3.2 kΩ**. Removing both removed
@@ -242,11 +245,11 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 | IMU (interim) | MPU‑6050 (GY‑521) | **I2C0** (shared) | `I2c/I2c/IfxI2c_I2c.c` | — removed 2026‑07‑31 |
 | Baro | **BMP581** (Adafruit STEMMA QT) | **I2C0** (shared) | `I2c/I2c/IfxI2c_I2c.c` | 50 Hz |
 | Mag | **MMC5983MA** (MMC5983-B board) | **I2C0** (shared) | `I2c/I2c/IfxI2c_I2c.c` | 50 Hz |
-| GNSS | u‑blox NEO‑M9N | **I2C0** (DDC, shared) | (shared) | 10 Hz |
+| GNSS | u‑blox NEO‑M9N (SparkFun GPS‑15733) | **ASCLIN4** (UART) — §2.7 | `Asclin/Asc/IfxAsclin_Asc.c` | 10 Hz |
 
 **I2C addresses (no collisions):** BMP581 **`0x47`**/`0x46` and MMC5983MA
 **`0x30`** (both active), MPU‑6050 `0x68`/`0x69` and BMP388 `0x77`/`0x76`
-(both removed), NEO‑M9N `0x42` (planned).
+(both removed). NEO‑M9N `0x42` is **no longer claimed** — GNSS moved to UART (§2.7).
 
 **Bus pull-up budget** — track this on every device change, it has cost days
 before: BMP388+MPU‑6050 ≈ 3.2 kΩ → BMP581 alone 10 kΩ → **BMP581 + MMC5983MA
@@ -305,6 +308,74 @@ per line (5 V↔3.3 V, push‑pull) instead of open‑drain.
 **Why P22 + open‑drain, not the 3.3 V VFLEX pins.** The only native‑3.3 V pins are
 P11.13/14/15 (§5.1) — only **three**, and SLOW‑class; a 4‑channel driver can't fit and a 4th
 line would fall back to a 5 V pin anyway. So all four ESCs stay on P22 with open‑drain.
+
+### 2.7 GNSS (u‑blox NEO‑M9N) — **ASCLIN4** UART
+
+**Moved off I2C0/DDC to UART on 2026‑08‑06** (was §2.3, address `0x42`). Board is the
+**SparkFun GPS Breakout — NEO‑M9N, Chip Antenna (Qwiic), GPS‑15733**; datasheet in the
+sibling repo at `Quadrocopter/doc/GNSS.pdf`.
+
+| Pin | Function | iLLD object | Alt / RxSel | Header·pin | Status |
+|---|---|---|---|---|---|
+| P22.5 | ASCLIN4 TX → GNSS `RXI` | `IfxAsclin4_TX_P22_5_OUT` | `IfxPort_OutputIdx_alt2` | X702·11 | plan |
+| P22.6 | ASCLIN4 RX ← GNSS `TXO` | `IfxAsclin4_RXC_P22_6_IN` | `Ifx_RxSel_c` | X702·13 | plan |
+
+Verified against `IfxAsclin_PinMap_TC39xB_516.c:247` (TX) and `:105` (RX).
+
+**Why this pair.** Both pins were already in the free pool (§5) and both are
+**hardware‑proven good**: P22.4/5/6 were the unwired control group in the
+`padSelfTestPort()` run that exposed the dead P22.7/P22.8 (§2.2), so they are the one
+part of Port 22 known to drive and read back correctly. They are adjacent on the
+PERIPHERALS header, next to the existing sensor wiring. **ASCLIN4 is otherwise unused** —
+`src/bsw/Uart.c` owns ASCLIN0 (debug console) and ASCLIN6 is reserved for ESC telemetry
+(§2.4). The iLLD `Asclin` tree is already un‑excluded in `.cproject` (the console needs
+it), so unlike `Qspi`/`I2c` there is **no build‑exclusion step**.
+
+*Rejected alternatives:* ASCLIN7 (RXF = P22.4 free, but every TX pad taken — P22.1 is
+DShot M2, P23.3 is ESC telemetry); ASCLIN10 (RXC = P13.0 free, but TX would have to take
+P00.8 from the GPIO/PWM feature); ASCLIN3 / ASCLIN9 (free RX on P20.3 / P20.6, no free TX
+on X702).
+
+> ⚠️ **X702·11 / ·13 are from the unverified connector table** — the same numbering that
+> cost a day on the IMU (§2.2). **Wire by pin name.** Only P13.1/P13.2 = X702·29/·35 are
+> hardware‑proven.
+
+**Electrical — the TX line still needs the divider, the 5 V pin does not change that.**
+
+The breakout does have a **5 V PTH pin**, and it is the *preferred* supply here — but it
+is a **power input feeding an on‑board LDO** (SparkFun hookup guide: “there is a 5V pin on
+the PTH header … that is regulated down to 3.3V. Make sure that power you provide to this
+pin does *not* exceed 6 volts”). It is **not** a logic‑level selector and it does **not**
+make `RXI` 5 V‑tolerant. The module's I/O is referenced to its own post‑LDO VCC = 3.3 V:
+
+- NEO‑M9N data sheet **Table 10, Absolute maximum ratings** — *Input pin voltage* Vin, for
+  VCC > 3.1 V: **−0.5 … 3.6 V**. Driving VEXT 5 V into `RXI` is **1.4 V past absolute
+  maximum** → permanent‑damage territory, not merely marginal.
+- **Table 11, Operating conditions** — Vin range `0 … VCC`; **Vih = 0.8 × VCC = 2.64 V**;
+  **Voh = VCC − 0.4 = 2.9 V** min.
+
+Therefore, same asymmetric recipe as the SPI lines in §2.5:
+
+| Direction | Line | Treatment |
+|---|---|---|
+| MCU → GNSS | P22.5 → `RXI` | **1 kΩ / 2 kΩ divider** (bench‑verified 3.30 V; > Vih 2.64 V ✓) |
+| GNSS → MCU | `TXO` → P22.6 | **Direct**, pad in TTL mode `IfxPort_PadDriver_ttlSpeed1` (Voh 2.9 V > VIH 2.0 V ✓) |
+
+**Supply: feed the 5 V pin from VEXT (X702·77/79) and let the on‑board LDO make 3.3 V.**
+Preferred over feeding the `3V3` pin from X702·78/80: the local regulator gives the RF
+front‑end supply‑noise rejection from the board's digital rail, and ~31 mA tracking
+current is well inside it. Feeding `3V3` directly is *also* legal here (that is exactly
+what the Qwiic connector does — same net) — this is **not** the IMU JP1/JP2 situation,
+where back‑driving an LDO output would have forced VDD to 3.0 V. Either works; 5 V is the
+better choice for an RF receiver.
+
+**Protocol notes for the driver.** Default UART is **38400 8N1**, NMEA out. That is
+≈ 3.8 kB/s ≈ 4 bytes/ms against a 16‑byte ASCLIN RX FIFO, so draining it from the existing
+1 ms scheduler tick has ~4× headroom — no RX interrupt needed to bring it up, though one
+becomes necessary at higher baud or nav rate. ⚠️ **M9 (protocol 27+) configures via
+`UBX-CFG-VALSET`/`VALGET` key‑value messages.** The `UBX-CFG-PRT` / `UBX-CFG-MSG` messages
+shown in most tutorials and in the SparkFun Arduino library examples are **deprecated** on
+this generation — they may still be honoured, but do not build on them.
 
 ---
 
@@ -423,8 +494,6 @@ from here.
 | Pin | Header·pin | ATOM (safe) | TIM (safe) | Notes |
 |---|---|---|---|---|
 | P22.4 | 9 | ATOM5.0 | TIM3.0 | ASCLIN7 RXF |
-| P22.5 | 11 | ATOM5.1 | TIM3.1 | — |
-| P22.6 | 13 | ATOM5.2 | TIM2.6 / TIM3.2 | ASCLIN4 RXC |
 | P13.0 | 31 | ATOM2.5 | TIM2.5 / TIM3.5 | ASCLIN10 RXC |
 | P13.3 | 33 | ATOM2.0 | TIM2.0 / TIM3.0 | — |
 | P20.3 | 43 | ATOM1.4 ⚠ | TIM3.4 / TIM4.5 | ⚠ avoid ATOM0.4 (=M4); ASCLIN3 RXC |
@@ -438,14 +507,16 @@ from here.
 | P15.2 | 57 | ATOM1.5 / ATOM4.5 | TIM2.5 / TIM3.5 | footprint of USB‑UART alt (not assembled) |
 | P15.8 | 71 | ATOM4.1 | TIM0.2 / TIM1.2 | footprint of Eth MDINT (not assembled) |
 
-> **ATOM-Instanz P22.4/5/6:** die ATOM-Spalte oben nennt je *eine* gültige Instanz
-> (ATOM5.0/5.1/5.2 = TOUT130/131/132, verifiziert in `IfxGtm_PinMap_TC39xB_516.h`
-> Z.801/821/841). Dieselben Pads besitzen weitere gültige ATOM-Objekte —
-> ATOM1.4/ATOM3.4/ATOM3.5 (identisches TOUT, andere Instanz, Z.393/631/647).
-> Kein Widerspruch, nur alternative Routings.
+> **ATOM-Instanz P22.4:** die ATOM-Spalte oben nennt je *eine* gültige Instanz
+> (ATOM5.0 = TOUT130, verifiziert in `IfxGtm_PinMap_TC39xB_516.h` Z.801). Dasselbe Pad
+> besitzt weitere gültige ATOM-Objekte — ATOM1.4 (identisches TOUT, andere Instanz,
+> Z.393). Kein Widerspruch, nur alternative Routings. *(Galt urspünglich auch für
+> P22.5/P22.6 — ATOM5.1/5.2 = TOUT131/132, Z.821/841; beide sind seit 2026‑08‑06 an die
+> GNSS-UART vergeben, §2.7.)*
 
 **Removed from the pool** (were listed here, are NOT free): **P33.5** → LED D303 (§4);
-**P10.5** → HWCFG4 boot strap (§4 note — conditionally usable after reset only).
+**P10.5** → HWCFG4 boot strap (§4 note — conditionally usable after reset only);
+**P22.5 / P22.6** → GNSS UART, ASCLIN4 TX/RX (§2.7, taken 2026‑08‑06).
 
 ### 5.1 Free **VFLEX (3.3 V)** pins — native 3.3 V, no level shifter
 
@@ -514,3 +585,6 @@ Note: **P10.6 (X704·35) is HWCFG5** — boot strap, same caveat as P10.5.
 | P25.0/P25.1 on X701 (not X704); EBU signals | TriBoard Manual §6.2 Fig. 6‑1 |
 | HSCT footprint stubs (P20.0/P21.0‑5/P22.2/P22.3) | TriBoard Manual §3.13 (X201/X202, R250‑R254/R257‑R260) |
 | ATOM/TIM/ASCLIN/EVADC pin objects | `Libraries/iLLD/.../_PinMap/TC39xB/IfxGtm_PinMap_TC39xB_516.*`, `IfxAsclin_PinMap_TC39xB_516.h`; Data Sheet V1.2 (analog pin defs pp. 162‑165) |
+| GNSS pin pair P22.5/P22.6 = ASCLIN4 TX/RXC (§2.7) | `IfxAsclin_PinMap_TC39xB_516.c:247` (TX, alt2) and `:105` (RXC) |
+| NEO‑M9N Vin abs‑max 3.6 V, Vih 0.8×VCC, Voh VCC−0.4 (§2.7) | u‑blox **NEO‑M9N Data sheet UBX‑19014285 R02**, Table 10 (§4.1) + Table 11 (§4.2) |
+| SparkFun GPS‑15733 5 V PTH pin = LDO input, ≤ 6 V, not a logic level (§2.7) | SparkFun *GPS NEO‑M9N Hookup Guide*, Hardware Overview → Power; product page “3.3V VCC and I/O” (`Quadrocopter/doc/GNSS.pdf`) |
