@@ -12,7 +12,7 @@ void tearDown(void)
 
 void test_check_harness(void)
 {
-  /* All of these should pass */
+  /* Dummys for testing workflow */
   TEST_ASSERT_EQUAL(0, 0);
   TEST_ASSERT_EQUAL(1, 1);
   TEST_ASSERT_EQUAL(2, 2);
