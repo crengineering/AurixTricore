@@ -1,0 +1,24 @@
+name: UNITTESTS
+
+on:
+  push:
+    #branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unittests:
+    name: C Unit tests
+    runs-on: ubuntu-latest            # already includes ninja, therefore no installation needed
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S test -B test/build -G Ninja
+      - name: Build
+        run: cmake --build test/build
+      - name: Ctest
+        run: ctest --test-dir test/build --output-on-failure
