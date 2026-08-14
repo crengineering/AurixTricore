@@ -54,6 +54,8 @@ def parse_args():
                     "MinGW has no libasan), coverage=gcov")
     p.add_argument("--werror", action="store_true",
                    help="Warning as errors (for CI)")
+    p.add_argument("--build-only", action="store_true",
+                   help="only configure and build, no test execution")
     return p.parse_args()
 
 def main():
@@ -93,6 +95,9 @@ def main():
     # Step 2: Building
     cbuild_cmd = ["cmake", "--build", build_dir]
     run(cbuild_cmd)
+
+    if args.build_only:
+        return 0
 
     # Step 3: Execute tests. All tests without filter argument, otherwise only chosen tests
     ctest_cmd = ["ctest", "--test-dir", build_dir, "--output-on-failure"]
