@@ -10,7 +10,10 @@ import shutil
 # Paths in dependency to this script
 ROOT      = Path(__file__).resolve().parents[1]
 TEST_DIR  = ROOT / "test"
-BUILD_DIR = TEST_DIR / "build"
+
+# Flags for sanitizing
+SAN_FLAGS = ("-fsanitize=address,undefined -fno-sanitize-recover=all "
+             "-g -fno-omit-frame-pointer")
 
 def run(cmd):
     """
@@ -33,6 +36,8 @@ def parse_args():
                    help="Build-Verzeichnis vorher loeschen")
     p.add_argument("-R", "--filter",
                    help="only tests, which names fit a real test")
+    p.add_argument("--sanitize", action="store_true",
+                   help="SW build with AdressSanitizer and UBSan")
     return p.parse_args()
 
 def main():
@@ -44,17 +49,30 @@ def main():
         Step 3: Execution
                 Runs tests
     """
-    # clean before building
+    # parse arguments used for script call
     args = parse_args()
-    if args.clean and BUILD_DIR.exists():
-        print(f"> removing {BUILD_DIR}", flush=True)
-        shutil.rmtree(BUILD_DIR)
 
-    # regular build 
-    run(["cmake", "-S", TEST_DIR, "-B", BUILD_DIR, "-G", "Ninja"])
-    run(["cmake", "--build", BUILD_DIR])
+    # check if build for tests or sanitize
+    build_dir = TEST_DIR / ("build-asan" if args.sanitize else "build")
 
-    ctest_cmd = ["ctest", "--test-dir", BUILD_DIR, "--output-on-failure"]
+    # clean before building
+    if args.clean and build_dir.exists():
+        print(f"> removing {build_dir}", flush=True)
+        shutil.rmtree(build_dir)
+
+    # Step 1: Configuration
+    cmake_cmd = ["cmake", "-S", TEST_DIR, "-B", build_dir, "-G", "Ninja"]
+    if args.sanitize:
+        cmake_cmd += [f"-DCMAKE_C_FLAGS={SAN_FLAGS}",
+                      f"-DCMAKE_EXE_LINKER_FLAGS={SAN_FLAGS}"]
+    run(cmake_cmd)
+
+    # Step 2: Building
+    cbuild_cmd = ["cmake", "--build", build_dir]
+    run(cbuild_cmd)
+
+    # Step 3: Execute tests. All tests without filter argument, otherwise only chosen tests
+    ctest_cmd = ["ctest", "--test-dir", build_dir, "--output-on-failure"]
     if args.filter:
         ctest_cmd += ["-R", args.filter]
     run(ctest_cmd)

@@ -76,3 +76,4 @@ docs/*.pdf
 
 # test builds
 test/build
+test/build-asan

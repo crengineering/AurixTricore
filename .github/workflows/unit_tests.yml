@@ -6,7 +6,7 @@ on:
   pull_request:
   workflow_dispatch:
 
-concurrency:
+concurrency:  # if commits getting staged and pipeline is not finished, it stops and only runs on the newest commit.
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
@@ -17,4 +17,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run Unit tests
-        run: python3 tools/utest.py
+        run: python3 tools/utest.py --clean
+  sanitize:
+    name: Sanitizers (ASan + UBSan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Sanitize checks
+        run: python3 tools/utest.py --sanitize
