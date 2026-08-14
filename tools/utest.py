@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 import argparse
 import shutil
+import xml.etree.ElementTree as ET
 
 # Paths in dependency to this script
 ROOT      = Path(__file__).resolve().parents[1]
@@ -25,14 +26,40 @@ VARIANTS = {
     "coverage" : ("build_cov",  COV_FLAGS)
 }
 
-def run(cmd):
+def run(cmd, check=True):
     """
-        Terminal command as list of arguments -> independent from shell
+        Terminal command as list of arguments -> independent from shell.
+        check=False returns the exit code instead of aborting, so the caller
+        can still write a report before failing.
     """
     print(">", " ".join(str(c) for c in cmd), flush=True)
     proc = subprocess.run(cmd, cwd=ROOT)
-    if proc.returncode != 0:
+    if check and proc.returncode != 0:
         sys.exit(proc.returncode)
+    return proc.returncode
+
+def write_test_summary(xml_path, md_path):
+    """
+        Turn ctest's JUnit XML into a markdown table. The CI appends it to
+        $GITHUB_STEP_SUMMARY, so the result shows up on the run's front page.
+        A failed testcase carries a <failure> child and status="fail".
+    """
+    root   = ET.parse(xml_path).getroot()
+    total  = int(root.get("tests", 0))
+    failed = int(root.get("failures", 0))
+    icon   = "🔴" if failed else "🟢"
+
+    lines = ["# Unit tests", "",
+             f"{icon} **{total - failed}/{total}** passed", "",
+             "| Test | Status | Time |",
+             "|------|--------|------|"]
+    for tc in root.iter("testcase"):
+        ok = tc.find("failure") is None
+        lines.append(f"| `{tc.get('name')}` | "
+                     f"{'🟢 pass' if ok else '🔴 fail'} | "
+                     f"{float(tc.get('time', 0)):.2f}s |")
+
+    md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 def parse_args():
     """
@@ -99,11 +126,15 @@ def main():
     if args.build_only:
         return 0
 
-    # Step 3: Execute tests. All tests without filter argument, otherwise only chosen tests
-    ctest_cmd = ["ctest", "--test-dir", build_dir, "--output-on-failure"]
+    # Step 3: Execute tests. All tests without filter argument, otherwise only chosen tests.
+    # check=False: the summary below matters most when tests fail, so do not abort here.
+    junit = build_dir / "results.xml"
+    ctest_cmd = ["ctest", "--test-dir", build_dir, "--output-on-failure",
+                 "--output-junit", junit]
     if args.filter:
         ctest_cmd += ["-R", args.filter]
-    run(ctest_cmd)
+    rc = run(ctest_cmd, check=False)
+    write_test_summary(junit, build_dir / "test_summary.md")
 
     # Step 4: Publish Test Report
     if args.variant == "coverage":
@@ -115,7 +146,8 @@ def main():
              "--print-summary",
              "--markdown", report.parent / "summary.md",])
 
-    return 0
+    # propagate ctest's verdict: reports are written, now fail if tests failed
+    return rc
 
 if __name__ == "__main__":
     sys.exit(main())
