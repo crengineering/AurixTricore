@@ -43,7 +43,7 @@ jobs:
           name: coverage-report
           path: test/build_cov/coverage/
   warnings:
-    name: WError check
+    name: Warnings
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
