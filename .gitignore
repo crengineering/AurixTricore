@@ -75,5 +75,4 @@ __pycache__/
 docs/*.pdf
 
 # test builds
-test/build
-test/build-asan
+test/build*/

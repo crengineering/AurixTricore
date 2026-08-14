@@ -1,4 +1,4 @@
-name: UNITTESTS
+name: Unit tests
 
 on:
   push:
@@ -17,11 +17,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run Unit tests
-        run: python3 tools/utest.py --clean
+        run: python3 tools/utest.py
   sanitize:
     name: Sanitizers (ASan + UBSan)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Run Sanitize checks
-        run: python3 tools/utest.py --sanitize
+        run: python3 tools/utest.py --variant sanitize
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install gcovr
+        run: pip install gcovr
+      - name: Run coverage checks
+        run: python3 tools/utest.py --variant coverage
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: test/build_cov/coverage/

@@ -15,6 +15,16 @@ TEST_DIR  = ROOT / "test"
 SAN_FLAGS = ("-fsanitize=address,undefined -fno-sanitize-recover=all "
              "-g -fno-omit-frame-pointer")
 
+# Flags for coverage
+COV_FLAGS = ("--coverage -g -O0")
+
+# Flag dictionary
+VARIANTS = {
+    "plain"    : ("build", None),
+    "sanitize" : ("build_asan", SAN_FLAGS),
+    "coverage" : ("build_cov",  COV_FLAGS)
+}
+
 def run(cmd):
     """
         Terminal command as list of arguments -> independent from shell
@@ -36,8 +46,10 @@ def parse_args():
                    help="Build-Verzeichnis vorher loeschen")
     p.add_argument("-R", "--filter",
                    help="only tests, which names fit a real test")
-    p.add_argument("--sanitize", action="store_true",
-                   help="SW build with AdressSanitizer and UBSan")
+    p.add_argument("--variant", choices=["plain", "sanitize", "coverage"], 
+                   default="plain",
+                   help="plain=normal, sanitize=ASan+UBSan (only Linux/CI, "
+                    "MinGW has no libasan), coverage=gcov")
     return p.parse_args()
 
 def main():
@@ -48,12 +60,15 @@ def main():
                 CMake building with Ninja
         Step 3: Execution
                 Runs tests
+        Step 4: Test report
+                Only Coverage Report supported atm
     """
     # parse arguments used for script call
     args = parse_args()
 
-    # check if build for tests or sanitize
-    build_dir = TEST_DIR / ("build-asan" if args.sanitize else "build")
+    # check if build for tests/sanitize/coverage
+    build_name, flags = VARIANTS[args.variant]
+    build_dir = TEST_DIR / build_name
 
     # clean before building
     if args.clean and build_dir.exists():
@@ -62,9 +77,9 @@ def main():
 
     # Step 1: Configuration
     cmake_cmd = ["cmake", "-S", TEST_DIR, "-B", build_dir, "-G", "Ninja"]
-    if args.sanitize:
-        cmake_cmd += [f"-DCMAKE_C_FLAGS={SAN_FLAGS}",
-                      f"-DCMAKE_EXE_LINKER_FLAGS={SAN_FLAGS}"]
+    if flags:
+        cmake_cmd += [f"-DCMAKE_C_FLAGS={flags}",
+                      f"-DCMAKE_EXE_LINKER_FLAGS={flags}"]
     run(cmake_cmd)
 
     # Step 2: Building
@@ -76,6 +91,15 @@ def main():
     if args.filter:
         ctest_cmd += ["-R", args.filter]
     run(ctest_cmd)
+
+    # Step 4: Publish Test Report
+    if args.variant == "coverage":
+        report = build_dir / "coverage" / "index.html"
+        report.parent.mkdir(parents=True, exist_ok=True)
+        run(["gcovr", "--root", ROOT, build_dir,
+             "--filter", "src/bsw/",
+             "--html-details", report,
+             "--print-summary"])
 
     return 0
 
