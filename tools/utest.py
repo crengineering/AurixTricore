@@ -69,6 +69,8 @@ def parse_args():
     -R <testname>     : a choosen test will be executed
     --variant         : Test execution can be chosen between plain (regular), sanitize and coverage
     --werror          : Warning will be executed as errors inside CI
+    --build-only      : only builds
+    --opt             : compiler optimisation levels
     """
     p = argparse.ArgumentParser(description="Build and run the C unit tests")
     p.add_argument("--clean", action="store_true",
@@ -83,6 +85,8 @@ def parse_args():
                    help="Warning as errors (for CI)")
     p.add_argument("--build-only", action="store_true",
                    help="only configure and build, no test execution")
+    p.add_argument("--opt", default="",
+               help="optimisation level, e.g. -Og or -Os (default: compiler default)")
     return p.parse_args()
 
 def main():
@@ -110,6 +114,8 @@ def main():
 
     # Step 1: Configuration
     cflags = flags or ""
+    if args.opt:
+        cflags = (cflags + " " + args.opt).strip()
     if args.werror:
         cflags = (cflags + " -Werror").strip()
 

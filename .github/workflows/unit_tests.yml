@@ -19,10 +19,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run Unit tests
         run: python3 tools/utest.py
-      # always(): the summary matters most when tests fail, so it must survive
-      # the failing step above.
       - name: Tests into summary
-        if: always()
+        if: always()                  # always(): the summary matters most when tests fail, so it must survive
         run: cat test/build/test_summary.md >> "$GITHUB_STEP_SUMMARY"
   sanitize:
     name: Sanitizers (ASan + UBSan)
@@ -51,10 +49,14 @@ jobs:
           name: coverage-report
           path: test/build_cov/coverage/
   warnings:
-    name: Warnings
+    name: Warnings (${{ matrix.opt }})
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix: 
+        opt: [-Og, -Os]
     steps:
       - uses: actions/checkout@v4
       - name: Run WError
-        run: python3 tools/utest.py --werror --build-only
+        run: python3 tools/utest.py --werror --build-only --opt  ${{ matrix.opt }}
