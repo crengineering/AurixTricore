@@ -112,7 +112,8 @@ def main():
         run(["gcovr", "--root", ROOT, build_dir,
              "--filter", "src/bsw/",
              "--html-details", report,
-             "--print-summary"])
+             "--print-summary",
+             "--markdown", report.parent / "summary.md",])
 
     return 0
 
