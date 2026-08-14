@@ -51,10 +51,17 @@ void test_check_corestats_reset_init(void)
   }
 }
 
+void test_out_of_bounce(void)
+{
+  g_coreStats[CORESTATS_NUM_CORES].execUs       = 1u;
+  TEST_ASSERT_EQUAL(0, g_coreStats[CORESTATS_NUM_CORES].aliveCounter);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
     RUN_TEST(test_check_corestats_init);
     RUN_TEST(test_check_corestats_reset_init);
+    RUN_TEST(test_out_of_bounce);
     return UNITY_END();
 }
