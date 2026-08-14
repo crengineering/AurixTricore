@@ -40,6 +40,8 @@ def parse_args():
     Currently supported:
     --clean           : deletes Build-Folder
     -R <testname>     : a choosen test will be executed
+    --variant         : Test execution can be chosen between plain (regular), sanitize and coverage
+    --werror          : Warning will be executed as errors inside CI
     """
     p = argparse.ArgumentParser(description="Build and run the C unit tests")
     p.add_argument("--clean", action="store_true",
@@ -50,6 +52,8 @@ def parse_args():
                    default="plain",
                    help="plain=normal, sanitize=ASan+UBSan (only Linux/CI, "
                     "MinGW has no libasan), coverage=gcov")
+    p.add_argument("--werror", action="store_true",
+                   help="Warning as errors (for CI)")
     return p.parse_args()
 
 def main():
@@ -76,10 +80,14 @@ def main():
         shutil.rmtree(build_dir)
 
     # Step 1: Configuration
-    cmake_cmd = ["cmake", "-S", TEST_DIR, "-B", build_dir, "-G", "Ninja"]
-    if flags:
-        cmake_cmd += [f"-DCMAKE_C_FLAGS={flags}",
-                      f"-DCMAKE_EXE_LINKER_FLAGS={flags}"]
+    cflags = flags or ""
+    if args.werror:
+        cflags = (cflags + " -Werror").strip()
+
+    cmake_cmd = ["cmake", "-S", TEST_DIR, "-B", build_dir, "-G", "Ninja",
+                 f"-DCMAKE_C_FLAGS={cflags}",
+                 f"-DCMAKE_EXE_LINKER_FLAGS={flags or ''}"]
+    
     run(cmake_cmd)
 
     # Step 2: Building
