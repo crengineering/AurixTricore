@@ -14,6 +14,7 @@ jobs:
   unittests:
     name: C Unit tests
     runs-on: ubuntu-latest            # already includes ninja, therefore no installation needed
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Run Unit tests
@@ -21,6 +22,7 @@ jobs:
   sanitize:
     name: Sanitizers (ASan + UBSan)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Run Sanitize checks
@@ -28,6 +30,7 @@ jobs:
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Install gcovr
