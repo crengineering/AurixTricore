@@ -59,4 +59,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run WError
-        run: python3 tools/utest.py --werror --build-only --opt  ${{ matrix.opt }}
+        run: python3 tools/utest.py --werror --build-only --opt=${{ matrix.opt }}
