@@ -1,0 +1,62 @@
+name: Unit tests
+
+on:
+  push:
+    #branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:  # if commits getting staged and pipeline is not finished, it stops and only runs on the newest commit.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unittests:
+    name: C Unit tests
+    runs-on: ubuntu-latest            # already includes ninja, therefore no installation needed
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Unit tests
+        run: python3 tools/utest.py
+      - name: Tests into summary
+        if: always()                  # always(): the summary matters most when tests fail, so it must survive
+        run: cat test/build/test_summary.md >> "$GITHUB_STEP_SUMMARY"
+  sanitize:
+    name: Sanitizers (ASan + UBSan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Sanitize checks
+        run: python3 tools/utest.py --variant sanitize
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install gcovr
+        run: pip install gcovr
+      - name: Run coverage checks
+        run: python3 tools/utest.py --variant coverage
+      - name: Coverage into summary
+        if: always()
+        run: cat test/build_cov/coverage/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: test/build_cov/coverage/
+  warnings:
+    name: Warnings (${{ matrix.opt }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix: 
+        opt: [-Og, -Os]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run WError
+        run: python3 tools/utest.py --werror --build-only --opt=${{ matrix.opt }}

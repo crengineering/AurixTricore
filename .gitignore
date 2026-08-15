@@ -73,3 +73,6 @@ __pycache__/
 
 # Vendor datasheets/manuals - large binaries, fetch from Infineon instead
 docs/*.pdf
+
+# test builds
+test/build*/

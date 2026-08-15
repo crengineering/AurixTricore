@@ -28,6 +28,7 @@ jobs:
   misra:
     name: MISRA C (cppcheck misra addon)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 

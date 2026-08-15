@@ -37,6 +37,12 @@ boolean GnssM9N_init(void)
 
     status = IfxAsclin_Asc_initModule(&g_asclin, &config);
 
+    if (status == IfxAsclin_Status_noError)
+    {
+      IfxAsclin_flushRxFifo(&MODULE_ASCLIN4);
+      IfxAsclin_clearAllFlags(&MODULE_ASCLIN4);
+    }
+
     return (boolean) status;
 }
 
