@@ -7,11 +7,17 @@
 #include "IfxAsclin_Asc.h"
 #include "IfxAsclin.h"
 
+/* local used defines */
+#define GNSSM9N_BUFFER_SIZE 96u
+
+/* local used variables */
 static IfxAsclin_Asc             g_asclin;
+
 static char g_buffer[GNSSM9N_BUFFER_SIZE];
 static uint8 g_len = 0u;
+static uint16 g_errors = 0u;
 
-#define GNSSM9N_BUFFER_SIZE 96u
+
 
 /*
  * GNSS-NEO-M9N init function:
@@ -69,6 +75,19 @@ boolean GnssM9N_init(void)
  */
 void GnssM9N_poll (void){
 
+    /* check if a Fifo Overflow occured */
+    if (IfxAsclin_getRxFifoOverflowFlagStatus(&MODULE_ASCLIN4))
+    {
+        g_errors++;
+    }
+
+    /* check if a frame error is present */
+    if (IfxAsclin_getFrameErrorFlagStatus(&MODULE_ASCLIN4))
+    {
+        g_errors++;
+    }
+
+    /* check if any bytes in the Fifo buffer and empty it if available */
     while (IfxAsclin_getRxFifoFillLevel(&MODULE_ASCLIN4) > 0u){
         /* pop fifo buffer byte */
         char fifo_byte = (char)(IfxAsclin_readRxData(&MODULE_ASCLIN4) & 0xFFu);
