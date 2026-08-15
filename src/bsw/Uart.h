@@ -23,6 +23,9 @@ void Uart_println(const char *str);
  *  which floods the FIFO with 0x00 garbage frames. */
 #define UART_HEARTBEAT_BYTE 0x48u
 
+/* UART speed rates */
+#define UART_SPEED_38400 38400.0f
+
 /** Drain the hardware RX FIFO; TRUE if a heartbeat byte arrived since the
  *  last call. Used as link-alive detector for the UART-link diagnosis. */
 boolean Uart_heartbeatReceived(void);

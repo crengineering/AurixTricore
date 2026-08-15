@@ -413,6 +413,7 @@ int core0_main(void)
     (void)Scheduler_addTask(&g_sched, Task_Mag,  SCHED_MS(20u));  /* 50 Hz magnetometer */
     (void)Scheduler_addTask(&g_sched, Task_Imu,  SCHED_MS(20u));  /* 50 Hz IMU (QSPI0) */
     Scheduler_addTask(&g_sched, Task_Measure100ms, SCHED_MS(100u));
+    (void)Scheduler_addTask(&g_sched, GnssM9N_poll, SCHED_MS(1u));   /* drain GNSS RX FIFO */
 
     /* init persistent memory*/
     Nvm_bootInit();         /* load persistent parameters from DFLASH       */
@@ -498,7 +499,14 @@ int core0_main(void)
     Ahrs_init();            /* starts the gyro-bias calibration - hold still */
 
     /* init of the GNSS*/
-    GnssM9N_init();
+    if (GnssM9N_init())
+    {
+        Uart_println("Gnss-NEO-M9N init successfully");
+    }
+    else
+    {
+        Uart_println("Gnss-NEO-M9N init NOT successfully");
+    }
 
     /* STM0 Comparator 0 als 1-ms-Tick für den lwIP-Stack scharf schalten
      * (ohne initCompare feuert updateLwIPStackISR nie -> keine TCP/ARP-Timer) */

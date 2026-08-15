@@ -8,7 +8,20 @@
 #include "IfxAsclin.h"
 
 static IfxAsclin_Asc             g_asclin;
+static char g_buffer[GNSSM9N_BUFFER_SIZE];
+static uint8 g_len = 0u;
 
+#define GNSSM9N_BUFFER_SIZE 96u
+
+/*
+ * GNSS-NEO-M9N init function:
+ * Step 1: create config for ASC Interface on ASCLIN4: IfxAsclin_Asc_initModuleConfig
+ * Step 2: customize config for GNSS
+ * Step 3: Init the ASC Module                       : IfxAsclin_Asc_initModule
+ * Step 4: Clean the Buffer                          : IfxAsclin_flushRxFifo
+ * Step 5: Clear all Flags                           : IfxAsclin_clearAllFlags
+ * GNSS now writes it's bytes to iLLD Fifo Buffer
+ */
 boolean GnssM9N_init(void)
 {
     IfxAsclin_Status status = FALSE;
@@ -16,7 +29,7 @@ boolean GnssM9N_init(void)
     IfxAsclin_Asc_initModuleConfig(&config, &MODULE_ASCLIN4);
 
     /* set baudrate for GNSS*/
-    config.baudrate.baudrate =  38400.0f;
+    config.baudrate.baudrate =  UART_SPEED_38400;
 
     static const IfxAsclin_Asc_Pins pins = {
         .cts       = NULL_PTR,                        /* no hardware flow control */
@@ -46,14 +59,37 @@ boolean GnssM9N_init(void)
     return (boolean) status;
 }
 
-
+/*
+ * GNSS-NEO-M9N poll function
+ * Function to poll GNSS bytes from the iLLD Fifo Buffer and build the messages
+ * Information on the GNSS protocol:
+ * - Burst mode 1 Hz -> 3840 Bytes/s = 4 Bytes/ms
+ * - emitts GGA, GLL, GSA, GSV, RMC & VTG ~ 500-700 bytes every second
+ * - bytes end with <CR> (\r), <LF> (\n)
+ */
 void GnssM9N_poll (void){
 
-    char s[2];
-    s[1] = '\0';
     while (IfxAsclin_getRxFifoFillLevel(&MODULE_ASCLIN4) > 0u){
+        /* pop fifo buffer byte */
+        char fifo_byte = (char)(IfxAsclin_readRxData(&MODULE_ASCLIN4) & 0xFFu);
 
-        s[0] = (IfxAsclin_readRxData(&MODULE_ASCLIN4) & 0xFFu);
-        Uart_println(s);
+        if (fifo_byte == ('\r') || fifo_byte == ('\n'))
+        {
+            if (g_len > 0u)
+            {
+                g_buffer[g_len] = '\0';
+                Uart_println(g_buffer);
+                g_len = 0u;
+            }
+        }
+        else if (g_len < GNSSM9N_BUFFER_SIZE - 1u)
+        {
+            g_buffer[g_len] = fifo_byte;
+            g_len++;
+        }
+        else
+        {
+            g_len = 0u;
+        }
     }
 }
