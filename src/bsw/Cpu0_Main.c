@@ -515,7 +515,7 @@ int core0_main(void)
     Ahrs_init();            /* starts the gyro-bias calibration - hold still */
 
     /* init of the GNSS*/
-    if (GnssM9N_init())
+    if (GnssM9N_init() != FALSE)
     {
         Uart_println("Gnss-NEO-M9N init successfully");
     }

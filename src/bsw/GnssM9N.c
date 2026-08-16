@@ -80,14 +80,14 @@ boolean GnssM9N_init(void)
 void GnssM9N_poll (void){
     static uint16 local_counter = GNSS_NOT_PRESENT_TICKS;
     /* check if a Fifo Overflow occured */
-    if (IfxAsclin_getRxFifoOverflowFlagStatus(&MODULE_ASCLIN4))
+    if (IfxAsclin_getRxFifoOverflowFlagStatus(&MODULE_ASCLIN4) != FALSE)
     {
         IfxAsclin_clearRxFifoOverflowFlag(&MODULE_ASCLIN4);
         g_errors++;
     }
 
     /* check if a frame error is present */
-    if (IfxAsclin_getFrameErrorFlagStatus(&MODULE_ASCLIN4))
+    if (IfxAsclin_getFrameErrorFlagStatus(&MODULE_ASCLIN4) != FALSE)
     {
         IfxAsclin_clearFrameErrorFlag(&MODULE_ASCLIN4);
         g_errors++;
