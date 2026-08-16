@@ -232,7 +232,7 @@ void measurementsSetImu(boolean present, const float32 acc[3], const float32 gyr
 
 void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)
 {
-    if (present)
+    if (present != FALSE)
     {
         g_xcpData.gnssrxBytes   = sample_info.rxBytes;
         g_xcpData.gnsssentences = sample_info.sentences;

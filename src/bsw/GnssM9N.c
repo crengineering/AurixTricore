@@ -66,7 +66,7 @@ boolean GnssM9N_init(void)
       IfxAsclin_clearAllFlags(&MODULE_ASCLIN4);
     }
 
-    return (boolean) status;
+    return (status == IfxAsclin_Status_noError);
 }
 
 /*
