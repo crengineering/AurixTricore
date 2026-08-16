@@ -47,6 +47,18 @@ target_link_libraries(test_corestats PRIVATE unity test_common)
 add_test(NAME corestats COMMAND test_corestats)
 
 #[[
+GnssM9N
+]]
+add_executable(test_GnssM9N
+    test_GnssM9N.c
+    ${BSW}/GnssM9N.c
+    fakes/IfxAsclin.c
+    fakes/Uart.c
+)
+target_link_libraries(test_GnssM9N PRIVATE unity test_common)
+add_test(NAME GnssM9N COMMAND test_GnssM9N)
+
+#[[
 Scheduler: erster echter Fake. fakes/IfxStm.c ersetzt die Hardware-Uhr,
 sodass der Test die Zeit steuert - Voraussetzung fuer den Wraparound-Test.
 CoreStats.c muss mit, weil Scheduler_run() nach g_coreStats schreibt.

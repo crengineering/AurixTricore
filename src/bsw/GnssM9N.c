@@ -16,12 +16,12 @@
 static IfxAsclin_Asc  g_asclin;
 
 static char           g_buffer[GNSSM9N_BUFFER_SIZE];
-static uint8          g_len = 0u;
-static uint16         g_errors = 0u;
-static uint32         g_bytes;
-static uint32         g_sentences;
-static boolean        g_timeout = TRUE;
-
+static uint8          g_len         = 0u;
+static uint16         g_errors      = 0u;
+static uint32         g_bytes       = 0u;
+static uint32         g_sentences   = 0u;
+static boolean        g_timeout     = TRUE;
+static uint16         g_poll_counter = GNSS_NOT_PRESENT_TICKS;
 
 /*
  * GNSS-NEO-M9N init function:
@@ -34,7 +34,7 @@ static boolean        g_timeout = TRUE;
  */
 boolean GnssM9N_init(void)
 {
-    IfxAsclin_Status status = FALSE;
+    IfxAsclin_Status status = IfxAsclin_Status_configurationError;
     IfxAsclin_Asc_Config config;
     IfxAsclin_Asc_initModuleConfig(&config, &MODULE_ASCLIN4);
 
@@ -62,8 +62,17 @@ boolean GnssM9N_init(void)
 
     if (status == IfxAsclin_Status_noError)
     {
+      /* hardware reset on silicon */
       IfxAsclin_flushRxFifo(&MODULE_ASCLIN4);
       IfxAsclin_clearAllFlags(&MODULE_ASCLIN4);
+
+      /* software reset */
+      g_len          = 0u;
+      g_errors       = 0u;
+      g_bytes        = 0u;
+      g_sentences    = 0u;
+      g_timeout      = TRUE;
+      g_poll_counter = GNSS_NOT_PRESENT_TICKS;
     }
 
     return (status == IfxAsclin_Status_noError);
@@ -78,7 +87,6 @@ boolean GnssM9N_init(void)
  * - bytes end with <CR> (\r), <LF> (\n)
  */
 void GnssM9N_poll (void){
-    static uint16 local_counter = GNSS_NOT_PRESENT_TICKS;
     /* check if a Fifo Overflow occured */
     if (IfxAsclin_getRxFifoOverflowFlagStatus(&MODULE_ASCLIN4) != FALSE)
     {
@@ -118,17 +126,17 @@ void GnssM9N_poll (void){
         {
             g_len = 0u;
         }
-        local_counter = 0u;
+        g_poll_counter = 0u;
     }
 
-    if (local_counter >= GNSS_NOT_PRESENT_TICKS)
+    if (g_poll_counter >= GNSS_NOT_PRESENT_TICKS)
     {
         g_timeout = TRUE;
     }
     else
     {
         g_timeout = FALSE;
-        local_counter ++;
+        g_poll_counter ++;
     }
 }
 
@@ -151,5 +159,3 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
 
     return status;
 }
-
-
