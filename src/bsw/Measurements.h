@@ -2,6 +2,7 @@
 #define MEASUREMENTS_H_
 
 #include "Ifx_Types.h"
+#include "GnssM9N.h"
 
 /* Live measurement block read by XCP masters (pyXCP, AurixGUI) via
  * SHORT_UPLOAD. Pinned to a fixed address so clients do not need the map
@@ -155,6 +156,13 @@ typedef struct
     float32 magZ;
     float32 magFieldG;
     float32 magHeadingDeg;
+
+    /* gnss- see GnssM9N.h */
+    uint32  gnssrxBytes;
+    uint32  gnsssentences;
+    uint16  gnsserrors;
+    uint8   gnssfixType;
+    uint8   gnssnumSats;
 } Xcp_Data;
 
 void measurementsInit(void);    /* DTS + DTSC + EVR monitor init (CPU0)  */
@@ -182,5 +190,10 @@ void measurementsSetAttitude(void);
 /* Publish per-core execution time and Ethernet utilisation. Called from the
  * 100 ms task on CPU0; reads the other cores' slots in g_coreStats. */
 void measurementsSetSystemLoad(void);
+
+/*
+ * Publish the latest gnss sample into the XCP block. Called by the measurement task
+ */
+void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info);
 
 #endif /* MEASUREMENTS_H_ */

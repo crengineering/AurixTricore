@@ -90,6 +90,10 @@ typedef struct
 #define DIAG_MAG_TIMEOUT        0x01000000u     /* bit 24                    */
 #define DIAG_MAG_STUCK_DATA     0x02000000u     /* bit 25                    */
 #define DIAG_MAG_IMPLAUSIBLE    0x04000000u     /* bit 26                    */
+#define DIAG_GNSS_NO_RESPONSE   0x08000000u     /* bit 27                    */
+#define DIAG_GNSS_TIMEOUT       0x10000000u     /* bit 28                    */
+#define DIAG_GNSS_STUCK_DATA    0x20000000u     /* bit 29                    */
+#define DIAG_GNSS_IMPLAUSIBLE   0x40000000u     /* bit 30                    */
 
 /* ⚠️ Bits 27-30 are the LAST four free bits: room for exactly ONE more
  * peripheral in this scheme. Still to come are the GNSS (NEO-M9N), the flight

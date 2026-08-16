@@ -43,6 +43,7 @@ typedef enum
     PERIPH_DIAG_BARO = 0,   /**< BMP581 barometer,     I2C0 0x47 */
     PERIPH_DIAG_IMU  = 1,   /**< IMU slot — nothing fitted since 2026-07-31 */
     PERIPH_DIAG_MAG  = 2,   /**< MMC5983MA magnetometer, I2C0 0x30 */
+    PERIPH_DIAG_GNSS = 3,
     PERIPH_DIAG_COUNT
 } PeriphDiag_Id;
 

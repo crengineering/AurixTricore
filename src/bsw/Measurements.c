@@ -76,6 +76,11 @@ void measurementsInit(void)
     g_xcpData.gyroY       = 0.0f;
     g_xcpData.gyroZ       = 0.0f;
     g_xcpData.imuTempC    = 0.0f;
+    g_xcpData.gnssrxBytes   = 0u;
+    g_xcpData.gnsssentences = 0u;
+    g_xcpData.gnsserrors    = 0u;
+    g_xcpData.gnssfixType   = 0u;
+    g_xcpData.gnssnumSats   = 0u;
 
     {
         uint8 i;
@@ -222,6 +227,26 @@ void measurementsSetImu(boolean present, const float32 acc[3], const float32 gyr
         g_xcpData.gyroY      = 0.0f;
         g_xcpData.gyroZ      = 0.0f;
         g_xcpData.imuTempC   = 0.0f;
+    }
+}
+
+void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)
+{
+    if (present)
+    {
+        g_xcpData.gnssrxBytes   = sample_info.rxBytes;
+        g_xcpData.gnsssentences = sample_info.sentences;
+        g_xcpData.gnsserrors    = sample_info.errors;
+        g_xcpData.gnssfixType   = sample_info.fixType;
+        g_xcpData.gnssnumSats   = sample_info.numSats;
+    }
+    else
+    {
+       g_xcpData.gnssrxBytes   = 0u;
+       g_xcpData.gnsssentences = 0u;
+       g_xcpData.gnsserrors    = 0u;
+       g_xcpData.gnssfixType   = 0u;
+       g_xcpData.gnssnumSats   = 0u;
     }
 }
 

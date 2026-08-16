@@ -8,15 +8,19 @@
 #include "IfxAsclin.h"
 
 /* local used defines */
-#define GNSSM9N_BUFFER_SIZE 96u
-
+#define GNSSM9N_BUFFER_SIZE    96u
+#define GNSS_POLL_PERIOD_MS    1u       /* must match the task calling GnssM9N_poll */
+#define GNSS_TIMEOUT_MS        2000u    /* > the ~850 ms gap between 1 Hz bursts */
+#define GNSS_NOT_PRESENT_TICKS (GNSS_TIMEOUT_MS / GNSS_POLL_PERIOD_MS)
 /* local used variables */
-static IfxAsclin_Asc             g_asclin;
+static IfxAsclin_Asc  g_asclin;
 
-static char g_buffer[GNSSM9N_BUFFER_SIZE];
-static uint8 g_len = 0u;
-static uint16 g_errors = 0u;
-
+static char           g_buffer[GNSSM9N_BUFFER_SIZE];
+static uint8          g_len = 0u;
+static uint16         g_errors = 0u;
+static uint32         g_bytes;
+static uint32         g_sentences;
+static boolean        g_timeout = TRUE;
 
 
 /*
@@ -26,7 +30,7 @@ static uint16 g_errors = 0u;
  * Step 3: Init the ASC Module                       : IfxAsclin_Asc_initModule
  * Step 4: Clean the Buffer                          : IfxAsclin_flushRxFifo
  * Step 5: Clear all Flags                           : IfxAsclin_clearAllFlags
- * GNSS now writes it's bytes to iLLD Fifo Buffer
+ * GNSS now writes it's bytes to Asclin hardware FIFO Buffer
  */
 boolean GnssM9N_init(void)
 {
@@ -67,23 +71,25 @@ boolean GnssM9N_init(void)
 
 /*
  * GNSS-NEO-M9N poll function
- * Function to poll GNSS bytes from the iLLD Fifo Buffer and build the messages
+ * Function to poll GNSS bytes from the Asclin hardware FIFO Buffer and build the messages
  * Information on the GNSS protocol:
  * - Burst mode 1 Hz -> 3840 Bytes/s = 4 Bytes/ms
  * - emitts GGA, GLL, GSA, GSV, RMC & VTG ~ 500-700 bytes every second
  * - bytes end with <CR> (\r), <LF> (\n)
  */
 void GnssM9N_poll (void){
-
+    static uint16 local_counter = GNSS_NOT_PRESENT_TICKS;
     /* check if a Fifo Overflow occured */
     if (IfxAsclin_getRxFifoOverflowFlagStatus(&MODULE_ASCLIN4))
     {
+        IfxAsclin_clearRxFifoOverflowFlag(&MODULE_ASCLIN4);
         g_errors++;
     }
 
     /* check if a frame error is present */
     if (IfxAsclin_getFrameErrorFlagStatus(&MODULE_ASCLIN4))
     {
+        IfxAsclin_clearFrameErrorFlag(&MODULE_ASCLIN4);
         g_errors++;
     }
 
@@ -91,7 +97,7 @@ void GnssM9N_poll (void){
     while (IfxAsclin_getRxFifoFillLevel(&MODULE_ASCLIN4) > 0u){
         /* pop fifo buffer byte */
         char fifo_byte = (char)(IfxAsclin_readRxData(&MODULE_ASCLIN4) & 0xFFu);
-
+        g_bytes++;
         if (fifo_byte == ('\r') || fifo_byte == ('\n'))
         {
             if (g_len > 0u)
@@ -99,16 +105,51 @@ void GnssM9N_poll (void){
                 g_buffer[g_len] = '\0';
                 Uart_println(g_buffer);
                 g_len = 0u;
+                g_sentences++;
             }
         }
         else if (g_len < GNSSM9N_BUFFER_SIZE - 1u)
         {
             g_buffer[g_len] = fifo_byte;
             g_len++;
+
         }
         else
         {
             g_len = 0u;
         }
+        local_counter = 0u;
+    }
+
+    if (local_counter >= GNSS_NOT_PRESENT_TICKS)
+    {
+        g_timeout = TRUE;
+    }
+    else
+    {
+        g_timeout = FALSE;
+        local_counter ++;
     }
 }
+
+/*
+ * Function that reads the information provided by GNSS M9N every 100ms
+ */
+boolean GnssM9N_read(GnssM9N_Sample *sample){
+    boolean status    = FALSE;
+
+    if (g_timeout != TRUE)
+    {
+        status = TRUE;
+    }
+
+    sample->rxBytes   = g_bytes;
+    sample->sentences = g_sentences;
+    sample->errors    = g_errors;
+    sample->fixType   = 0u;
+    sample->numSats   = 0u;
+
+    return status;
+}
+
+
