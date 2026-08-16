@@ -375,6 +375,15 @@ static void Task_Imu(void)
 static void Task_Measure100ms(void)
 {
     Nvm_task100ms();        /* before diagnostics: fresh NVM fault state */
+    /* GNSS: publish + report */
+    GnssM9N_Sample gnss_sample;
+    boolean        gnssPresent;
+    boolean        gnssPlausible = TRUE;
+
+    gnssPresent = GnssM9N_read(&gnss_sample);
+    measurementsSetGnss(gnssPresent, gnss_sample);
+    PeriphDiag_report(PERIPH_DIAG_GNSS, gnssPresent, gnssPlausible, (float)gnss_sample.rxBytes);
+
     measurementsUpdate();
     if (diagnosticsUpdate() != FALSE) {
         gpio_write(GPIO_P_00_0, GPIO_STATE_ON);
@@ -382,8 +391,14 @@ static void Task_Measure100ms(void)
         gpio_write(GPIO_P_00_0, GPIO_STATE_OFF);
     }
     gpio_calApply();        /* XCP overrides win over the diagnostics write above */
+
     measurementsSetSystemLoad();   /* per-core exec time + Ethernet utilisation */
     xcpDaqCycle();
+}
+
+static void Task_Gnss(void)
+{
+    GnssM9N_poll();
 }
 
 int core0_main(void)
@@ -413,7 +428,7 @@ int core0_main(void)
     (void)Scheduler_addTask(&g_sched, Task_Mag,  SCHED_MS(20u));  /* 50 Hz magnetometer */
     (void)Scheduler_addTask(&g_sched, Task_Imu,  SCHED_MS(20u));  /* 50 Hz IMU (QSPI0) */
     Scheduler_addTask(&g_sched, Task_Measure100ms, SCHED_MS(100u));
-    (void)Scheduler_addTask(&g_sched, GnssM9N_poll, SCHED_MS(1u));   /* drain GNSS RX FIFO */
+    (void)Scheduler_addTask(&g_sched, Task_Gnss, SCHED_MS(1u));   /* drain GNSS RX FIFO */
 
     /* init persistent memory*/
     Nvm_bootInit();         /* load persistent parameters from DFLASH       */
@@ -464,6 +479,7 @@ int core0_main(void)
     PeriphDiag_setFitted(PERIPH_DIAG_BARO, TRUE);
     PeriphDiag_setFitted(PERIPH_DIAG_IMU,  TRUE);
     PeriphDiag_setFitted(PERIPH_DIAG_MAG,  TRUE);
+    PeriphDiag_setFitted(PERIPH_DIAG_GNSS, TRUE);
 
     /* Flight IMU on its own bus: QSPI0, nothing shared with the I2C sensors.
      * Brought up after them so a failure here cannot be confused with a
