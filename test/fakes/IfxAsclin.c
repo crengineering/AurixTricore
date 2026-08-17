@@ -25,6 +25,7 @@ static boolean s_frameError;
 static boolean s_rxOverflow;
 
 static IfxAsclin_Asc_Config s_lastConfig;
+static IfxAsclin_ClockSource s_clockSource = IfxAsclin_ClockSource_noClock;
 
 void FakeAsclin_reset(void)
 {
@@ -123,8 +124,9 @@ void IfxAsclin_Asc_initModuleConfig(IfxAsclin_Asc_Config *config,
                                     Ifx_ASCLIN           *asclin)
 {
     config->asclin            = asclin;
-    config->baudrate.baudrate = 115200.0f;   /* vendor default */
+    config->baudrate.baudrate = 115200.0f;                  /* vendor defaults */
     config->pins              = NULL_PTR;
+    config->clockSource       = IfxAsclin_ClockSource_ascFastClock;
     config->txBuffer          = NULL_PTR;
     config->txBufferSize      = 0u;
     config->rxBuffer          = NULL_PTR;
@@ -135,8 +137,27 @@ IfxAsclin_Status IfxAsclin_Asc_initModule(IfxAsclin_Asc              *asclin,
                                           const IfxAsclin_Asc_Config *config)
 {
     (void)asclin;
-    s_lastConfig = *config;
+    s_lastConfig  = *config;
+
+    /* The register setup happens regardless of the status below -- that is why
+     * the peripheral works on silicon even though init reports an error. */
+    s_clockSource = config->clockSource;
+
+    if ((config->txBuffer == NULL_PTR) || (config->rxBuffer == NULL_PTR))
+        return IfxAsclin_Status_configurationError;      /* see the header */
+
     return IfxAsclin_Status_noError;
+}
+
+IfxAsclin_ClockSource IfxAsclin_getClockSource(Ifx_ASCLIN *asclin)
+{
+    (void)asclin;
+    return s_clockSource;
+}
+
+void FakeAsclin_forceClockSource(IfxAsclin_ClockSource src)
+{
+    s_clockSource = src;
 }
 
 const IfxAsclin_Asc_Config *FakeAsclin_Asc_lastConfig(void)

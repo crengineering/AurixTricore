@@ -53,6 +53,7 @@ typedef struct
     Ifx_ASCLIN               *asclin;
     IfxAsclin_Asc_BaudRate    baudrate;
     const IfxAsclin_Asc_Pins *pins;
+    IfxAsclin_ClockSource     clockSource;
     void                     *txBuffer;
     uint32                    txBufferSize;
     void                     *rxBuffer;
@@ -67,8 +68,16 @@ typedef struct { int dummy; } IfxAsclin_Asc;
 void IfxAsclin_Asc_initModuleConfig(IfxAsclin_Asc_Config *config,
                                     Ifx_ASCLIN           *asclin);
 
-/** Records the applied config and returns noError. Use
- *  FakeAsclin_Asc_lastConfig() to assert what the driver asked for. */
+/** Applies the config and returns the vendor's status.
+ *
+ *  IMPORTANT, and faithful to the real iLLD: the status is
+ *  configurationError whenever txBuffer or rxBuffer is NULL_PTR. The vendor
+ *  sets it in the *else* branch of "did the application provide a buffer",
+ *  so a deliberately polled driver -- which must pass NULL_PTR -- can never
+ *  get noError. All the register setup still completes either side of it.
+ *
+ *  The fake reproduces that on purpose. Returning noError here would let the
+ *  host test exercise a path that does not exist on silicon. */
 IfxAsclin_Status IfxAsclin_Asc_initModule(IfxAsclin_Asc             *asclin,
                                           const IfxAsclin_Asc_Config *config);
 
