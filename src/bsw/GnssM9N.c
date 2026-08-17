@@ -75,7 +75,7 @@ boolean GnssM9N_init(void)
       g_poll_counter = GNSS_NOT_PRESENT_TICKS;
     }
 
-    return (status == IfxAsclin_Status_noError);
+    return (IfxAsclin_getClockSource(&MODULE_ASCLIN4) == IfxAsclin_ClockSource_ascFastClock);
 }
 
 /*
@@ -111,7 +111,7 @@ void GnssM9N_poll (void){
             if (g_len > 0u)
             {
                 g_buffer[g_len] = '\0';
-                Uart_println(g_buffer);
+                //Uart_println(g_buffer);
                 g_len = 0u;
                 g_sentences++;
             }

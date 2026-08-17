@@ -1,0 +1,69 @@
+# A2L drift gate.
+#
+# docs/AurixTricore.a2l has to agree with four C structs on the exact byte
+# offset of every field. Kept by hand it drifts, and the failure is silent: the
+# GUI parses the file, computes (ECU_ADDRESS - block base) and reads the wrong
+# bytes, or drops the signal because the block it fetches is too short. Both
+# have happened -- the file sat at "v1.3.0" for fourteen releases, and the
+# magnetometer read a constant 0 for a while.
+#
+# tools/gen_a2l.py derives the layout from src/bsw/*.h, so the only way it can
+# be wrong is if nobody regenerated it. This job is that check:
+#
+#     python tools/gen_a2l.py --check     exit 1 if the committed file differs
+#
+# Fix a failure by running `python tools/gen_a2l.py` and committing the result.
+# Descriptions, units and limits live in tools/a2l_meta.json; a struct field
+# missing from there still reaches the A2L, but with a placeholder description
+# and a warning, which this job surfaces in the run summary.
+
+name: A2L
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:  # supersede an in-flight run when new commits land on the same ref
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  a2l:
+    name: A2L matches the C structs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the A2L is in sync
+        id: check
+        run: |
+          set -o pipefail   # without it, tee's exit code would mask a failure
+          python3 tools/gen_a2l.py --check 2>&1 | tee a2l_check.log
+
+      - name: Result into summary
+        if: always()        # the summary matters most when the check fails
+        run: |
+          {
+            if [ "${{ steps.check.outcome }}" = "success" ]; then
+              echo "### A2L is in sync with the firmware structs"
+            else
+              echo "### A2L is STALE"
+              echo
+              echo "The committed \`docs/AurixTricore.a2l\` no longer matches"
+              echo "the C structs. Regenerate and commit it:"
+              echo
+              echo '```'
+              echo 'python tools/gen_a2l.py'
+              echo '```'
+            fi
+            echo
+            echo '<details><summary>gen_a2l.py --check output</summary>'
+            echo
+            echo '```diff'
+            cat a2l_check.log
+            echo '```'
+            echo
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"

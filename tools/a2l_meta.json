@@ -1,0 +1,685 @@
+{
+  "Xcp_Data": {
+    "magic": {
+      "skip": true
+    },
+    "verMajor": {
+      "name": "SwVersionMajor",
+      "desc": "software version major",
+      "lo": "0",
+      "hi": "255"
+    },
+    "verMinor": {
+      "name": "SwVersionMinor",
+      "desc": "software version minor",
+      "lo": "0",
+      "hi": "255"
+    },
+    "verStep": {
+      "name": "SwVersionStep",
+      "desc": "software version step",
+      "lo": "0",
+      "hi": "255"
+    },
+    "reserved": {
+      "skip": true
+    },
+    "tickMs": {
+      "name": "TickMs",
+      "desc": "board uptime",
+      "unit": "ms",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "dieTempC": {
+      "name": "DieTemp_DTS",
+      "desc": "die temperature, PMS DTS (standby domain)",
+      "unit": "degC",
+      "lo": "-50",
+      "hi": "170"
+    },
+    "dtscTempC": {
+      "name": "DieTemp_DTSC",
+      "desc": "die temperature, SCU DTSC (core domain)",
+      "unit": "degC",
+      "lo": "-50",
+      "hi": "170"
+    },
+    "vddCore": {
+      "name": "VDD",
+      "desc": "1.25 V core rail (PMS monitor ADC)",
+      "unit": "V",
+      "lo": "0",
+      "hi": "2"
+    },
+    "vddp3": {
+      "name": "VDDP3",
+      "desc": "3.3 V I/O rail (PMS monitor ADC)",
+      "unit": "V",
+      "lo": "0",
+      "hi": "5"
+    },
+    "vext": {
+      "name": "VEXT",
+      "desc": "5 V board supply (PMS monitor ADC)",
+      "unit": "V",
+      "lo": "0",
+      "hi": "6"
+    },
+    "rawVdd": {
+      "name": "RawVdd",
+      "desc": "raw monitor ADC code VDD",
+      "lo": "0",
+      "hi": "255"
+    },
+    "rawVddp3": {
+      "name": "RawVddp3",
+      "desc": "raw monitor ADC code VDDP3",
+      "lo": "0",
+      "hi": "255"
+    },
+    "rawVext": {
+      "name": "RawVext",
+      "desc": "raw monitor ADC code VEXT",
+      "lo": "0",
+      "hi": "255"
+    },
+    "baroPresent": {
+      "name": "BaroPresent",
+      "desc": "1 if the BMP581 answered at init, else 0",
+      "lo": "0",
+      "hi": "1"
+    },
+    "diagStatus": {
+      "name": "DiagStatus",
+      "desc": "diagnostics bitmask, see DIAGNOSTICS.md",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "baroPressPa": {
+      "name": "BaroPressure",
+      "desc": "BMP581 barometric pressure",
+      "unit": "Pa",
+      "lo": "0",
+      "hi": "200000"
+    },
+    "baroTempC": {
+      "name": "BaroTemperature",
+      "desc": "BMP581 temperature",
+      "unit": "degC",
+      "lo": "-40",
+      "hi": "85"
+    },
+    "baroAltM": {
+      "name": "BaroAltitude",
+      "desc": "pressure altitude vs standard 1013.25 hPa",
+      "unit": "m",
+      "lo": "-500",
+      "hi": "9000"
+    },
+    "imuPresent": {
+      "name": "ImuPresent",
+      "desc": "1 if the ICM-42688-P answered at init, else 0",
+      "lo": "0",
+      "hi": "1"
+    },
+    "imuReserved": {
+      "skip": true
+    },
+    "accelX": {
+      "name": "ImuAccelX",
+      "desc": "ICM-42688-P acceleration X",
+      "unit": "g",
+      "lo": "-8",
+      "hi": "8"
+    },
+    "accelY": {
+      "name": "ImuAccelY",
+      "desc": "ICM-42688-P acceleration Y",
+      "unit": "g",
+      "lo": "-8",
+      "hi": "8"
+    },
+    "accelZ": {
+      "name": "ImuAccelZ",
+      "desc": "ICM-42688-P acceleration Z",
+      "unit": "g",
+      "lo": "-8",
+      "hi": "8"
+    },
+    "gyroX": {
+      "name": "ImuGyroX",
+      "desc": "ICM-42688-P angular rate X, bias corrected (raw = this + AhrsGyroBiasX)",
+      "unit": "deg/s",
+      "lo": "-2000",
+      "hi": "2000"
+    },
+    "gyroY": {
+      "name": "ImuGyroY",
+      "desc": "ICM-42688-P angular rate Y, bias corrected (raw = this + AhrsGyroBiasY)",
+      "unit": "deg/s",
+      "lo": "-2000",
+      "hi": "2000"
+    },
+    "gyroZ": {
+      "name": "ImuGyroZ",
+      "desc": "ICM-42688-P angular rate Z, bias corrected (raw = this + AhrsGyroBiasZ)",
+      "unit": "deg/s",
+      "lo": "-2000",
+      "hi": "2000"
+    },
+    "imuTempC": {
+      "name": "ImuTemperature",
+      "desc": "ICM-42688-P die temperature",
+      "unit": "degC",
+      "lo": "-40",
+      "hi": "85"
+    },
+    "ahrsState": {
+      "name": "AhrsState",
+      "desc": "attitude estimator state: 0 calibrating, 1 running, 2 no sensor",
+      "lo": "0",
+      "hi": "2"
+    },
+    "ahrsAccOk": {
+      "name": "AhrsAccelTrusted",
+      "desc": "1 while |a| is near 1 g and the accelerometer is being fused",
+      "lo": "0",
+      "hi": "1"
+    },
+    "ahrsReserved": {
+      "skip": true
+    },
+    "roll": {
+      "name": "AhrsRoll",
+      "desc": "estimated roll (phi), flight_ctrl phi_ist[0]",
+      "unit": "rad",
+      "lo": "-3.15",
+      "hi": "3.15"
+    },
+    "pitch": {
+      "name": "AhrsPitch",
+      "desc": "estimated pitch (theta), flight_ctrl phi_ist[1]",
+      "unit": "rad",
+      "lo": "-1.58",
+      "hi": "1.58"
+    },
+    "yaw": {
+      "name": "AhrsYaw",
+      "desc": "estimated yaw (psi), flight_ctrl phi_ist[2] - gyro only, drifts",
+      "unit": "rad",
+      "lo": "-100",
+      "hi": "100"
+    },
+    "rateP": {
+      "name": "AhrsRateP",
+      "desc": "body roll rate p, bias corrected, flight_ctrl om_ist[0]",
+      "unit": "rad/s",
+      "lo": "-35",
+      "hi": "35"
+    },
+    "rateQ": {
+      "name": "AhrsRateQ",
+      "desc": "body pitch rate q, bias corrected, flight_ctrl om_ist[1]",
+      "unit": "rad/s",
+      "lo": "-35",
+      "hi": "35"
+    },
+    "rateR": {
+      "name": "AhrsRateR",
+      "desc": "body yaw rate r, bias corrected, flight_ctrl om_ist[2]",
+      "unit": "rad/s",
+      "lo": "-35",
+      "hi": "35"
+    },
+    "biasX": {
+      "name": "AhrsGyroBiasX",
+      "desc": "gyro bias X measured at start-up",
+      "unit": "deg/s",
+      "lo": "-50",
+      "hi": "50"
+    },
+    "biasY": {
+      "name": "AhrsGyroBiasY",
+      "desc": "gyro bias Y measured at start-up",
+      "unit": "deg/s",
+      "lo": "-50",
+      "hi": "50"
+    },
+    "biasZ": {
+      "name": "AhrsGyroBiasZ",
+      "desc": "gyro bias Z measured at start-up",
+      "unit": "deg/s",
+      "lo": "-50",
+      "hi": "50"
+    },
+    "coreExecUs": {
+      "name": "Core{i}ExecTime",
+      "desc": "CPU0 busy time in the last 100 ms window",
+      "unit": "us",
+      "lo": "0",
+      "hi": "100000"
+    },
+    "coreLoadPmil": {
+      "name": "Core{i}Load",
+      "desc": "CPU0 busy fraction of the window",
+      "unit": "per mille",
+      "lo": "0",
+      "hi": "1000"
+    },
+    "coreAlive": {
+      "name": "Core{i}Alive",
+      "desc": "CPU0 liveness counter, frozen if the core hung",
+      "lo": "0",
+      "hi": "65535"
+    },
+    "ethBytesPerSec": {
+      "name": "EthBytesPerSec",
+      "desc": "Ethernet throughput, transmit and receive summed",
+      "unit": "B/s",
+      "lo": "0",
+      "hi": "125000000"
+    },
+    "ethUtilPmil": {
+      "name": "EthUtilisation",
+      "desc": "link utilisation against the negotiated line rate",
+      "unit": "per mille",
+      "lo": "0",
+      "hi": "1000"
+    },
+    "ethLinkMbits": {
+      "name": "EthLinkSpeed",
+      "desc": "negotiated link rate",
+      "unit": "Mbit/s",
+      "lo": "0",
+      "hi": "1000"
+    },
+    "magPresent": {
+      "name": "MagPresent",
+      "desc": "1 if the MMC5983MA answered at init, else 0",
+      "lo": "0",
+      "hi": "1"
+    },
+    "magReserved": {
+      "skip": true
+    },
+    "magX": {
+      "name": "MagX",
+      "desc": "MMC5983MA magnetic field X",
+      "unit": "G",
+      "lo": "-8",
+      "hi": "8"
+    },
+    "magY": {
+      "name": "MagY",
+      "desc": "MMC5983MA magnetic field Y",
+      "unit": "G",
+      "lo": "-8",
+      "hi": "8"
+    },
+    "magZ": {
+      "name": "MagZ",
+      "desc": "MMC5983MA magnetic field Z",
+      "unit": "G",
+      "lo": "-8",
+      "hi": "8"
+    },
+    "magFieldG": {
+      "name": "MagFieldMagnitude",
+      "desc": "total field |B| - independent of orientation, ~0.48 G in Munich",
+      "unit": "G",
+      "lo": "0",
+      "hi": "8"
+    },
+    "magHeadingDeg": {
+      "name": "MagHeading",
+      "desc": "heading from X/Y - LEVEL ONLY, uncalibrated, no declination",
+      "unit": "deg",
+      "lo": "0",
+      "hi": "360"
+    },
+    "gnssrxBytes": {
+      "name": "GnssRxBytes",
+      "desc": "NEO-M9N bytes received on ASCLIN4 since boot - the primary link-health signal",
+      "unit": "bytes",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "gnsssentences": {
+      "name": "GnssSentences",
+      "desc": "complete NMEA sentences assembled - ~6/s at the 1 Hz default nav rate",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "gnsserrors": {
+      "name": "GnssErrors",
+      "desc": "ASCLIN framing errors + RX FIFO overflows - must stay 0 on a healthy link",
+      "lo": "0",
+      "hi": "65535"
+    },
+    "gnssfixType": {
+      "name": "GnssFixType",
+      "desc": "fix quality - PHASE B, currently always 0 (no NMEA parser yet)",
+      "lo": "0",
+      "hi": "5"
+    },
+    "gnssnumSats": {
+      "name": "GnssNumSats",
+      "desc": "satellites used in the solution - PHASE B, currently always 0",
+      "lo": "0",
+      "hi": "32"
+    }
+  },
+  "Xcp_Cal": {
+    "magic": {
+      "skip": true
+    },
+    "dtsMin": {
+      "name": "CAL_dtsMin",
+      "desc": "lower limit DTS temperature",
+      "unit": "degC",
+      "maxdiff": "300",
+      "lo": "-50",
+      "hi": "170"
+    },
+    "dtsMax": {
+      "name": "CAL_dtsMax",
+      "desc": "upper limit DTS temperature",
+      "unit": "degC",
+      "maxdiff": "300",
+      "lo": "-50",
+      "hi": "170"
+    },
+    "dtscMin": {
+      "name": "CAL_dtscMin",
+      "desc": "lower limit DTSC temperature",
+      "unit": "degC",
+      "maxdiff": "300",
+      "lo": "-50",
+      "hi": "170"
+    },
+    "dtscMax": {
+      "name": "CAL_dtscMax",
+      "desc": "upper limit DTSC temperature",
+      "unit": "degC",
+      "maxdiff": "300",
+      "lo": "-50",
+      "hi": "170"
+    },
+    "vddMin": {
+      "name": "CAL_vddMin",
+      "desc": "lower limit VDD",
+      "unit": "V",
+      "maxdiff": "2",
+      "lo": "0",
+      "hi": "2"
+    },
+    "vddMax": {
+      "name": "CAL_vddMax",
+      "desc": "upper limit VDD",
+      "unit": "V",
+      "maxdiff": "2",
+      "lo": "0",
+      "hi": "2"
+    },
+    "vddp3Min": {
+      "name": "CAL_vddp3Min",
+      "desc": "lower limit VDDP3",
+      "unit": "V",
+      "maxdiff": "5",
+      "lo": "0",
+      "hi": "5"
+    },
+    "vddp3Max": {
+      "name": "CAL_vddp3Max",
+      "desc": "upper limit VDDP3",
+      "unit": "V",
+      "maxdiff": "5",
+      "lo": "0",
+      "hi": "5"
+    },
+    "vextMin": {
+      "name": "CAL_vextMin",
+      "desc": "lower limit VEXT",
+      "unit": "V",
+      "maxdiff": "6",
+      "lo": "0",
+      "hi": "6"
+    },
+    "vextMax": {
+      "name": "CAL_vextMax",
+      "desc": "upper limit VEXT",
+      "unit": "V",
+      "maxdiff": "6",
+      "lo": "0",
+      "hi": "6"
+    },
+    "tempDeltaMax": {
+      "name": "CAL_tempDeltaMax",
+      "desc": "max plausible delta DTS vs DTSC",
+      "unit": "K",
+      "maxdiff": "50",
+      "lo": "0",
+      "hi": "50"
+    },
+    "debounceSec": {
+      "name": "CAL_debounceSec",
+      "desc": "fault debounce time (0.1 s resolution)",
+      "unit": "s",
+      "maxdiff": "60",
+      "lo": "0",
+      "hi": "60"
+    },
+    "fsVdd": {
+      "name": "CAL_fsVdd",
+      "desc": "monitor ADC full scale VDD",
+      "unit": "V",
+      "maxdiff": "10",
+      "lo": "0",
+      "hi": "10"
+    },
+    "fsVddp3": {
+      "name": "CAL_fsVddp3",
+      "desc": "monitor ADC full scale VDDP3",
+      "unit": "V",
+      "maxdiff": "10",
+      "lo": "0",
+      "hi": "10"
+    },
+    "fsVext": {
+      "name": "CAL_fsVext",
+      "desc": "monitor ADC full scale VEXT",
+      "unit": "V",
+      "maxdiff": "10",
+      "lo": "0",
+      "hi": "10"
+    }
+  },
+  "Xcp_Nvm": {
+    "magic": {
+      "skip": true
+    },
+    "command": {
+      "name": "NVM_command",
+      "desc": "NVM command: 0x45564153 SAVE, 0x544C4644 load defaults; firmware clears to 0",
+      "maxdiff": "4294967295",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "userValue": {
+      "name": "NVM_userValue",
+      "desc": "persistent user scratch word (survives reset after SAVE)",
+      "maxdiff": "4294967295",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "seaLevelPa": {
+      "name": "NVM_seaLevelPa",
+      "desc": "sea-level reference pressure for BaroAltitude - set to local QNH",
+      "unit": "Pa",
+      "maxdiff": "108500",
+      "lo": "87000",
+      "hi": "108500"
+    }
+  },
+  "Xcp_Gpio": {
+    "magic": {
+      "skip": true
+    },
+    "state": {
+      "name": "GPIO_P00_{i2}_state",
+      "desc": "P00.{i} output level (0=OFF/low, 1=ON/high)",
+      "maxdiff": "1",
+      "lo": "0",
+      "hi": "1",
+      "skip_index": [
+        0
+      ]
+    },
+    "mode": {
+      "skip": true,
+      "_why": "read-only, published by firmware from gpio_cfg.h; writes are rejected"
+    },
+    "duty": {
+      "name": "GPIO_P00_{i2}_duty",
+      "desc": "P00.{i} PWM duty cycle (effective only if pin is PWM in gpio_cfg.h)",
+      "unit": "%",
+      "maxdiff": "100",
+      "lo": "0",
+      "hi": "100",
+      "skip_index": [
+        0
+      ]
+    }
+  },
+  "diag_bits": {
+    "DIAG_DTS_UNDERTEMP": {
+      "name": "Diag_DTS_Undertemp",
+      "desc": "DTS temperature below dtsMin"
+    },
+    "DIAG_DTS_OVERTEMP": {
+      "name": "Diag_DTS_Overtemp",
+      "desc": "DTS temperature above dtsMax"
+    },
+    "DIAG_DTSC_UNDERTEMP": {
+      "name": "Diag_DTSC_Undertemp",
+      "desc": "DTSC temperature below dtscMin"
+    },
+    "DIAG_DTSC_OVERTEMP": {
+      "name": "Diag_DTSC_Overtemp",
+      "desc": "DTSC temperature above dtscMax"
+    },
+    "DIAG_VDD_UNDERVOLT": {
+      "name": "Diag_VDD_Undervolt",
+      "desc": "VDD below vddMin"
+    },
+    "DIAG_VDD_OVERVOLT": {
+      "name": "Diag_VDD_Overvolt",
+      "desc": "VDD above vddMax"
+    },
+    "DIAG_VDDP3_UNDERVOLT": {
+      "name": "Diag_VDDP3_Undervolt",
+      "desc": "VDDP3 below vddp3Min"
+    },
+    "DIAG_VDDP3_OVERVOLT": {
+      "name": "Diag_VDDP3_Overvolt",
+      "desc": "VDDP3 above vddp3Max"
+    },
+    "DIAG_VEXT_UNDERVOLT": {
+      "name": "Diag_VEXT_Undervolt",
+      "desc": "VEXT below vextMin"
+    },
+    "DIAG_VEXT_OVERVOLT": {
+      "name": "Diag_VEXT_Overvolt",
+      "desc": "VEXT above vextMax"
+    },
+    "DIAG_TEMP_IMPLAUSIBLE": {
+      "name": "Diag_TempImplausible",
+      "desc": "delta DTS/DTSC above tempDeltaMax"
+    },
+    "DIAG_UART_DISCONNECTED": {
+      "name": "Diag_UartDisconnected",
+      "desc": "no UART heartbeat from PC GUI for > 2 s"
+    },
+    "DIAG_NVM_FAULT": {
+      "name": "Diag_NvmFault",
+      "desc": "NVM corrupt at boot or last save failed"
+    },
+    "DIAG_I2C_SCL_STUCK": {
+      "name": "Diag_I2cSclStuck",
+      "desc": "I2C0 SCL held low: short to GND or a slave stretching the clock"
+    },
+    "DIAG_I2C_SDA_STUCK": {
+      "name": "Diag_I2cSdaStuck",
+      "desc": "I2C0 SDA held low: short to GND or a slave jammed mid-byte"
+    },
+    "DIAG_BARO_NO_RESPONSE": {
+      "name": "Diag_BaroNoResponse",
+      "desc": "BMP581 never answered since boot: wiring, address or dead part"
+    },
+    "DIAG_BARO_TIMEOUT": {
+      "name": "Diag_BaroTimeout",
+      "desc": "BMP581 answered before and is now silent for > 1 s"
+    },
+    "DIAG_BARO_STUCK_DATA": {
+      "name": "Diag_BaroStuckData",
+      "desc": "BMP581 bus healthy but the value stopped changing for > 5 s"
+    },
+    "DIAG_BARO_IMPLAUSIBLE": {
+      "name": "Diag_BaroImplausible",
+      "desc": "BMP581 outside 300-1200 hPa or -40..85 degC"
+    },
+    "DIAG_IMU_NO_RESPONSE": {
+      "name": "Diag_ImuNoResponse",
+      "desc": "ICM-42688-P never answered since boot: level shifters, CS, SPI mode or MRST pad"
+    },
+    "DIAG_IMU_TIMEOUT": {
+      "name": "Diag_ImuTimeout",
+      "desc": "ICM-42688-P answered before and is now silent for > 1 s"
+    },
+    "DIAG_IMU_STUCK_DATA": {
+      "name": "Diag_ImuStuckData",
+      "desc": "ICM-42688-P bus healthy but the sample block stopped changing for > 5 s"
+    },
+    "DIAG_IMU_IMPLAUSIBLE": {
+      "name": "Diag_ImuImplausible",
+      "desc": "ICM-42688-P |a| outside 0.05..17 g or temperature outside -40..85 degC"
+    },
+    "DIAG_MAG_NO_RESPONSE": {
+      "name": "Diag_MagNoResponse",
+      "desc": "MMC5983MA never answered since boot: wiring, or CS not tied to +3V3"
+    },
+    "DIAG_MAG_TIMEOUT": {
+      "name": "Diag_MagTimeout",
+      "desc": "MMC5983MA answered before and is now silent for > 1 s"
+    },
+    "DIAG_MAG_STUCK_DATA": {
+      "name": "Diag_MagStuckData",
+      "desc": "MMC5983MA bus healthy but the field stopped changing for > 5 s"
+    },
+    "DIAG_MAG_IMPLAUSIBLE": {
+      "name": "Diag_MagImplausible",
+      "desc": "MMC5983MA |B| outside 0.15..2.0 G - wrong scaling or axis assembly"
+    },
+    "DIAG_GNSS_NO_RESPONSE": {
+      "name": "Diag_GnssNoResponse",
+      "desc": "NEO-M9N never sent a byte since boot: wiring, baud rate, or module unpowered"
+    },
+    "DIAG_GNSS_TIMEOUT": {
+      "name": "Diag_GnssTimeout",
+      "desc": "NEO-M9N was streaming and has now been silent for > 2 s"
+    },
+    "DIAG_GNSS_STUCK_DATA": {
+      "name": "Diag_GnssStuckData",
+      "desc": "GnssRxBytes stopped advancing - for a stream device this is the same fault as Timeout"
+    },
+    "DIAG_GNSS_IMPLAUSIBLE": {
+      "name": "Diag_GnssImplausible",
+      "desc": "NEO-M9N data quality fault - NOT YET WIRED, the plausible input is hardcoded TRUE"
+    },
+    "DIAG_CAL_INVALID": {
+      "name": "Diag_CalInvalid",
+      "desc": "calibration block magic broken, defaults reloaded"
+    }
+  }
+}
