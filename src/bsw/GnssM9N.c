@@ -22,6 +22,7 @@ static uint32         g_bytes       = 0u;
 static uint32         g_sentences   = 0u;
 static boolean        g_timeout     = TRUE;
 static uint16         g_poll_counter = GNSS_NOT_PRESENT_TICKS;
+static uint8          g_num_sats    = 0u;
 
 /*
  * GNSS-NEO-M9N init function:
@@ -111,7 +112,16 @@ void GnssM9N_poll (void){
             if (g_len > 0u)
             {
                 g_buffer[g_len] = '\0';
-                //Uart_println(g_buffer);
+
+                if ( (g_buffer[1] == 'G') &&
+                     (g_buffer[2] == 'N') &&
+                     (g_buffer[3] == 'G') &&
+                     (g_buffer[4] == 'S') &&
+                     (g_buffer[5] == 'A') )
+                {
+                    Uart_println(g_buffer);
+                    //g_num_sats = (uint8)g_buffer[8];
+                }
                 g_len = 0u;
                 g_sentences++;
             }
@@ -155,7 +165,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
     sample->sentences = g_sentences;
     sample->errors    = g_errors;
     sample->fixType   = 0u;
-    sample->numSats   = 0u;
+    sample->numSats   = g_num_sats;
 
     return status;
 }
