@@ -13,20 +13,27 @@
 #define GNSS_POLL_PERIOD_MS    1u       /* must match the task calling GnssM9N_poll */
 #define GNSS_TIMEOUT_MS        2000u    /* > the ~850 ms gap between 1 Hz bursts */
 #define GNSS_NOT_PRESENT_TICKS (GNSS_TIMEOUT_MS / GNSS_POLL_PERIOD_MS)
+#define RING_BUFFER_SIZE 512u
 /* local used variables */
 static IfxAsclin_Asc  g_asclin;
 
 static char           g_buffer[GNSSM9N_BUFFER_SIZE];
 static uint8          g_len         = 0u;
 static uint16         g_errors      = 0u;
-static uint32         g_bytes       = 0u;
+static volatile uint32         g_bytes       = 0u;
 static uint32         g_sentences   = 0u;
 static boolean        g_timeout     = TRUE;
 static uint16         g_poll_counter = GNSS_NOT_PRESENT_TICKS;
+static uint8          g_ring_buf_overflow_counter = 0u;
+static GnssM9N_Nav           g_nav;
 
-static volatile uint32 g_isrCount;
-static volatile uint32 g_isrBytes = 0u;
+/* isr variables */
+static volatile char   g_ring_buffer[RING_BUFFER_SIZE];
+static volatile uint16 g_ring_head = 0u;
+static volatile uint16 g_ring_tail = 0u;
+
 /* local functions */
+static boolean GnssM9N_decode(const char *buffer, uint8 buffer_len, GnssM9N_Nav *Nav);
 void asclin4IsrReceive(void);
 
 IFX_INTERRUPT(asclin4IsrReceive, 0, ISR_PRIORITY_ASCLIN4_RX);
@@ -36,14 +43,28 @@ IFX_INTERRUPT(asclin4IsrReceive, 0, ISR_PRIORITY_ASCLIN4_RX);
 void asclin4IsrReceive(void)
 {
     uint8 fill_level = IfxAsclin_getRxFifoFillLevel(&MODULE_ASCLIN4);
-    g_isrCount++;
-    for (uint8 i=0; i<fill_level; i++)
+    for (uint8 i=0u; i<fill_level; i++)
     {
-        (void)(IfxAsclin_readRxData(&MODULE_ASCLIN4) & 0xFFu);
-        g_isrBytes++;
+        char fifo_byte = (char)(IfxAsclin_readRxData(&MODULE_ASCLIN4) & 0xFFu);
+        g_bytes++;
+
+        uint16 ring_next = g_ring_head +1u;
+        if (ring_next >= RING_BUFFER_SIZE)
+        {
+            ring_next = 0u;
+        }
+
+        if ( (ring_next) != g_ring_tail)
+        {
+            g_ring_buffer[g_ring_head] = fifo_byte;
+            g_ring_head = ring_next;
+        }
+        else
+        {
+            g_ring_buf_overflow_counter++;
+        }
     }
 }
-
 
 /*
  * GNSS-NEO-M9N init function:
@@ -92,6 +113,10 @@ boolean GnssM9N_init(void)
       IfxAsclin_flushRxFifo(&MODULE_ASCLIN4);
       IfxAsclin_clearAllFlags(&MODULE_ASCLIN4);
 
+      g_ring_head = 0u;
+      g_ring_tail = 0u;
+      g_ring_buf_overflow_counter = 0u;
+
       /* software reset */
       g_len          = 0u;
       g_errors       = 0u;
@@ -105,78 +130,6 @@ boolean GnssM9N_init(void)
 }
 
 /*
- * GNSS-NEO-M9N poll function
- * Function to poll GNSS bytes from the Asclin hardware FIFO Buffer and build the messages
- * Information on the GNSS protocol:
- * - Burst mode 1 Hz -> 3840 Bytes/s = 4 Bytes/ms
- * - emitts GGA, GLL, GSA, GSV, RMC & VTG ~ 500-700 bytes every second
- * - bytes end with <CR> (\r), <LF> (\n)
- */
-void GnssM9N_poll (void){
-    /* check if a Fifo Overflow occured */
-    if (IfxAsclin_getRxFifoOverflowFlagStatus(&MODULE_ASCLIN4) != FALSE)
-    {
-        IfxAsclin_clearRxFifoOverflowFlag(&MODULE_ASCLIN4);
-        g_errors++;
-    }
-
-    /* check if a frame error is present */
-    if (IfxAsclin_getFrameErrorFlagStatus(&MODULE_ASCLIN4) != FALSE)
-    {
-        IfxAsclin_clearFrameErrorFlag(&MODULE_ASCLIN4);
-        g_errors++;
-    }
-
-    /* check if any bytes in the Fifo buffer and empty it if available */
-    while (IfxAsclin_getRxFifoFillLevel(&MODULE_ASCLIN4) > 0u){
-        /* pop fifo buffer byte */
-        char fifo_byte = (char)(IfxAsclin_readRxData(&MODULE_ASCLIN4) & 0xFFu);
-        g_bytes++;
-        if (fifo_byte == ('\r') || fifo_byte == ('\n'))
-        {
-            if (g_len > 0u)
-            {
-                g_buffer[g_len] = '\0';
-/*
-                if ( (g_buffer[1] == 'G') &&
-                     (g_buffer[2] == 'N') &&
-                     (g_buffer[3] == 'G') &&
-                     (g_buffer[4] == 'S') &&
-                     (g_buffer[5] == 'A') )
-                {
-                    Uart_println(g_buffer);
-                    //g_num_sats = (uint8)g_buffer[8];
-                }
-*/
-                g_len = 0u;
-                g_sentences++;
-            }
-        }
-        else if (g_len < GNSSM9N_BUFFER_SIZE - 1u)
-        {
-            g_buffer[g_len] = fifo_byte;
-            g_len++;
-
-        }
-        else
-        {
-            g_len = 0u;
-        }
-        g_poll_counter = 0u;
-    }
-
-    if (g_poll_counter >= GNSS_NOT_PRESENT_TICKS)
-    {
-        g_timeout = TRUE;
-    }
-    else
-    {
-        g_timeout = FALSE;
-        g_poll_counter ++;
-    }
-}
-
-/*
  * Function that reads the information provided by GNSS M9N every 100ms
  */
 boolean GnssM9N_read(GnssM9N_Sample *sample){
@@ -186,14 +139,114 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
     {
         status = TRUE;
     }
+    status = TRUE;
 
-    //sample->rxBytes   = g_bytes;
-    //sample->sentences = g_sentences;
-    sample->rxBytes   = g_isrCount;
-    sample->sentences = g_isrBytes;
+    /* read from ring buffer */
+    uint16 head = g_ring_head;
+    while (g_ring_tail != head)
+    {
+        char byte = g_ring_buffer[g_ring_tail];
+        if (byte == ('\r') || byte == ('\n'))
+        {
+            if (g_len > 0u)
+            {
+                g_buffer[g_len] = '\0';
+                GnssM9N_decode(g_buffer, g_len, &g_nav);
+                g_len = 0u;
+                g_sentences++;
+
+            }
+        }
+        else if (g_len < GNSSM9N_BUFFER_SIZE - 1u)
+        {
+            g_buffer[g_len] = byte;
+            g_len++;
+
+        }
+        else
+        {
+            g_len = 0u;
+        }
+
+        g_ring_tail++;
+        if (g_ring_tail >= RING_BUFFER_SIZE)
+        {
+            g_ring_tail = 0u;
+        }
+
+    }
+
+    sample->rxBytes   = g_bytes;
+    sample->sentences = g_sentences;
     sample->errors    = g_errors;
     sample->fixType   = 0u;
-    sample->numSats   = 0u;
+    sample->numSats   = g_nav.numSats;
 
     return status;
+}
+
+static boolean GnssM9N_decode(const char *buffer, uint8 buffer_len, GnssM9N_Nav *Nav){
+    boolean decoding_status = FALSE;
+    gnss_type_t message_type = NONE;
+    uint8 count_comma = 0u;
+    uint8 numSats = 0u;
+    boolean digit_read = FALSE;
+
+    if (buffer_len < 6u)
+    {
+        return FALSE;
+    }
+
+    if ( (buffer[1] == 'G') &&
+         (buffer[2] == 'N') &&
+         (buffer[3] == 'G') &&
+         (buffer[4] == 'G') &&
+         (buffer[5] == 'A') )
+    {
+        message_type = GNGGA;
+    }
+
+    switch (message_type)
+    {
+        case GNGGA:
+        {
+            // detect number of satellites
+            for (uint8 i=6u; i < buffer_len; i++)
+            {
+                if ((count_comma ==  7u) &&
+                    (buffer[i] >= '0') &&
+                    (buffer[i] <= '9'))
+                {
+                    numSats = numSats*10 + buffer[i] - '0';
+                    digit_read = TRUE;
+                }
+                if (buffer[i] == ',')
+                {
+                    count_comma++;
+                }
+
+            }
+
+            if (numSats >= 32)
+            {
+                decoding_status = FALSE;
+
+            }
+            else if (digit_read == TRUE)
+            {
+                Nav->numSats = numSats;
+                decoding_status = TRUE;
+            }
+            break;
+        }
+        default:
+        {
+            decoding_status = FALSE;
+            break;
+        }
+    }
+
+
+
+    return decoding_status;
 }

@@ -396,10 +396,6 @@ static void Task_Measure100ms(void)
     xcpDaqCycle();
 }
 
-static void Task_Gnss(void)
-{
-    GnssM9N_poll();
-}
 
 int core0_main(void)
 {
@@ -428,7 +424,6 @@ int core0_main(void)
     (void)Scheduler_addTask(&g_sched, Task_Mag,  SCHED_MS(20u));  /* 50 Hz magnetometer */
     (void)Scheduler_addTask(&g_sched, Task_Imu,  SCHED_MS(20u));  /* 50 Hz IMU (QSPI0) */
     Scheduler_addTask(&g_sched, Task_Measure100ms, SCHED_MS(100u));
-    (void)Scheduler_addTask(&g_sched, Task_Gnss, SCHED_MS(1u));   /* drain GNSS RX FIFO */
 
     /* init persistent memory*/
     Nvm_bootInit();         /* load persistent parameters from DFLASH       */
