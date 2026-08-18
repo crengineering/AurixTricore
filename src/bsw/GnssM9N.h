@@ -22,6 +22,7 @@ typedef struct
 typedef struct
 {
   uint8 numSats;
+  uint8 fixQuality;
 }GnssM9N_Nav;
 
 typedef enum
@@ -31,6 +32,9 @@ typedef enum
     GNGSA,
     GNRMC
 }gnss_type_t;
+
+#define GNGGA_FIX_QUALITY     6u
+#define GNGGA_SATELLITES_USED 7u
 
 /** Initialise ASCLIN4 at 38400 on P22.5 (TX) / P22.6 (RX). TX and RX based on TC399 view */
 boolean GnssM9N_init(void);

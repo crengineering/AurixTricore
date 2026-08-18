@@ -180,7 +180,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
     sample->rxBytes   = g_bytes;
     sample->sentences = g_sentences;
     sample->errors    = g_errors;
-    sample->fixType   = 0u;
+    sample->fixType   = g_nav.fixQuality;
     sample->numSats   = g_nav.numSats;
 
     return status;
@@ -191,7 +191,9 @@ static boolean GnssM9N_decode(const char *buffer, uint8 buffer_len, GnssM9N_Nav 
     gnss_type_t message_type    = NONE;
     uint8       count_comma     = 0u;
     uint8       numSats         = 0u;
+    uint8       fixQuality      = 0u;
     boolean     digit_read      = FALSE;
+    boolean     fixQuality_read = FALSE;
     uint8       checksum        = 0u;
     uint8       checksum_target = 0u;
 
@@ -231,13 +233,21 @@ static boolean GnssM9N_decode(const char *buffer, uint8 buffer_len, GnssM9N_Nav 
             // detect number of satellites
             for (uint8 i=6u; i < buffer_len; i++)
             {
-                if ((count_comma ==  7u) &&
-                    (buffer[i] >= '0') &&
-                    (buffer[i] <= '9'))
+                if ((count_comma ==  GNGGA_SATELLITES_USED) &&
+                    (buffer[i] >= '0')                      &&
+                    (buffer[i] <= '9')                      )
                 {
                     numSats = numSats*10 + buffer[i] - '0';
                     digit_read = TRUE;
                 }
+                if ((count_comma == GNGGA_FIX_QUALITY) &&
+                    (buffer[i]   >= '0')               &&
+                    (buffer[i]   <= '9')               )
+                {
+                    fixQuality = buffer[i] - '0';
+                    fixQuality_read = TRUE;
+                }
+
                 if (buffer[i] == ',')
                 {
                     count_comma++;
@@ -253,6 +263,10 @@ static boolean GnssM9N_decode(const char *buffer, uint8 buffer_len, GnssM9N_Nav 
             {
                 Nav->numSats = numSats;
                 decoding_status = TRUE;
+            }
+
+            if (fixQuality_read == TRUE){
+                Nav->fixQuality = fixQuality;
             }
             break;
         }
