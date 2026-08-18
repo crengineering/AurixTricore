@@ -37,5 +37,6 @@
 #define ISR_PRIORITY_QSPI0_TX       102                         /* QSPI0 master transmit (flight IMU, src/bsw/Spi.c) */
 #define ISR_PRIORITY_QSPI0_RX       103                         /* QSPI0 master receive                             */
 #define ISR_PRIORITY_QSPI0_ER       104                         /* QSPI0 master error                               */
+#define ISR_PRIORITY_ASCLIN4_RX     105                         /* ASCLIN4 receive                                  */
 
 #endif

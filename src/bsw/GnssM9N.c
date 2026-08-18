@@ -6,6 +6,7 @@
 #include "Uart.h"
 #include "IfxAsclin_Asc.h"
 #include "IfxAsclin.h"
+#include "ConfigurationIsr.h"
 
 /* local used defines */
 #define GNSSM9N_BUFFER_SIZE    96u
@@ -22,7 +23,27 @@ static uint32         g_bytes       = 0u;
 static uint32         g_sentences   = 0u;
 static boolean        g_timeout     = TRUE;
 static uint16         g_poll_counter = GNSS_NOT_PRESENT_TICKS;
-static uint8          g_num_sats    = 0u;
+
+static volatile uint32 g_isrCount;
+static volatile uint32 g_isrBytes = 0u;
+/* local functions */
+void asclin4IsrReceive(void);
+
+IFX_INTERRUPT(asclin4IsrReceive, 0, ISR_PRIORITY_ASCLIN4_RX);
+
+/* cppcheck-suppress misra-c2012-8.7 ; deviation: referenced by the interrupt
+ * vector table, not by C code; static would break the vector entry. */
+void asclin4IsrReceive(void)
+{
+    uint8 fill_level = IfxAsclin_getRxFifoFillLevel(&MODULE_ASCLIN4);
+    g_isrCount++;
+    for (uint8 i=0; i<fill_level; i++)
+    {
+        (void)(IfxAsclin_readRxData(&MODULE_ASCLIN4) & 0xFFu);
+        g_isrBytes++;
+    }
+}
+
 
 /*
  * GNSS-NEO-M9N init function:
@@ -52,6 +73,10 @@ boolean GnssM9N_init(void)
         .pinDriver = IfxPort_PadDriver_ttlSpeed1
     };
     config.pins = &pins;
+
+    /* interrupt config */
+    config.interrupt.rxPriority    = ISR_PRIORITY_ASCLIN4_RX;
+    config.interrupt.typeOfService = IfxSrc_Tos_cpu0;
 
     /* No software FIFO buffers — transmission goes directly to the HW FIFO */
     config.txBuffer     = NULL_PTR;
@@ -112,7 +137,7 @@ void GnssM9N_poll (void){
             if (g_len > 0u)
             {
                 g_buffer[g_len] = '\0';
-
+/*
                 if ( (g_buffer[1] == 'G') &&
                      (g_buffer[2] == 'N') &&
                      (g_buffer[3] == 'G') &&
@@ -122,6 +147,7 @@ void GnssM9N_poll (void){
                     Uart_println(g_buffer);
                     //g_num_sats = (uint8)g_buffer[8];
                 }
+*/
                 g_len = 0u;
                 g_sentences++;
             }
@@ -161,11 +187,13 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
         status = TRUE;
     }
 
-    sample->rxBytes   = g_bytes;
-    sample->sentences = g_sentences;
+    //sample->rxBytes   = g_bytes;
+    //sample->sentences = g_sentences;
+    sample->rxBytes   = g_isrCount;
+    sample->sentences = g_isrBytes;
     sample->errors    = g_errors;
     sample->fixType   = 0u;
-    sample->numSats   = g_num_sats;
+    sample->numSats   = 0u;
 
     return status;
 }
