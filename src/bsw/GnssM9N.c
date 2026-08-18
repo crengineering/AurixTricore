@@ -35,6 +35,7 @@ static volatile uint16 g_ring_tail = 0u;
 /* local functions */
 static boolean GnssM9N_decode(const char *buffer, uint8 buffer_len, GnssM9N_Nav *Nav);
 void asclin4IsrReceive(void);
+static uint8 convert_ascii_to_int(char elem);
 
 IFX_INTERRUPT(asclin4IsrReceive, 0, ISR_PRIORITY_ASCLIN4_RX);
 
@@ -186,17 +187,34 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
 }
 
 static boolean GnssM9N_decode(const char *buffer, uint8 buffer_len, GnssM9N_Nav *Nav){
-    boolean decoding_status = FALSE;
-    gnss_type_t message_type = NONE;
-    uint8 count_comma = 0u;
-    uint8 numSats = 0u;
-    boolean digit_read = FALSE;
+    boolean     decoding_status = FALSE;
+    gnss_type_t message_type    = NONE;
+    uint8       count_comma     = 0u;
+    uint8       numSats         = 0u;
+    boolean     digit_read      = FALSE;
+    uint8       checksum        = 0u;
+    uint8       checksum_target = 0u;
 
-    if (buffer_len < 6u)
+    if ( (buffer_len < 6u) ||
+         (buffer[buffer_len-3] != '*'))
     {
         return FALSE;
     }
 
+    /* checksum calculation */
+    for (uint8 i=1u; i<buffer_len-3; i++)
+    {
+        checksum ^= buffer[i];
+    }
+
+    checksum_target = convert_ascii_to_int(buffer[buffer_len-2]) * 16 + convert_ascii_to_int(buffer[buffer_len-1]);
+
+    if (checksum != checksum_target)
+    {
+        return FALSE;
+    }
+
+    /* parse sentences type */
     if ( (buffer[1] == 'G') &&
          (buffer[2] == 'N') &&
          (buffer[3] == 'G') &&
@@ -224,7 +242,6 @@ static boolean GnssM9N_decode(const char *buffer, uint8 buffer_len, GnssM9N_Nav 
                 {
                     count_comma++;
                 }
-
             }
 
             if (numSats >= 32)
@@ -245,8 +262,23 @@ static boolean GnssM9N_decode(const char *buffer, uint8 buffer_len, GnssM9N_Nav 
             break;
         }
     }
-
-
-
     return decoding_status;
 }
+
+
+static uint8 convert_ascii_to_int(char elem)
+{
+    uint8 number = 0u;
+    if ((elem >= '0') &&
+        (elem <= '9')  )
+    {
+        number = elem - '0';
+    }
+    else if ((elem >= 'A') &&
+             (elem <= 'F')  )
+    {
+        number = elem - 'A' + 10u;
+    }
+    return number;
+}
+
