@@ -234,11 +234,21 @@ void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)
 {
     if (present != FALSE)
     {
+        g_xcpData.gnssPresent   = 1u;
         g_xcpData.gnssrxBytes   = sample_info.rxBytes;
         g_xcpData.gnsssentences = sample_info.sentences;
         g_xcpData.gnsserrors    = sample_info.errors;
         g_xcpData.gnssfixType   = sample_info.fixType;
         g_xcpData.gnssnumSats   = sample_info.numSats;
+    }
+    else
+    {
+        g_xcpData.gnssPresent   = 0u;
+        g_xcpData.gnssrxBytes   = 0u;
+        g_xcpData.gnsssentences = 0u;
+        g_xcpData.gnsserrors    = 0u;
+        g_xcpData.gnssfixType   = 0u;
+        g_xcpData.gnssnumSats   = 0u;
     }
 }
 

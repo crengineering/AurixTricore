@@ -10,7 +10,7 @@
 
 /* local used defines */
 #define GNSSM9N_BUFFER_SIZE    96u
-#define GNSS_POLL_PERIOD_MS    1u       /* must match the task calling GnssM9N_poll */
+#define GNSS_POLL_PERIOD_MS    100u       /* must match the task calling GnssM9N_poll */
 #define GNSS_TIMEOUT_MS        2000u    /* > the ~850 ms gap between 1 Hz bursts */
 #define GNSS_NOT_PRESENT_TICKS (GNSS_TIMEOUT_MS / GNSS_POLL_PERIOD_MS)
 #define RING_BUFFER_SIZE       512u
@@ -42,6 +42,7 @@ void           asclin4IsrReceive   (void);
 static uint8   convert_ascii_to_int(char elem);
 static uint8   nmea_sentence_parser(const char *buffer, uint8 buffer_len, uint8 stop_field, uint8 *value);
 static boolean gnss_checksum       (const char *buffer, uint8 buffer_len);
+static boolean GnssM9N_timeout(void);
 
 IFX_INTERRUPT(asclin4IsrReceive, 0, ISR_PRIORITY_ASCLIN4_RX);
 
@@ -136,17 +137,29 @@ boolean GnssM9N_init(void)
     return (IfxAsclin_getClockSource(&MODULE_ASCLIN4) == IfxAsclin_ClockSource_ascFastClock);
 }
 
+static boolean GnssM9N_timeout(void)
+{
+    if (g_poll_counter >= GNSS_NOT_PRESENT_TICKS)
+    {
+        return TRUE;
+    }
+    else
+    {
+        g_poll_counter ++;
+        return FALSE;
+    }
+}
+
 /*
  * Function that reads the information provided by GNSS M9N every 100ms
  */
 boolean GnssM9N_read(GnssM9N_Sample *sample){
     boolean status    = FALSE;
 
-    if (g_timeout != TRUE)
+    if (GnssM9N_timeout() != TRUE)
     {
         status = TRUE;
     }
-    status = TRUE;
 
     /* read from ring buffer */
     uint16 head = g_ring_head;
@@ -178,9 +191,8 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
         {
             g_ring_tail = 0u;
         }
-
+        g_poll_counter = 0u;
     }
-
     sample->rxBytes   = g_bytes;
     sample->sentences = g_sentences;
     sample->errors    = g_errors;

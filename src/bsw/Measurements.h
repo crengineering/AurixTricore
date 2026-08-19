@@ -158,6 +158,8 @@ typedef struct
     float32 magHeadingDeg;
 
     /* gnss- see GnssM9N.h */
+    uint8   gnssPresent;
+    uint8   gnssReserved[3];
     uint32  gnssrxBytes;
     uint32  gnsssentences;
     uint16  gnsserrors;
