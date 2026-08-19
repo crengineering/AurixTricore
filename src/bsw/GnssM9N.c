@@ -13,33 +13,35 @@
 #define GNSS_POLL_PERIOD_MS    1u       /* must match the task calling GnssM9N_poll */
 #define GNSS_TIMEOUT_MS        2000u    /* > the ~850 ms gap between 1 Hz bursts */
 #define GNSS_NOT_PRESENT_TICKS (GNSS_TIMEOUT_MS / GNSS_POLL_PERIOD_MS)
-#define RING_BUFFER_SIZE 512u
+#define RING_BUFFER_SIZE       512u
 /* local used variables */
-static IfxAsclin_Asc  g_asclin;
+static IfxAsclin_Asc           g_asclin;
 
-static char           g_buffer[GNSSM9N_BUFFER_SIZE];
-static uint8          g_len         = 0u;
-static uint16         g_errors      = 0u;
+static char                    g_buffer[GNSSM9N_BUFFER_SIZE];
+static uint8                   g_len         = 0u;
+static uint16                  g_errors      = 0u;
 static volatile uint32         g_bytes       = 0u;
-static uint32         g_sentences   = 0u;
-static boolean        g_timeout     = TRUE;
-static uint16         g_poll_counter = GNSS_NOT_PRESENT_TICKS;
-static uint8          g_ring_buf_overflow_counter = 0u;
-static GnssM9N_Nav           g_nav;
+static uint32                  g_sentences   = 0u;
+static boolean                 g_timeout     = TRUE;
+static uint16                  g_poll_counter = GNSS_NOT_PRESENT_TICKS;
+static uint8                   g_ring_buf_overflow_counter = 0u;
+static GnssM9N_Nav             g_nav;
 
 /* isr variables */
-static volatile char   g_ring_buffer[RING_BUFFER_SIZE];
-static volatile uint16 g_ring_head = 0u;
-static volatile uint16 g_ring_tail = 0u;
+static volatile char           g_ring_buffer[RING_BUFFER_SIZE];
+static volatile uint16         g_ring_head = 0u;
+static volatile uint16         g_ring_tail = 0u;
 
-static uint8 nmea_parser_index = 0u;
-static uint8 nmea_parser_bytes = 0u;
+/* nmea parser variables */
+static uint8                   nmea_parser_index = 0u;
+static uint8                   nmea_parser_bytes = 0u;
 
 /* local functions */
-static boolean GnssM9N_decode(const char *buffer, uint8 buffer_len, GnssM9N_Nav *Nav);
-void asclin4IsrReceive(void);
-static uint8 convert_ascii_to_int(char elem);
-static uint8 nmea_sentence_parser(const char *buffer, uint8 buffer_len, uint8 stop_field, uint8 *value);
+static boolean GnssM9N_decode      (const char *buffer, uint8 buffer_len, GnssM9N_Nav *Nav);
+void           asclin4IsrReceive   (void);
+static uint8   convert_ascii_to_int(char elem);
+static uint8   nmea_sentence_parser(const char *buffer, uint8 buffer_len, uint8 stop_field, uint8 *value);
+static boolean gnss_checksum       (const char *buffer, uint8 buffer_len);
 
 IFX_INTERRUPT(asclin4IsrReceive, 0, ISR_PRIORITY_ASCLIN4_RX);
 
@@ -159,14 +161,12 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
                 GnssM9N_decode(g_buffer, g_len, &g_nav);
                 g_len = 0u;
                 g_sentences++;
-
             }
         }
         else if (g_len < GNSSM9N_BUFFER_SIZE - 1u)
         {
             g_buffer[g_len] = byte;
             g_len++;
-
         }
         else
         {
@@ -193,13 +193,15 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
 static boolean GnssM9N_decode(const char *buffer, uint8 buffer_len, GnssM9N_Nav *Nav){
     boolean     decoding_status = FALSE;
     gnss_type_t message_type    = NONE;
-    uint8       count_comma     = 0u;
     uint8       numSats         = 0u;
     uint8       fixQuality      = 0u;
     boolean     digit_read      = FALSE;
     boolean     fixQuality_read = FALSE;
-    uint8       checksum        = 0u;
-    uint8       checksum_target = 0u;
+
+
+    /* reset parser logic by every call */
+    nmea_parser_index = 0u;
+    nmea_parser_bytes = 0u;
 
     if ( (buffer_len < 6u) ||
          (buffer[buffer_len-3] != '*'))
@@ -207,15 +209,8 @@ static boolean GnssM9N_decode(const char *buffer, uint8 buffer_len, GnssM9N_Nav 
         return FALSE;
     }
 
-    /* checksum calculation */
-    for (uint8 i=1u; i<buffer_len-3; i++)
-    {
-        checksum ^= buffer[i];
-    }
-
-    checksum_target = convert_ascii_to_int(buffer[buffer_len-2]) * 16 + convert_ascii_to_int(buffer[buffer_len-1]);
-
-    if (checksum != checksum_target)
+    /* checksum */
+    if (gnss_checksum(buffer, buffer_len) != TRUE)
     {
         return FALSE;
     }
@@ -234,14 +229,11 @@ static boolean GnssM9N_decode(const char *buffer, uint8 buffer_len, GnssM9N_Nav 
     {
         case GNGGA:
         {
-            // detect number of satellites
-            nmea_parser_index = 0u;
-            nmea_parser_bytes = 0u;
+            /* detect number of satellites. Enum has to be ascending*/
             fixQuality_read = nmea_sentence_parser(buffer, buffer_len, (uint8) GNGGA_FIX_QUALITY, &fixQuality);
-            digit_read = nmea_sentence_parser(buffer, buffer_len, (uint8) GNGGA_SATELLITES_USED, &numSats);
+            digit_read      = nmea_sentence_parser(buffer, buffer_len, (uint8) GNGGA_SATELLITES_USED, &numSats);
 
-
-            if (numSats >= 32)
+            if (numSats >= GNSS_MAX_SATELLITES)
             {
                 decoding_status = FALSE;
 
@@ -310,4 +302,21 @@ static boolean nmea_sentence_parser(const char *buffer, uint8 buffer_len, uint8 
         *value = local_value;
     }
     return status;
+}
+
+static boolean gnss_checksum(const char *buffer, uint8 buffer_len)
+{
+    /* local variable declaration */
+    uint8       checksum         = 0u;
+    uint8       checksum_target  = 0u;
+
+    /* checksum calculation */
+    for (uint8 i=1u; i<buffer_len-3; i++)
+    {
+        checksum ^= buffer[i];
+    }
+
+    checksum_target = convert_ascii_to_int(buffer[buffer_len-2]) * 16 + convert_ascii_to_int(buffer[buffer_len-1]);
+
+    return (checksum == checksum_target);
 }

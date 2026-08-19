@@ -35,6 +35,7 @@ typedef enum
 
 #define GNGGA_FIX_QUALITY     6u
 #define GNGGA_SATELLITES_USED 7u
+#define GNSS_MAX_SATELLITES  32u
 
 /** Initialise ASCLIN4 at 38400 on P22.5 (TX) / P22.6 (RX). TX and RX based on TC399 view */
 boolean GnssM9N_init(void);
