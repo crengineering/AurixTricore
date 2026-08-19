@@ -32,10 +32,14 @@ static volatile char   g_ring_buffer[RING_BUFFER_SIZE];
 static volatile uint16 g_ring_head = 0u;
 static volatile uint16 g_ring_tail = 0u;
 
+static uint8 nmea_parser_index = 0u;
+static uint8 nmea_parser_bytes = 0u;
+
 /* local functions */
 static boolean GnssM9N_decode(const char *buffer, uint8 buffer_len, GnssM9N_Nav *Nav);
 void asclin4IsrReceive(void);
 static uint8 convert_ascii_to_int(char elem);
+static uint8 nmea_sentence_parser(const char *buffer, uint8 buffer_len, uint8 stop_field, uint8 *value);
 
 IFX_INTERRUPT(asclin4IsrReceive, 0, ISR_PRIORITY_ASCLIN4_RX);
 
@@ -231,28 +235,11 @@ static boolean GnssM9N_decode(const char *buffer, uint8 buffer_len, GnssM9N_Nav 
         case GNGGA:
         {
             // detect number of satellites
-            for (uint8 i=6u; i < buffer_len; i++)
-            {
-                if ((count_comma ==  GNGGA_SATELLITES_USED) &&
-                    (buffer[i] >= '0')                      &&
-                    (buffer[i] <= '9')                      )
-                {
-                    numSats = numSats*10 + buffer[i] - '0';
-                    digit_read = TRUE;
-                }
-                if ((count_comma == GNGGA_FIX_QUALITY) &&
-                    (buffer[i]   >= '0')               &&
-                    (buffer[i]   <= '9')               )
-                {
-                    fixQuality = buffer[i] - '0';
-                    fixQuality_read = TRUE;
-                }
+            nmea_parser_index = 0u;
+            nmea_parser_bytes = 0u;
+            fixQuality_read = nmea_sentence_parser(buffer, buffer_len, (uint8) GNGGA_FIX_QUALITY, &fixQuality);
+            digit_read = nmea_sentence_parser(buffer, buffer_len, (uint8) GNGGA_SATELLITES_USED, &numSats);
 
-                if (buffer[i] == ',')
-                {
-                    count_comma++;
-                }
-            }
 
             if (numSats >= 32)
             {
@@ -296,3 +283,31 @@ static uint8 convert_ascii_to_int(char elem)
     return number;
 }
 
+
+
+static boolean nmea_sentence_parser(const char *buffer, uint8 buffer_len, uint8 stop_field, uint8 *value)
+{
+    boolean status = FALSE;
+    uint8 local_value = 0u;
+    while ((nmea_parser_index <= stop_field) &&
+            (nmea_parser_bytes < buffer_len))
+    {
+        if ( (nmea_parser_index == stop_field) &&
+                (buffer[nmea_parser_bytes] >= '0') &&
+                (buffer[nmea_parser_bytes] <= '9'))
+        {
+            local_value = local_value *10 + buffer[nmea_parser_bytes] - '0';
+            status = TRUE;
+        }
+        if (buffer[nmea_parser_bytes] == ',')
+        {
+            nmea_parser_index++;
+        }
+        nmea_parser_bytes++;
+    }
+    if (status == TRUE)
+    {
+        *value = local_value;
+    }
+    return status;
+}
