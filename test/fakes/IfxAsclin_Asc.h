@@ -16,6 +16,10 @@
 #define NULL_PTR ((void *)0)
 #endif
 
+/* Only the enumerators the driver names are needed. The value matches the
+ * vendor's, so an assertion on "which core services the ISR" is meaningful. */
+typedef enum { IfxSrc_Tos_cpu0 = 0 } IfxSrc_Tos;
+
 /* Only the enumerators the driver names are needed. */
 typedef enum { IfxPort_InputMode_pullUp    = 0 } IfxPort_InputMode;
 typedef enum { IfxPort_OutputMode_pushPull = 0 } IfxPort_OutputMode;
@@ -48,6 +52,18 @@ typedef struct
     float32 baudrate;
 } IfxAsclin_Asc_BaudRate;
 
+/* Interrupt sub-config. The driver is ISR-driven, so unlike the pin and
+ * baudrate settings these fields decide whether bytes are seen at all. The
+ * fake stores them (see FakeAsclin_Asc_lastConfig) so a test can check the
+ * SRPN and the servicing core without a debugger. */
+typedef struct
+{
+    uint16     txPriority;
+    uint16     rxPriority;
+    uint16     erPriority;
+    IfxSrc_Tos typeOfService;
+} IfxAsclin_Asc_InterruptConfig;
+
 typedef struct
 {
     Ifx_ASCLIN               *asclin;
@@ -58,6 +74,7 @@ typedef struct
     uint32                    txBufferSize;
     void                     *rxBuffer;
     uint32                    rxBufferSize;
+    IfxAsclin_Asc_InterruptConfig interrupt;
 } IfxAsclin_Asc_Config;
 
 typedef struct { int dummy; } IfxAsclin_Asc;

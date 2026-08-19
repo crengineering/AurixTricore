@@ -47,11 +47,15 @@ target_link_libraries(test_corestats PRIVATE unity test_common)
 add_test(NAME corestats COMMAND test_corestats)
 
 #[[
-GnssM9N
+GnssM9N: der Treiber steht NICHT in dieser Liste. test_GnssM9N.c zieht
+GnssM9N.c per #include herein, weil die interessante Logik (Checksumme,
+ASCII-Wandlung, Feldparser, Decoder) static ist und sonst unerreichbar waere.
+Zusaetzlich hier aufzufuehren gaebe doppelte Symbole beim Linken.
+fakes/ liefert ausserdem ConfigurationIsr.h und das IFX_INTERRUPT-Makro,
+sodass die ISR auf dem Host eine ganz normale Funktion ist.
 ]]
 add_executable(test_GnssM9N
     test_GnssM9N.c
-    ${BSW}/GnssM9N.c
     fakes/IfxAsclin.c
     fakes/Uart.c
 )

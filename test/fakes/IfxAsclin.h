@@ -51,7 +51,7 @@ IfxAsclin_ClockSource IfxAsclin_getClockSource(Ifx_ASCLIN *asclin);
 
 /* ---- test control, host build only ---------------------------------- */
 
-/** Drop every pending byte and clear both error flags. */
+/** Drop every pending byte, clear both error flags and the clock override. */
 void FakeAsclin_reset(void);
 
 /** Append bytes to the simulated wire. They become visible to
@@ -62,8 +62,9 @@ void FakeAsclin_pushRx(const char *bytes);
 void FakeAsclin_setFrameError(void);
 void FakeAsclin_setRxOverflow(void);
 
-/** Force the clock source the next getClockSource() reports, to simulate a
- *  module that did not come up. Reset by the next initModule(). */
+/** Force what getClockSource() reports, to simulate a module that did not come
+ *  up. Sticky: it overrides what initModule applies, so it stays in effect
+ *  across GnssM9N_init(). Cleared by FakeAsclin_reset(). */
 void FakeAsclin_forceClockSource(IfxAsclin_ClockSource src);
 
 /** Bytes still waiting on the simulated wire (may exceed the 16-byte FIFO). */

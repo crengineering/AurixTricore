@@ -17,4 +17,12 @@ typedef unsigned char boolean;
 #define TRUE  (1u)
 #define FALSE (0u)
 
+/* On target this comes from Compilers.h (via Platform_Types.h): it decorates
+ * the following function as an interrupt handler and plants the vector-table
+ * entry. On the host there is no vector table, so it degrades to a plain
+ * prototype -- which is exactly what the GCC variant of the vendor macro does
+ * when IFX_USE_SW_MANAGED_INT is off. The handler then stays an ordinary
+ * function that a test can call directly to simulate "a byte arrived". */
+#define IFX_INTERRUPT(isr, vectabNum, prio) void isr(void)
+
 #endif /* IFX_TYPES_H */

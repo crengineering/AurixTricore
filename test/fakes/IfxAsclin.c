@@ -27,12 +27,20 @@ static boolean s_rxOverflow;
 static IfxAsclin_Asc_Config s_lastConfig;
 static IfxAsclin_ClockSource s_clockSource = IfxAsclin_ClockSource_noClock;
 
+/* Sticky override, see FakeAsclin_forceClockSource. Cleared only by
+ * FakeAsclin_reset, so it survives the initModule call inside GnssM9N_init --
+ * otherwise the "module never came up" branch would be unreachable. */
+static boolean               s_clockForced;
+static IfxAsclin_ClockSource s_forcedClockSource;
+
 void FakeAsclin_reset(void)
 {
     s_writeIdx   = 0u;
     s_readIdx    = 0u;
-    s_frameError = FALSE;
-    s_rxOverflow = FALSE;
+    s_frameError  = FALSE;
+    s_rxOverflow  = FALSE;
+    s_clockForced = FALSE;
+    s_clockSource = IfxAsclin_ClockSource_noClock;
 }
 
 void FakeAsclin_pushRx(const char *bytes)
@@ -131,6 +139,10 @@ void IfxAsclin_Asc_initModuleConfig(IfxAsclin_Asc_Config *config,
     config->txBufferSize      = 0u;
     config->rxBuffer          = NULL_PTR;
     config->rxBufferSize      = 0u;
+    config->interrupt.txPriority    = 0u;
+    config->interrupt.rxPriority    = 0u;
+    config->interrupt.erPriority    = 0u;
+    config->interrupt.typeOfService = IfxSrc_Tos_cpu0;
 }
 
 IfxAsclin_Status IfxAsclin_Asc_initModule(IfxAsclin_Asc              *asclin,
@@ -141,7 +153,10 @@ IfxAsclin_Status IfxAsclin_Asc_initModule(IfxAsclin_Asc              *asclin,
 
     /* The register setup happens regardless of the status below -- that is why
      * the peripheral works on silicon even though init reports an error. */
-    s_clockSource = config->clockSource;
+    if (s_clockForced == FALSE)
+    {
+        s_clockSource = config->clockSource;
+    }
 
     if ((config->txBuffer == NULL_PTR) || (config->rxBuffer == NULL_PTR))
         return IfxAsclin_Status_configurationError;      /* see the header */
@@ -152,12 +167,14 @@ IfxAsclin_Status IfxAsclin_Asc_initModule(IfxAsclin_Asc              *asclin,
 IfxAsclin_ClockSource IfxAsclin_getClockSource(Ifx_ASCLIN *asclin)
 {
     (void)asclin;
-    return s_clockSource;
+    return (s_clockForced == TRUE) ? s_forcedClockSource : s_clockSource;
 }
 
 void FakeAsclin_forceClockSource(IfxAsclin_ClockSource src)
 {
-    s_clockSource = src;
+    s_clockForced       = TRUE;
+    s_forcedClockSource = src;
+    s_clockSource       = src;
 }
 
 const IfxAsclin_Asc_Config *FakeAsclin_Asc_lastConfig(void)
