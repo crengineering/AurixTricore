@@ -44,6 +44,11 @@ void    IfxAsclin_clearFrameErrorFlag(Ifx_ASCLIN *asclin);
 void    IfxAsclin_flushRxFifo(Ifx_ASCLIN *asclin);
 void    IfxAsclin_clearAllFlags(Ifx_ASCLIN *asclin);
 
+/* Transmit side. The driver bypasses the iLLD software FIFO (it passes
+ * txBuffer = NULL_PTR), so these two raw accessors are the whole TX surface. */
+uint8   IfxAsclin_getTxFifoFillLevel(Ifx_ASCLIN *asclin);
+void    IfxAsclin_writeTxData(Ifx_ASCLIN *asclin, uint32 data);
+
 /* Reads back what initModule applied. GnssM9N_init() uses this instead of the
  * initModule status, because that status is a constant for a polled driver
  * (see the note in IfxAsclin_Asc_initModule below). */
@@ -69,5 +74,17 @@ void FakeAsclin_forceClockSource(IfxAsclin_ClockSource src);
 
 /** Bytes still waiting on the simulated wire (may exceed the 16-byte FIFO). */
 uint32 FakeAsclin_pending(void);
+
+/* ---- transmit observation -------------------------------------------------
+ * The fake drains its TX FIFO instantly, so a test sees every byte the driver
+ * handed to the hardware, in order -- which is what lets a test check a UBX
+ * frame octet by octet. Both are cleared by FakeAsclin_reset. */
+uint32       FakeAsclin_txCount(void);
+const uint8 *FakeAsclin_txData(void);
+
+/* Wedge the TX FIFO at full so a bounded wait has to hit its deadline. This is
+ * the only way to reach that branch on the host; the real fault it stands in
+ * for is a pad that is not driving. Cleared by FakeAsclin_reset. */
+void FakeAsclin_setTxBlocked(boolean blocked);
 
 #endif /* IFXASCLIN_H */

@@ -766,6 +766,12 @@ void test_init_does_not_actually_reset_driver_state(void)
     TEST_ASSERT_EQUAL_UINT16(17u,   g_ring_head);
 }
 
+void test_send_Ubx(void)
+{
+    uint8 payload[9] = {0x00, 0x01, 0x00, 0x00, 0xC5, 0x00, 0x90, 0x20, 0x00};
+    TEST_ASSERT_EQUAL(TRUE, gnss_sendUbx (0x06, 0x8A, payload, 9));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -824,6 +830,9 @@ int main(void)
     RUN_TEST(test_init_configures_the_rx_interrupt);
     RUN_TEST(test_init_requests_the_gnss_baudrate);
     RUN_TEST(test_init_does_not_actually_reset_driver_state);
+
+    /* send */
+    RUN_TEST(test_send_Ubx);
 
     return UNITY_END();
 }

@@ -22,6 +22,9 @@ static uint8   s_wire[FAKE_WIRE_CAPACITY];
 static uint32  s_writeIdx;
 static uint32  s_readIdx;
 static boolean s_frameError;
+static uint8   s_tx[FAKE_WIRE_CAPACITY];
+static uint32  s_txCount;
+static boolean s_txBlocked;
 static boolean s_rxOverflow;
 
 static IfxAsclin_Asc_Config s_lastConfig;
@@ -41,6 +44,8 @@ void FakeAsclin_reset(void)
     s_rxOverflow  = FALSE;
     s_clockForced = FALSE;
     s_clockSource = IfxAsclin_ClockSource_noClock;
+    s_txCount     = 0u;
+    s_txBlocked   = FALSE;
 }
 
 void FakeAsclin_pushRx(const char *bytes)
@@ -60,6 +65,11 @@ uint32 FakeAsclin_pending(void)
 {
     return s_writeIdx - s_readIdx;
 }
+
+uint32       FakeAsclin_txCount(void) { return s_txCount; }
+const uint8 *FakeAsclin_txData(void)  { return s_tx; }
+
+void FakeAsclin_setTxBlocked(boolean blocked) { s_txBlocked = blocked; }
 
 /* ---- the iLLD surface the driver calls ------------------------------- */
 
@@ -117,6 +127,32 @@ void IfxAsclin_flushRxFifo(Ifx_ASCLIN *asclin)
     (void)asclin;
     s_readIdx  = 0u;
     s_writeIdx = 0u;
+}
+
+uint8 IfxAsclin_getTxFifoFillLevel(Ifx_ASCLIN *asclin)
+{
+    uint8 level = 0u;
+    (void)asclin;
+
+    /* Either wedged full or drained instantly. The levels in between are not
+     * interesting: the cases that matter are "the driver can send" and "the
+     * driver never can". */
+    if (s_txBlocked != FALSE)
+    {
+        level = (uint8)FAKE_HW_FIFO_DEPTH;
+    }
+    return level;
+}
+
+void IfxAsclin_writeTxData(Ifx_ASCLIN *asclin, uint32 data)
+{
+    (void)asclin;
+
+    if (s_txCount < FAKE_WIRE_CAPACITY)
+    {
+        s_tx[s_txCount] = (uint8)(data & 0xFFu);
+        s_txCount++;
+    }
 }
 
 void IfxAsclin_clearAllFlags(Ifx_ASCLIN *asclin)

@@ -7,6 +7,7 @@
 #include "IfxAsclin_Asc.h"
 #include "IfxAsclin.h"
 #include "ConfigurationIsr.h"
+#include "SysTime.h"
 
 /* local used defines */
 #define GNSSM9N_BUFFER_SIZE    96u
@@ -14,6 +15,12 @@
 #define GNSS_TIMEOUT_MS        2000u    /* > the ~850 ms gap between 1 Hz bursts */
 #define GNSS_NOT_PRESENT_TICKS (GNSS_TIMEOUT_MS / GNSS_POLL_PERIOD_MS)
 #define RING_BUFFER_SIZE       512u
+#define GNSS_TX_DEADLINE_TICKS 1000000
+
+/* UBX */
+#define GNSS_UBX_SYNC1         0xB5u
+#define GNSS_UBX_SYNC2         0x62u
+#define GNSS_UBX_MAX_PAYLOAD   32u
 /* local used variables */
 static IfxAsclin_Asc           g_asclin;
 
@@ -26,6 +33,7 @@ static boolean                 g_timeout     = TRUE;
 static uint16                  g_poll_counter = GNSS_NOT_PRESENT_TICKS;
 static uint8                   g_ring_buf_overflow_counter = 0u;
 static GnssM9N_Nav             g_nav;
+static uint8                   g_tx_discards = 0u;
 
 /* isr variables */
 static volatile char           g_ring_buffer[RING_BUFFER_SIZE];
@@ -42,7 +50,9 @@ void           asclin4IsrReceive   (void);
 static uint8   convert_ascii_to_int(char elem);
 static uint8   nmea_sentence_parser(const char *buffer, uint8 buffer_len, uint8 stop_field, uint8 *value);
 static boolean gnss_checksum       (const char *buffer, uint8 buffer_len);
-static boolean GnssM9N_timeout(void);
+static boolean GnssM9N_timeout     (void);
+static boolean gnss_txByte         (uint8 value);
+static boolean gnss_sendUbx        (uint8 msgClass, uint8 msgId, const uint8 *payload, uint8 payload_len);
 
 IFX_INTERRUPT(asclin4IsrReceive, 0, ISR_PRIORITY_ASCLIN4_RX);
 
@@ -73,7 +83,75 @@ void asclin4IsrReceive(void)
         }
     }
 }
+static boolean gnss_txByte(uint8 value)
+{
+    uint32 start = SysTime_getTicks();
+    boolean discard = FALSE;
 
+    while ((IfxAsclin_getTxFifoFillLevel(&MODULE_ASCLIN4) >= 16u) &&
+            (discard != TRUE))
+    {
+        if ((SysTime_getTicks() - start) > GNSS_TX_DEADLINE_TICKS)
+        {
+            g_tx_discards++;
+            discard = TRUE;
+        }
+    }
+    if (discard != TRUE)
+    {
+        IfxAsclin_writeTxData(&MODULE_ASCLIN4, (uint32)value);
+    }
+
+    return discard != TRUE;
+}
+
+static boolean gnss_sendUbx (uint8 msgClass, uint8 msgId, const uint8 *payload, uint8 payload_len)
+{
+    uint8   ubx_message[GNSS_UBX_MAX_PAYLOAD + 8u];
+    uint8   ck_a         = 0u;
+    uint8   ck_b         = 0u;
+    boolean send_success = TRUE;
+
+    if ( (payload_len > GNSS_UBX_MAX_PAYLOAD) ||
+         (payload_len == 0u)            )
+    {
+        return FALSE;
+    }
+
+    ubx_message[0u] = GNSS_UBX_SYNC1;
+    ubx_message[1u] = GNSS_UBX_SYNC2;
+    ubx_message[2u] = msgClass;
+    ubx_message[3u] = msgId;
+    ubx_message[4u] = payload_len;
+    ubx_message[5u] = 0u;
+
+    /* add payload into message */
+    for (uint8 i = 0u; i < payload_len; i++)
+    {
+        ubx_message[6u+ i] = payload[i];
+    }
+
+    /* build checksum */
+    for(uint8 i= 2u; i < 6u + payload_len; i++)
+    {
+        ck_a += ubx_message[i];
+        ck_b += ck_a;
+    }
+
+    ubx_message[6u+payload_len] = ck_a;
+    ubx_message[6u+payload_len+1u] = ck_b;
+
+    /* transmit array */
+    for(uint8 i=0u; i<(6u + payload_len + 2u); i++)
+    {
+        if (gnss_txByte(ubx_message[i]) != TRUE)
+        {
+            send_success = FALSE;
+        }
+    }
+
+    return send_success;
+}
 /*
  * GNSS-NEO-M9N init function:
  * Step 1: create config for ASC Interface on ASCLIN4: IfxAsclin_Asc_initModuleConfig

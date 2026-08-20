@@ -58,6 +58,8 @@ add_executable(test_GnssM9N
     test_GnssM9N.c
     fakes/IfxAsclin.c
     fakes/Uart.c
+    ${BSW}/SysTime.c
+    fakes/IfxStm.c
 )
 target_link_libraries(test_GnssM9N PRIVATE unity test_common)
 add_test(NAME GnssM9N COMMAND test_GnssM9N)
