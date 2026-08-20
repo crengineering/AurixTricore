@@ -17,6 +17,9 @@ typedef struct
   uint16 errors;
   uint8  fixType;
   uint8  numSats;
+  uint8  aux1;
+  uint8  aux2;
+  uint8  aux3;
 }GnssM9N_Sample;
 
 typedef struct
@@ -32,6 +35,13 @@ typedef enum
     GNGSA,
     GNRMC
 }gnss_type_t;
+
+typedef enum
+{
+    GNSS_IDLE,
+    GNSS_UBX,
+    GNSS_NMEA
+}gnss_parse_state_t;
 
 #define GNGGA_FIX_QUALITY     6u
 #define GNGGA_SATELLITES_USED 7u

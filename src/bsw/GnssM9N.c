@@ -49,8 +49,11 @@ static volatile uint16         g_ring_tail = 0u;
 static uint8                   nmea_parser_index = 0u;
 static uint8                   nmea_parser_bytes = 0u;
 
+
 /* ubx variables */
 static boolean gsv_deactivated = FALSE;
+static uint8 g_detect_ack = 0u;
+static boolean                 g_ubx_detection_armed = FALSE;
 
 /* local functions */
 static boolean GnssM9N_decode      (const char *buffer, uint8 buffer_len, GnssM9N_Nav *Nav);
@@ -266,6 +269,8 @@ static boolean GnssM9N_timeout(void)
  */
 boolean GnssM9N_read(GnssM9N_Sample *sample){
     boolean status    = FALSE;
+    gnss_parse_state_t parse_state = GNSS_IDLE;
+
 
     if (GnssM9N_timeout() != TRUE)
     {
@@ -285,24 +290,64 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
     while (g_ring_tail != head)
     {
         char byte = g_ring_buffer[g_ring_tail];
-        if (byte == ('\r') || byte == ('\n'))
+
+
+       /*  decode statemachine for NMEA & UBX */
+        switch (parse_state)
         {
-            if (g_len > 0u)
-            {
-                g_buffer[g_len] = '\0';
-                GnssM9N_decode(g_buffer, g_len, &g_nav);
-                g_len = 0u;
-                g_sentences++;
-            }
-        }
-        else if (g_len < GNSSM9N_BUFFER_SIZE - 1u)
-        {
-            g_buffer[g_len] = byte;
-            g_len++;
-        }
-        else
-        {
-            g_len = 0u;
+            case GNSS_IDLE:
+                if (byte == '$')
+                {
+                    parse_state = GNSS_NMEA;
+                }
+                else if (byte == 'B5')
+                {
+                    g_ubx_detection_armed = TRUE;
+                }
+
+                if ( (g_ubx_detection_armed) &&
+                     (byte == '62')          )
+                {
+                    parse_state = GNSS_UBX;
+                }
+                else
+                {
+                    g_ubx_detection_armed = FALSE;
+                }
+
+                break;
+            case GNSS_UBX:
+
+                parse_state = GNSS_IDLE;
+                break;
+            case GNSS_NMEA:
+
+
+                if (byte == ('\r') || byte == ('\n'))
+                {
+                    if (g_len > 0u)
+                    {
+                        g_buffer[g_len] = '\0';
+                        GnssM9N_decode(g_buffer, g_len, &g_nav);
+                        g_len = 0u;
+                        g_sentences++;
+                    }
+                }
+
+                else if (g_len < GNSSM9N_BUFFER_SIZE - 1u)
+                {
+                    g_buffer[g_len] = byte;
+                    g_len++;
+                }
+                else
+                {
+                    g_len = 0u;
+                }
+
+                break;
+
+            default:
+                break;
         }
 
         g_ring_tail++;
@@ -311,12 +356,20 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
             g_ring_tail = 0u;
         }
         g_poll_counter = 0u;
+
+        if (byte == 'B5')
+        {
+            g_detect_ack = 1;
+        }
     }
     sample->rxBytes   = g_bytes;
     sample->sentences = g_sentences;
     sample->errors    = g_errors;
     sample->fixType   = g_nav.fixQuality;
     sample->numSats   = g_nav.numSats;
+    sample->aux1      = g_detect_ack;
+    sample->aux2      = 6u;
+    sample->aux3      = parse_state;
 
     return status;
 }
