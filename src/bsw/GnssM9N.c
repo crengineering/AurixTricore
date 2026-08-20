@@ -21,6 +21,11 @@
 #define GNSS_UBX_SYNC1         0xB5u
 #define GNSS_UBX_SYNC2         0x62u
 #define GNSS_UBX_MAX_PAYLOAD   32u
+#define CFG_MSGOUT_NMEA_GSV_UART1  0x209100C5u
+#define UBX_CFG_LAYER_RAM          0x01u
+#define UBX_CLASS_CFG              0x06u
+#define UBX_ID_CFG_VALSET          0x8Au
+#define UBX_PAYLOAD_LEN    9u
 /* local used variables */
 static IfxAsclin_Asc           g_asclin;
 
@@ -43,6 +48,9 @@ static volatile uint16         g_ring_tail = 0u;
 /* nmea parser variables */
 static uint8                   nmea_parser_index = 0u;
 static uint8                   nmea_parser_bytes = 0u;
+
+/* ubx variables */
+static boolean gsv_deactivated = FALSE;
 
 /* local functions */
 static boolean GnssM9N_decode      (const char *buffer, uint8 buffer_len, GnssM9N_Nav *Nav);
@@ -83,6 +91,28 @@ void asclin4IsrReceive(void)
         }
     }
 }
+
+static boolean gnss_cfgValsetU1(uint8 value, uint32 key)
+{
+    uint8 payload[UBX_PAYLOAD_LEN];
+    boolean status = FALSE;
+
+    payload[0] = 0u;
+    payload[1] = UBX_CFG_LAYER_RAM;
+    payload[2] = 0u;
+    payload[3] = 0u;
+    payload[4] = (uint8) ( key      & 0xFFu);
+    payload[5] = (uint8) ((key >>8) & 0xFFu);
+    payload[6] = (uint8) ((key>>16) & 0xFFu);
+    payload[7] = (uint8) ((key>>24) & 0xFFu);
+    payload[8] = value;
+
+    status = gnss_sendUbx(UBX_CLASS_CFG, UBX_ID_CFG_VALSET, payload, UBX_PAYLOAD_LEN);
+
+    return status;
+}
+
+
 static boolean gnss_txByte(uint8 value)
 {
     uint32 start = SysTime_getTicks();
@@ -210,6 +240,9 @@ boolean GnssM9N_init(void)
       g_sentences    = 0u;
       g_timeout      = TRUE;
       g_poll_counter = GNSS_NOT_PRESENT_TICKS;
+
+      /* reset TX to GNSS */
+      gsv_deactivated = FALSE;
     }
 
     return (IfxAsclin_getClockSource(&MODULE_ASCLIN4) == IfxAsclin_ClockSource_ascFastClock);
@@ -237,6 +270,14 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
     if (GnssM9N_timeout() != TRUE)
     {
         status = TRUE;
+    }
+
+    /* deactive unused sentences gsv_deactivated gsv_deactivate_increment */
+    if ((status == TRUE) &&
+        (gsv_deactivated == FALSE))
+    {
+        (void)gnss_cfgValsetU1(0u, CFG_MSGOUT_NMEA_GSV_UART1);
+        gsv_deactivated = TRUE;
     }
 
     /* read from ring buffer */

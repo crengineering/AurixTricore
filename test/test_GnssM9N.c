@@ -770,6 +770,8 @@ void test_send_Ubx(void)
 {
     uint8 payload[9] = {0x00, 0x01, 0x00, 0x00, 0xC5, 0x00, 0x90, 0x20, 0x00};
     TEST_ASSERT_EQUAL(TRUE, gnss_sendUbx (0x06, 0x8A, payload, 9));
+
+    TEST_ASSERT_EQUAL(TRUE, gnss_cfgValsetU1(0u, CFG_MSGOUT_NMEA_GSV_UART1));
 }
 
 int main(void)
