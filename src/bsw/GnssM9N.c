@@ -10,8 +10,8 @@
 #include "SysTime.h"
 
 /* local used defines */
-#define GNSSM9N_BUFFER_SIZE    96u
-#define GNSS_POLL_PERIOD_MS    100u       /* must match the task calling GnssM9N_poll */
+#define GNSSM9N_BUFFER_SIZE    100u
+#define GNSS_POLL_PERIOD_MS    100u      /* must match the task calling GnssM9N_poll */
 #define GNSS_TIMEOUT_MS        2000u    /* > the ~850 ms gap between 1 Hz bursts */
 #define GNSS_NOT_PRESENT_TICKS (GNSS_TIMEOUT_MS / GNSS_POLL_PERIOD_MS)
 #define RING_BUFFER_SIZE       512u
@@ -29,7 +29,7 @@
 /* local used variables */
 static IfxAsclin_Asc           g_asclin;
 
-static char                    g_buffer[GNSSM9N_BUFFER_SIZE];
+static uint8                   g_buffer[GNSSM9N_BUFFER_SIZE];
 static uint8                   g_len         = 0u;
 static uint16                  g_errors      = 0u;
 static volatile uint32         g_bytes       = 0u;
@@ -48,12 +48,15 @@ static volatile uint16         g_ring_tail = 0u;
 /* nmea parser variables */
 static uint8                   nmea_parser_index = 0u;
 static uint8                   nmea_parser_bytes = 0u;
-
+static uint16                  g_ubx_payload_len = 0u;
 
 /* ubx variables */
 static boolean gsv_deactivated = FALSE;
 static uint8 g_detect_ack = 0u;
-static boolean                 g_ubx_detection_armed = FALSE;
+
+static gnss_parse_state_t parse_state = GNSS_IDLE;
+static uint8 last_byte;
+
 
 /* local functions */
 static boolean GnssM9N_decode      (const char *buffer, uint8 buffer_len, GnssM9N_Nav *Nav);
@@ -64,6 +67,7 @@ static boolean gnss_checksum       (const char *buffer, uint8 buffer_len);
 static boolean GnssM9N_timeout     (void);
 static boolean gnss_txByte         (uint8 value);
 static boolean gnss_sendUbx        (uint8 msgClass, uint8 msgId, const uint8 *payload, uint8 payload_len);
+static boolean gnss_ubx_decode     (const uint8 *buffer, uint8 buffer_len, uint8 payload);
 
 IFX_INTERRUPT(asclin4IsrReceive, 0, ISR_PRIORITY_ASCLIN4_RX);
 
@@ -138,6 +142,10 @@ static boolean gnss_txByte(uint8 value)
     return discard != TRUE;
 }
 
+static boolean gnss_checksumUbx(uint8 *message, uint8 payload_len){
+
+}
+
 static boolean gnss_sendUbx (uint8 msgClass, uint8 msgId, const uint8 *payload, uint8 payload_len)
 {
     uint8   ubx_message[GNSS_UBX_MAX_PAYLOAD + 8u];
@@ -185,6 +193,15 @@ static boolean gnss_sendUbx (uint8 msgClass, uint8 msgId, const uint8 *payload, 
 
     return send_success;
 }
+
+static boolean gnss_ubx_decode (const uint8 *buffer, uint8 buffer_len, uint8 payload){
+
+
+}
+
+
+
+
 /*
  * GNSS-NEO-M9N init function:
  * Step 1: create config for ASC Interface on ASCLIN4: IfxAsclin_Asc_initModuleConfig
@@ -269,8 +286,6 @@ static boolean GnssM9N_timeout(void)
  */
 boolean GnssM9N_read(GnssM9N_Sample *sample){
     boolean status    = FALSE;
-    gnss_parse_state_t parse_state = GNSS_IDLE;
-
 
     if (GnssM9N_timeout() != TRUE)
     {
@@ -296,29 +311,38 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
         switch (parse_state)
         {
             case GNSS_IDLE:
-                if (byte == '$')
+                g_len = 0;
+                if (byte == ('$'))
                 {
                     parse_state = GNSS_NMEA;
+                    g_buffer[g_len] = byte;
+                    g_len++;
                 }
-                else if (byte == 'B5')
-                {
-                    g_ubx_detection_armed = TRUE;
-                }
-
-                if ( (g_ubx_detection_armed) &&
-                     (byte == '62')          )
+                else if ((last_byte   == 0xB5u) &&
+                         ((uint8)byte == 0x62u) )
                 {
                     parse_state = GNSS_UBX;
-                }
-                else
-                {
-                    g_ubx_detection_armed = FALSE;
                 }
 
                 break;
             case GNSS_UBX:
+                g_detect_ack++;
+                g_buffer[g_len] = byte;
+                g_len++;
 
-                parse_state = GNSS_IDLE;
+                if (g_len > 3u){
+                    g_ubx_payload_len = ((uint8)g_buffer[3]<<8) | ((uint8)(g_buffer[2]));
+                    if (g_ubx_payload_len > 94){
+                        parse_state = GNSS_IDLE;
+                    }
+
+                    if (g_len >= (g_ubx_payload_len + 6u))
+                    {
+                        //decode
+                        parse_state = GNSS_IDLE;
+                    }
+                }
+
                 break;
             case GNSS_NMEA:
 
@@ -331,6 +355,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
                         GnssM9N_decode(g_buffer, g_len, &g_nav);
                         g_len = 0u;
                         g_sentences++;
+                        parse_state = GNSS_IDLE;
                     }
                 }
 
@@ -349,6 +374,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
             default:
                 break;
         }
+        last_byte = byte;
 
         g_ring_tail++;
         if (g_ring_tail >= RING_BUFFER_SIZE)
@@ -357,10 +383,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
         }
         g_poll_counter = 0u;
 
-        if (byte == 'B5')
-        {
-            g_detect_ack = 1;
-        }
+
     }
     sample->rxBytes   = g_bytes;
     sample->sentences = g_sentences;
@@ -368,7 +391,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
     sample->fixType   = g_nav.fixQuality;
     sample->numSats   = g_nav.numSats;
     sample->aux1      = g_detect_ack;
-    sample->aux2      = 6u;
+    sample->aux2      = g_ubx_payload_len;
     sample->aux3      = parse_state;
 
     return status;

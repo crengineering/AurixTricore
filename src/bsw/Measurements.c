@@ -242,7 +242,7 @@ void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)
         g_xcpData.gnssnumSats   = sample_info.numSats;
         g_xcpData.gnssaux1      = sample_info.aux1;
         g_xcpData.gnssaux2      = sample_info.aux2;
-        g_xcpData.gnssaux2      = sample_info.aux3;
+        g_xcpData.gnssaux3      = sample_info.aux3;
     }
     else
     {
@@ -254,7 +254,7 @@ void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)
         g_xcpData.gnssnumSats   = 0u;
         g_xcpData.gnssaux1      = 0u;
         g_xcpData.gnssaux2      = 0u;
-        g_xcpData.gnssaux2      = 0u;
+        g_xcpData.gnssaux3      = 0u;
     }
 }
 
