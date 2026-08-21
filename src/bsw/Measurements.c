@@ -240,9 +240,12 @@ void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)
         g_xcpData.gnsserrors    = sample_info.errors;
         g_xcpData.gnssfixType   = sample_info.fixType;
         g_xcpData.gnssnumSats   = sample_info.numSats;
-        g_xcpData.gnssaux1      = sample_info.aux1;
-        g_xcpData.gnssaux2      = sample_info.aux2;
-        g_xcpData.gnssaux3      = sample_info.aux3;
+        g_xcpData.gnssyear      = sample_info.year;
+        g_xcpData.gnssmonth     = sample_info.month;
+        g_xcpData.gnssday       = sample_info.day;
+        g_xcpData.gnsshour      = sample_info.hour;
+        g_xcpData.gnssmin       = sample_info.min;    
+        g_xcpData.gnsssec       = sample_info.sec;
     }
     else
     {
@@ -252,9 +255,12 @@ void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)
         g_xcpData.gnsserrors    = 0u;
         g_xcpData.gnssfixType   = 0u;
         g_xcpData.gnssnumSats   = 0u;
-        g_xcpData.gnssaux1      = 0u;
-        g_xcpData.gnssaux2      = 0u;
-        g_xcpData.gnssaux3      = 0u;
+        g_xcpData.gnssyear      = 0u;
+        g_xcpData.gnssmonth     = 0u;
+        g_xcpData.gnssday       = 0u;
+        g_xcpData.gnsshour      = 0u;
+        g_xcpData.gnssmin       = 0u;    
+        g_xcpData.gnsssec       = 0u;
     }
 }
 

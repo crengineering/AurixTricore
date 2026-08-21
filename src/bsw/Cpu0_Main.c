@@ -376,7 +376,7 @@ static void Task_Measure100ms(void)
 {
     Nvm_task100ms();        /* before diagnostics: fresh NVM fault state */
     /* GNSS: publish + report */
-    GnssM9N_Sample gnss_sample;
+    GnssM9N_Sample gnss_sample = {0};
     boolean        gnssPresent;
     boolean        gnssPlausible = TRUE;
 

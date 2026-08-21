@@ -17,15 +17,24 @@ typedef struct
   uint16 errors;
   uint8  fixType;
   uint8  numSats;
-  uint8  aux1;
-  uint8  aux2;
-  uint8  aux3;
+  uint16 year;
+  uint8  month;
+  uint8  day;
+  uint8  hour;
+  uint8  min;
+  uint8  sec;
 }GnssM9N_Sample;
 
 typedef struct
 {
-  uint8 numSats;
-  uint8 fixQuality;
+  uint8  numSats;
+  uint8  fixQuality;
+  uint16 year;
+  uint8  month;
+  uint8  day;
+  uint8  hour;
+  uint8  min;
+  uint8  sec;
 }GnssM9N_Nav;
 
 typedef enum

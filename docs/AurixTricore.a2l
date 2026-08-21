@@ -8,7 +8,7 @@
  *
  * All objects live at fixed addresses (TASKING __at), so this file does not
  * depend on the link run:
- *   Xcp_Data  (measurements)          0x70030000, 224 bytes, Measurements.h
+ *   Xcp_Data  (measurements)          0x70030000, 228 bytes, Measurements.h
  *   Xcp_Cal   (calibration, RAM only) 0x70030100, 64 bytes, Diagnostics.h
  *   Xcp_Nvm   (persistent, DFLASH)    0x70030200, 16 bytes, Nvm.h
  *   Xcp_Gpio  (GPIO control, RAM only) 0x70030300, 52 bytes, gpio.h
@@ -499,19 +499,34 @@ ASAP2_VERSION 1 61
       ECU_ADDRESS 0x700300DB
     /end MEASUREMENT
 
-    /begin MEASUREMENT gnssaux1 "gnssaux1 (no description in a2l_meta.json)"
-      UBYTE NO_COMPU_METHOD 0 0 0 255
+    /begin MEASUREMENT gnssyear "gnssyear (no description in a2l_meta.json)"
+      UWORD NO_COMPU_METHOD 0 0 0 65535
       ECU_ADDRESS 0x700300DC
     /end MEASUREMENT
 
-    /begin MEASUREMENT gnssaux2 "gnssaux2 (no description in a2l_meta.json)"
-      UBYTE NO_COMPU_METHOD 0 0 0 255
-      ECU_ADDRESS 0x700300DD
-    /end MEASUREMENT
-
-    /begin MEASUREMENT gnssaux3 "gnssaux3 (no description in a2l_meta.json)"
+    /begin MEASUREMENT gnssmonth "gnssmonth (no description in a2l_meta.json)"
       UBYTE NO_COMPU_METHOD 0 0 0 255
       ECU_ADDRESS 0x700300DE
+    /end MEASUREMENT
+
+    /begin MEASUREMENT gnssday "gnssday (no description in a2l_meta.json)"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x700300DF
+    /end MEASUREMENT
+
+    /begin MEASUREMENT gnsshour "gnsshour (no description in a2l_meta.json)"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x700300E0
+    /end MEASUREMENT
+
+    /begin MEASUREMENT gnssmin "gnssmin (no description in a2l_meta.json)"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x700300E1
+    /end MEASUREMENT
+
+    /begin MEASUREMENT gnsssec "gnsssec (no description in a2l_meta.json)"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x700300E2
     /end MEASUREMENT
 
     /* individual diagnostics bits (BIT_MASK views on DiagStatus) */

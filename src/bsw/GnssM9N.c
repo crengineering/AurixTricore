@@ -27,6 +27,18 @@
 #define UBX_CLASS_CFG              0x06u
 #define UBX_ID_CFG_VALSET          0x8Au
 #define UBX_PAYLOAD_LEN    9u
+
+#define UBX_NAV_PVT_YEAR           4u
+#define UBX_NAV_PVT_MONTH          6u
+#define UBX_NAV_PVT_DAY            7u
+#define UBX_NAV_PVT_HOUR           8u
+#define UBX_NAV_PVT_MIN            9u
+#define UBX_NAV_PVT_SEC           10u
+
+#define UBX_NAV_PVT_FIXTYPE       20u
+#define UBX_NAV_PVT_NUMSV         23u
+
+
 /* local used variables */
 static IfxAsclin_Asc           g_asclin;
 
@@ -69,7 +81,7 @@ static boolean gnss_checksum       (const char *buffer, uint8 buffer_len);
 static boolean GnssM9N_timeout     (void);
 static boolean gnss_txByte         (uint8 value);
 static boolean gnss_sendUbx        (uint8 msgClass, uint8 msgId, const uint8 *payload, uint8 payload_len);
-static boolean gnss_ubx_decode     (const uint8 *buffer, uint8 buffer_len, uint8 payload_len);
+static boolean gnss_ubx_decode     (const uint8 *buffer, uint8 buffer_len, uint8 payload_len, GnssM9N_Nav *Nav);
 static void    gnss_checksumUbx    (const uint8 *message, uint8 payload_len, uint8 *ck_a, uint8 *ck_b);
 
 IFX_INTERRUPT(asclin4IsrReceive, 0, ISR_PRIORITY_ASCLIN4_RX);
@@ -199,7 +211,7 @@ static boolean gnss_sendUbx (uint8 msgClass, uint8 msgId, const uint8 *payload, 
     return send_success;
 }
 
-static boolean gnss_ubx_decode (const uint8 *buffer, uint8 buffer_len, uint8 payload_len){
+static boolean gnss_ubx_decode (const uint8 *buffer, uint8 buffer_len, uint8 payload_len, GnssM9N_Nav *Nav){
     uint8 ck_a = 0u;
     uint8 ck_b = 0u;
     gnss_checksumUbx(buffer, 4u+payload_len, &ck_a, &ck_b);
@@ -215,6 +227,13 @@ static boolean gnss_ubx_decode (const uint8 *buffer, uint8 buffer_len, uint8 pay
     {
         g_ubx_ack++;
     }
+    /* decode */
+    Nav->year  = (uint16) ((buffer[4u + UBX_NAV_PVT_YEAR]) | (buffer[4u + UBX_NAV_PVT_YEAR + 1u] <<8));
+    Nav->month = buffer[4u + UBX_NAV_PVT_MONTH];
+    Nav->day   = buffer[4u + UBX_NAV_PVT_DAY];
+    Nav->hour  = buffer[4u + UBX_NAV_PVT_HOUR];
+    Nav->min   = buffer[4u + UBX_NAV_PVT_MIN];
+    Nav->sec   = buffer[4u + UBX_NAV_PVT_SEC];
 
     return TRUE;
 }
@@ -359,7 +378,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
 
                     if (g_len >= (g_ubx_payload_len + 6u))
                     {
-                        if (gnss_ubx_decode(g_buffer, g_len, g_ubx_payload_len) != TRUE)
+                        if (gnss_ubx_decode(g_buffer, g_len, g_ubx_payload_len, &g_nav) != TRUE)
                         {
                             g_errors++;
                         }
@@ -376,7 +395,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
                     if (g_len > 0u)
                     {
                         g_buffer[g_len] = '\0';
-                        GnssM9N_decode((const char *)g_buffer, g_len, &g_nav);
+                        //GnssM9N_decode((const char *)g_buffer, g_len, &g_nav);
                         g_len = 0u;
                         g_sentences++;
                         parse_state = GNSS_IDLE;
@@ -414,9 +433,12 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
     sample->errors    = g_errors;
     sample->fixType   = g_nav.fixQuality;
     sample->numSats   = g_nav.numSats;
-    sample->aux1      = g_detect_ack;
-    sample->aux2      = g_ubx_payload_len;
-    sample->aux3      = parse_state;
+    sample->year      = g_nav.year;
+    sample->month     = g_nav.month;
+    sample->day       = g_nav.day;
+    sample->hour      = g_nav.hour;
+    sample->min       = g_nav.min;
+    sample->sec       = g_nav.sec;
 
     return status;
 }

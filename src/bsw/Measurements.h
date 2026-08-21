@@ -165,9 +165,12 @@ typedef struct
     uint16  gnsserrors;
     uint8   gnssfixType;
     uint8   gnssnumSats;
-    uint8   gnssaux1;
-    uint8   gnssaux2;
-    uint8   gnssaux3;
+    uint16  gnssyear;
+    uint8   gnssmonth;
+    uint8   gnssday;
+    uint8   gnsshour;
+    uint8   gnssmin;
+    uint8   gnsssec;
 } Xcp_Data;
 
 void measurementsInit(void);    /* DTS + DTSC + EVR monitor init (CPU0)  */
