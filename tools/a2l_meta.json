@@ -368,6 +368,100 @@
       "desc": "satellites used in the solution - PHASE B, currently always 0",
       "lo": "0",
       "hi": "32"
+    },
+    "gnssPresent": {
+      "name": "GnssPresent",
+      "desc": "1 if the NEO-M9N is answering (link alive), else 0",
+      "lo": "0",
+      "hi": "1"
+    },
+    "gnssfixOk": {
+      "name": "GnssFixOk",
+      "desc": "1 = position usable: NAV-PVT gnssFixOK set AND invalidLlh clear. Check this, not fixType alone",
+      "lo": "0",
+      "hi": "1"
+    },
+    "gnssyear": {
+      "name": "GnssYear",
+      "desc": "UTC year from UBX-NAV-PVT",
+      "unit": "y",
+      "lo": "0",
+      "hi": "65535"
+    },
+    "gnssmonth": {
+      "name": "GnssMonth",
+      "desc": "UTC month, 1..12",
+      "lo": "0",
+      "hi": "12"
+    },
+    "gnssday": {
+      "name": "GnssDay",
+      "desc": "UTC day of month, 1..31",
+      "lo": "0",
+      "hi": "31"
+    },
+    "gnsshour": {
+      "name": "GnssHour",
+      "desc": "UTC hour, 0..23",
+      "lo": "0",
+      "hi": "23"
+    },
+    "gnssmin": {
+      "name": "GnssMinute",
+      "desc": "UTC minute, 0..59",
+      "lo": "0",
+      "hi": "59"
+    },
+    "gnsssec": {
+      "name": "GnssSecond",
+      "desc": "UTC second, 0..60 (60 during a leap second)",
+      "lo": "0",
+      "hi": "60"
+    },
+    "gnsslatDeg": {
+      "name": "GnssLatitude",
+      "desc": "latitude from UBX-NAV-PVT, WGS84. Stored as float32 so ~0.4 m of the receiver's 1.1 cm resolution is lost - well below its ~1.5 m accuracy",
+      "unit": "deg",
+      "lo": "-90",
+      "hi": "90"
+    },
+    "gnsslonDeg": {
+      "name": "GnssLongitude",
+      "desc": "longitude from UBX-NAV-PVT, WGS84",
+      "unit": "deg",
+      "lo": "-180",
+      "hi": "180"
+    },
+    "gnssaltM": {
+      "name": "GnssAltitude",
+      "desc": "height above mean sea level (NAV-PVT hMSL)",
+      "unit": "m",
+      "lo": "-1000",
+      "hi": "20000"
+    },
+    "gnssspeedMps": {
+      "name": "GnssGroundSpeed",
+      "desc": "2-D ground speed (NAV-PVT gSpeed)",
+      "unit": "m/s",
+      "lo": "0",
+      "hi": "500"
+    },
+    "gnssheadingDeg": {
+      "name": "GnssHeading",
+      "desc": "2-D heading of motion (NAV-PVT headMot); meaningless when stationary",
+      "unit": "deg",
+      "lo": "-180",
+      "hi": "360"
+    },
+    "gnsshAccM": {
+      "name": "GnssHAccuracy",
+      "desc": "horizontal accuracy estimate (NAV-PVT hAcc) - the number that says whether the fix is trustworthy",
+      "unit": "m",
+      "lo": "0",
+      "hi": "10000"
+    },
+    "gnssReserved": {
+      "skip": true
     }
   },
   "Xcp_Cal": {

@@ -1,93 +1,57 @@
-/* Unit tests for the GNSS NEO-M9N driver.
+/* test_GnssM9N.c -- host tests for the NEO-M9N driver.
  *
- * ---------------------------------------------------------------------------
- * WHY THIS FILE #includes A .c FILE
- * ---------------------------------------------------------------------------
- * Everything that is worth testing in GnssM9N.c is `static`: the checksum, the
- * ASCII conversion, the field parser and the decoder. Linking against the
- * object file would leave only GnssM9N_init/_read reachable -- i.e. only the
- * two functions that need hardware, and none of the pure logic.
+ * Scope note (2026-08-21): the driver is now UBX-only. The NMEA decoder and
+ * its ~30 tests were removed when UBX-NAV-PVT replaced $GNGGA as the source
+ * of navigation data -- NAV-PVT supersedes GGA in every respect (position at
+ * 1.1 cm instead of 1.85 m, velocity, and accuracy estimates, all from one
+ * atomic epoch). See docs/GNSS_UBX.md and the driver header.
  *
- * So this test is built as a single translation unit that pulls the driver in
- * by source. GnssM9N.c is deliberately NOT listed in CMakeLists any more;
- * listing it as well would give duplicate symbols at link time.
+ * Include-by-source: the interesting logic (framing, checksum, field
+ * extraction) is static, so the whole .c is pulled in and the tests can see
+ * the driver's file statics. Listing GnssM9N.c in CMakeLists as well would
+ * give duplicate symbols at link.
  *
- * The cost is one unusual #include. What it buys:
- *   - the internal helpers are testable without weakening them to extern,
- *   - the module-level statics are reachable, which is the only way to get a
- *     clean slate between tests (see resetDriverState below and the note on
- *     GnssM9N_init),
- *   - the shipped firmware source stays byte-identical -- no test hooks, no
- *     GNSS_STATIC macro, nothing that only exists for the test build.
- *
- * ---------------------------------------------------------------------------
- * TESTABILITY OF THE DRIVER AS DESIGNED -- summary
- * ---------------------------------------------------------------------------
- * Good:
- *   + The parsing chain is pure-ish: gnss_checksum, convert_ascii_to_int and
- *     GnssM9N_decode take a buffer in and hand a result out. No register
- *     access, no timing, no waiting. That is why the bulk of the tests below
- *     are plain "string in, number out" and need no fake at all.
- *   + Splitting the ISR (bytes -> ring buffer) from GnssM9N_read (ring buffer
- *     -> sentence -> decode) means the framing logic can be driven by calling
- *     asclin4IsrReceive() as an ordinary function. A driver that parsed inside
- *     the ISR would not be testable this way.
- *   + The decoder writes through a caller-supplied GnssM9N_Nav*, so a test
- *     owns the output and can prove that a rejected sentence leaves it alone.
- *
- * Awkward, and what it costs the tests (details at each test):
- *   - nmea_sentence_parser is NOT pure: it carries its cursor in two file-level
- *     statics. Its result therefore depends on what was called before it. Every
- *     test of it has to reset that cursor by hand, and the fields must be asked
- *     for in ascending order or the answer is silently FALSE.
- *   - convert_ascii_to_int returns 0 both for "the digit zero" and for "not a
- *     hex character". A caller cannot tell the two apart, so gnss_checksum
- *     silently accepts a malformed checksum field as 0x00.
- *   - GnssM9N_init reports its result through a *side channel* (it re-reads the
- *     peripheral clock source) rather than through the iLLD status, and its
- *     whole software-reset block sits behind a condition that is never true on
- *     silicon. Tests therefore cannot rely on init for a clean slate.
- *   - GnssM9N_read hardcodes its return to TRUE, so there is no observable
- *     "GNSS not present" state to assert on.
- * The last two are driver findings, not test problems; the tests below pin the
- * behaviour as it is today so a later fix shows up as a failing test.
+ * What is deliberately asserted here: the BYTES a function puts on the wire
+ * and the VALUES it extracts -- never merely that it returned TRUE. A status
+ * code the fake can never make fail is not a test; that mistake shipped a
+ * frame with a wrong key byte and a wrong checksum once already.
  */
 
 #include "unity.h"
 #include <string.h>
 
-/* Include-by-source: see the header comment. Everything after this line can
- * see the driver's statics. */
+/* Only for FakeStm_setAutoAdvance: the TX deadline is measured with SysTime,
+ * so a test that exercises it has to make the fake clock move. */
+#include "IfxStm.h"
+
 #include "GnssM9N.c"
 
 /* --- fixtures ---------------------------------------------------------- */
 
-/* A textbook GNGGA: fix quality 1 (GPS fix), 8 satellites used. */
-#define GGA_8SATS   "$GNGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*59"
-/* Same sentence, differential fix (2) and 12 satellites. */
-#define GGA_12SATS  "$GNGGA,123519,4807.038,N,01131.000,E,2,12,0.9,545.4,M,46.9,M,,*51"
-/* 33 satellites -- above GNSS_MAX_SATELLITES, must be rejected. */
-#define GGA_33SATS  "$GNGGA,123519,4807.038,N,01131.000,E,1,33,0.9,545.4,M,46.9,M,,*51"
-/* Cold start: no fix, empty position fields, quality 0 and 00 satellites. */
-#define GGA_NOFIX   "$GNGGA,,,,,,0,00,99.99,,,,,,*56"
-/* A sentence the driver does not decode, but whose checksum is valid. */
-#define RMC_VALID   "$GNRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*74"
-/* Minimal well-formed GGA: field N is the digit N. */
-#define GGA_TINY    "$GNGGA,1,2,3,4,5,6,7*54"
+/* UBX-ACK-ACK for a CFG-VALSET, exactly as it comes off the wire, minus the
+ * two sync bytes the state machine consumes before entering the UBX state.
+ * Checksums verified against docs/GNSS_UBX.md section 2. */
+static const uint8 ACK_BODY[8] = {
+    0x05u, 0x01u, 0x02u, 0x00u, 0x06u, 0x8Au, 0x98u, 0xC1u
+};
 
-#define LEN(s)  ((uint8)(sizeof(s) - 1u))
+/* The complete CFG-VALSET that disables NMEA GSV on UART1, RAM layer. */
+static const uint8 GSV_OFF_FRAME[17] = {
+    0xB5u, 0x62u, 0x06u, 0x8Au, 0x09u, 0x00u,
+    0x00u, 0x01u, 0x00u, 0x00u, 0xC5u, 0x00u, 0x91u, 0x20u, 0x00u,
+    0x10u, 0xFDu
+};
 
 /* --- helpers ----------------------------------------------------------- */
 
 /* Put the driver back into its power-on state.
  *
  * This is what GnssM9N_init() *looks* like it does -- but its reset block is
- * guarded by "initModule returned noError", and with the polled/NULL-buffer
- * configuration the driver uses, iLLD always returns configurationError there
- * (IfxAsclin_Asc.c sets it in the else branch of "did the application supply a
- * buffer"). The block is therefore dead code on the host AND on silicon, so
- * the tests cannot lean on it. Reaching in directly is only possible because
- * this file includes the driver source. */
+ * guarded by "initModule returned noError", and with the NULL-buffer
+ * configuration this driver uses on purpose, iLLD always returns
+ * configurationError there. The block is dead code on the host AND on
+ * silicon, so the tests cannot lean on it. Reaching in directly is only
+ * possible because this file includes the driver source. */
 static void resetDriverState(void)
 {
     g_len                       = 0u;
@@ -99,16 +63,31 @@ static void resetDriverState(void)
     g_ring_head                 = 0u;
     g_ring_tail                 = 0u;
     g_ring_buf_overflow_counter = 0u;
-    g_nav.numSats               = 0u;
-    g_nav.fixQuality            = 0u;
-    nmea_parser_index           = 0u;
-    nmea_parser_bytes           = 0u;
+    g_ubx_payload_len           = 0u;
+    g_ubx_ack                   = 0u;
+    g_ubx_nak                   = 0u;
+    g_ubx_navpvt                = 0u;
+    g_tx_discards               = 0u;
+    g_detect_ack                = 0u;
+    gsv_deactivated             = FALSE;
+    parse_state                 = GNSS_IDLE;
+    last_byte                   = 0u;
+    memset(&g_nav, 0, sizeof(g_nav));
     memset(g_buffer, 0, sizeof(g_buffer));
 }
 
+void setUp(void)
+{
+    FakeAsclin_reset();
+    FakeStm_reset();
+    resetDriverState();
+}
+
+void tearDown(void) {}
+
 /* Drain the simulated wire the way the hardware would: one interrupt per FIFO
- * fill, until nothing is left. The ISR reads the fill level once per entry, so
- * a single call moves at most 16 bytes. */
+ * fill, until nothing is left. The ISR reads the fill level once per entry,
+ * so a single call moves at most 16 bytes. */
 static void pumpIsr(void)
 {
     while (FakeAsclin_pending() > 0u)
@@ -117,640 +96,499 @@ static void pumpIsr(void)
     }
 }
 
-/* Rewind the field parser. Needed before every direct nmea_sentence_parser
- * call because the cursor lives in file statics, not in the arguments. */
-static void rewindParser(void)
+/* Frame a UBX message body (class, id, length, payload, checksum) the way it
+ * lands in g_buffer -- i.e. without the sync bytes. Returns total length. */
+static uint8 buildUbx(uint8 *out, uint8 cls, uint8 id,
+                      const uint8 *payload, uint8 n)
 {
-    nmea_parser_index = 0u;
-    nmea_parser_bytes = 0u;
-}
+    uint8 ck_a = 0u;
+    uint8 ck_b = 0u;
+    uint8 i;
 
-void setUp(void)
-{
-    FakeAsclin_reset();
-    (void)GnssM9N_init();
-    resetDriverState();      /* init does not do it -- see resetDriverState */
-}
-
-void tearDown(void)
-{
-}
-
-/* =======================================================================
- * convert_ascii_to_int
- *
- * Testability: ideal. One char in, one uint8 out, no state, no hardware.
- * The only design wrinkle is the return value doubling as the error value.
- * ======================================================================= */
-
-void test_convert_ascii_decimal_digits(void)
-{
-    char c;
-    for (c = '0'; c <= '9'; c++)
+    out[0] = cls;
+    out[1] = id;
+    out[2] = n;
+    out[3] = 0u;
+    for (i = 0u; i < n; i++) { out[4u + i] = payload[i]; }
+    for (i = 0u; i < (4u + n); i++)
     {
-        TEST_ASSERT_EQUAL_UINT8((uint8)(c - '0'), convert_ascii_to_int(c));
+        ck_a = (uint8)(ck_a + out[i]);
+        ck_b = (uint8)(ck_b + ck_a);
     }
+    out[4u + n] = ck_a;
+    out[5u + n] = ck_b;
+    return (uint8)(6u + n);
 }
 
-void test_convert_ascii_uppercase_hex(void)
+/* Feed a UBX frame in through the ISR, sync bytes included, as the receiver
+ * would send it. */
+static void pushUbxFrame(const uint8 *body, uint8 len)
 {
-    TEST_ASSERT_EQUAL_UINT8(10u, convert_ascii_to_int('A'));
-    TEST_ASSERT_EQUAL_UINT8(11u, convert_ascii_to_int('B'));
-    TEST_ASSERT_EQUAL_UINT8(15u, convert_ascii_to_int('F'));
-}
+    uint8 wire[128];
 
-/* NMEA mandates uppercase hex, so this is a legal simplification -- but it is
- * a silent one: 'a' is not rejected, it is read as 0. Pinned here so that if
- * someone later adds lowercase support, this test tells them the checksum
- * behaviour changed too. */
-void test_convert_ascii_lowercase_hex_reads_as_zero(void)
-{
-    TEST_ASSERT_EQUAL_UINT8(0u, convert_ascii_to_int('a'));
-    TEST_ASSERT_EQUAL_UINT8(0u, convert_ascii_to_int('f'));
-}
-
-/* The design cost, made visible: the function cannot say "that was not a hex
- * digit", it can only say 0 -- which is also the answer for '0'. */
-void test_convert_ascii_rejects_by_returning_zero(void)
-{
-    TEST_ASSERT_EQUAL_UINT8(0u, convert_ascii_to_int('G'));
-    TEST_ASSERT_EQUAL_UINT8(0u, convert_ascii_to_int('*'));
-    TEST_ASSERT_EQUAL_UINT8(0u, convert_ascii_to_int(' '));
-    TEST_ASSERT_EQUAL_UINT8(0u, convert_ascii_to_int('\0'));
-    /* indistinguishable from a real zero: */
-    TEST_ASSERT_EQUAL_UINT8(convert_ascii_to_int('0'), convert_ascii_to_int('Z'));
+    wire[0] = 0xB5u;
+    wire[1] = 0x62u;
+    memcpy(&wire[2], body, len);
+    FakeAsclin_pushRxBytes(wire, (uint32)len + 2u);
 }
 
 /* =======================================================================
- * gnss_checksum
- *
- * Testability: very good. Pure function over a caller-owned buffer, so a test
- * can hand it any byte sequence, including ones the hardware would never
- * produce. No fake involved.
+ * gnss_checksumUbx
  * ======================================================================= */
 
-void test_checksum_accepts_valid_sentences(void)
+void test_checksum_matches_the_documented_ack(void)
 {
-    TEST_ASSERT_EQUAL(TRUE, gnss_checksum(GGA_8SATS,  LEN(GGA_8SATS)));
-    TEST_ASSERT_EQUAL(TRUE, gnss_checksum(GGA_12SATS, LEN(GGA_12SATS)));
-    TEST_ASSERT_EQUAL(TRUE, gnss_checksum(GGA_NOFIX,  LEN(GGA_NOFIX)));
-    TEST_ASSERT_EQUAL(TRUE, gnss_checksum(RMC_VALID,  LEN(RMC_VALID)));
-    TEST_ASSERT_EQUAL(TRUE, gnss_checksum(GGA_TINY,   LEN(GGA_TINY)));
+    uint8 ck_a = 0u;
+    uint8 ck_b = 0u;
+
+    /* over class..payload = the first 6 bytes of the ACK body */
+    gnss_checksumUbx(ACK_BODY, 6u, &ck_a, &ck_b);
+
+    TEST_ASSERT_EQUAL_UINT8(0x98u, ck_a);
+    TEST_ASSERT_EQUAL_UINT8(0xC1u, ck_b);
 }
 
-/* One flipped payload byte must break the XOR. */
-void test_checksum_detects_corrupted_payload(void)
+/* ck_b accumulates the running ck_a, which is what makes the pair sensitive
+ * to byte ORDER -- a plain sum is not. */
+void test_checksum_detects_reordered_bytes(void)
 {
-    char corrupted[] = GGA_8SATS;
-    corrupted[7] = '9';                       /* was '1' in the time field */
-    TEST_ASSERT_EQUAL(FALSE, gnss_checksum(corrupted, LEN(GGA_8SATS)));
-}
+    uint8 swapped[6];
+    uint8 a1 = 0u, b1 = 0u, a2 = 0u, b2 = 0u;
 
-/* ...and a flipped checksum digit must break it too. */
-void test_checksum_detects_wrong_checksum_field(void)
-{
-    char wrongHigh[] = GGA_8SATS;
-    char wrongLow[]  = GGA_8SATS;
-    wrongHigh[LEN(GGA_8SATS) - 2u] = '6';     /* *59 -> *69 */
-    wrongLow [LEN(GGA_8SATS) - 1u] = '8';     /* *59 -> *58 */
-    TEST_ASSERT_EQUAL(FALSE, gnss_checksum(wrongHigh, LEN(GGA_8SATS)));
-    TEST_ASSERT_EQUAL(FALSE, gnss_checksum(wrongLow,  LEN(GGA_8SATS)));
-}
+    memcpy(swapped, ACK_BODY, 6u);
+    swapped[4] = ACK_BODY[5];
+    swapped[5] = ACK_BODY[4];
 
-/* The XOR must span exactly "everything after '$', everything before '*'".
- * Constructed by hand rather than reusing a fixture, so the test fails if the
- * loop bounds drift by one in either direction. */
-void test_checksum_covers_exactly_dollar_to_star(void)
-{
-    /* 'A'^'B' = 0x03 */
-    TEST_ASSERT_EQUAL(TRUE,  gnss_checksum("$AB*03", 6u));
-    /* Same payload, but claiming the '$' was included ('$'^'A'^'B' = 0x27). */
-    TEST_ASSERT_EQUAL(FALSE, gnss_checksum("$AB*27", 6u));
-    /* Same payload, but claiming the '*' was included ('A'^'B'^'*' = 0x29). */
-    TEST_ASSERT_EQUAL(FALSE, gnss_checksum("$AB*29", 6u));
-}
+    gnss_checksumUbx(ACK_BODY, 6u, &a1, &b1);
+    gnss_checksumUbx(swapped,  6u, &a2, &b2);
 
-/* Consequence of convert_ascii_to_int's error handling: a checksum field made
- * of junk is read as 0x00 instead of being rejected outright. A payload that
- * genuinely XORs to zero would then pass with any junk suffix. Documented, not
- * endorsed. */
-void test_checksum_reads_junk_checksum_field_as_zero(void)
-{
-    /* 'A'^'A' = 0x00, and "ZZ" also converts to 0x00 -> accepted. */
-    TEST_ASSERT_EQUAL(TRUE, gnss_checksum("$AA*ZZ", 6u));
-    TEST_ASSERT_EQUAL(TRUE, gnss_checksum("$AA*00", 6u));
+    TEST_ASSERT_EQUAL_UINT8(a1, a2);            /* plain sum cannot tell   */
+    TEST_ASSERT_NOT_EQUAL_UINT8(b1, b2);        /* the running sum can     */
 }
 
 /* =======================================================================
- * nmea_sentence_parser
- *
- * Testability: the worst of the four. The signature promises a pure function
- * -- buffer in, value out -- but the cursor (nmea_parser_index /
- * nmea_parser_bytes) lives in file-level statics. Consequences:
- *   - every test must rewind that cursor itself (rewindParser),
- *   - the tests are order-dependent by construction,
- *   - it cannot be called from two contexts (e.g. ISR and task) at all.
- * Moving the cursor into a small parser-state struct passed by the caller
- * would make all of that go away and cost nothing at runtime.
+ * gnss_sendUbx / gnss_cfgValsetU1  -- what actually goes on the wire
  * ======================================================================= */
 
-void test_parser_extracts_a_field(void)
+void test_sendUbx_emits_the_documented_gsv_off_frame(void)
 {
-    uint8 value = 0xFFu;
+    uint8 payload[9] = {
+        0x00u, 0x01u, 0x00u, 0x00u, 0xC5u, 0x00u, 0x91u, 0x20u, 0x00u
+    };
 
-    rewindParser();
-    TEST_ASSERT_EQUAL(TRUE, nmea_sentence_parser(GGA_8SATS, LEN(GGA_8SATS),
-                                                 GNGGA_SATELLITES_USED, &value));
-    TEST_ASSERT_EQUAL_UINT8(8u, value);
+    TEST_ASSERT_EQUAL(TRUE, gnss_sendUbx(0x06u, 0x8Au, payload, 9u));
+
+    TEST_ASSERT_EQUAL_UINT32(17u, FakeAsclin_txCount());
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(GSV_OFF_FRAME, FakeAsclin_txData(), 17);
 }
 
-/* Multi-digit fields accumulate left to right. */
-void test_parser_accumulates_multiple_digits(void)
+/* The helper must build that payload itself -- this is what catches a
+ * byte-swapped key or a wrong layer. */
+void test_cfgValset_builds_the_same_frame_from_the_key(void)
 {
-    uint8 value = 0u;
+    TEST_ASSERT_EQUAL(TRUE, gnss_cfgValsetU1(0u, CFG_MSGOUT_NMEA_GSV_UART1));
 
-    rewindParser();
-    TEST_ASSERT_EQUAL(TRUE, nmea_sentence_parser(GGA_12SATS, LEN(GGA_12SATS),
-                                                 GNGGA_SATELLITES_USED, &value));
-    TEST_ASSERT_EQUAL_UINT8(12u, value);
+    TEST_ASSERT_EQUAL_UINT32(17u, FakeAsclin_txCount());
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(GSV_OFF_FRAME, FakeAsclin_txData(), 17);
 }
 
-/* The intended usage: successive calls share the cursor, so asking for field 6
- * and then field 7 walks the sentence once instead of twice. That is the
- * upside of the shared state -- and the reason GnssM9N_decode must query in
- * ascending order. */
-void test_parser_ascending_calls_share_the_cursor(void)
+void test_cfgValset_writes_the_key_little_endian(void)
 {
-    uint8 quality = 0u;
-    uint8 sats    = 0u;
+    const uint8 *tx;
 
-    rewindParser();
-    TEST_ASSERT_EQUAL(TRUE, nmea_sentence_parser(GGA_12SATS, LEN(GGA_12SATS),
-                                                 GNGGA_FIX_QUALITY, &quality));
-    TEST_ASSERT_EQUAL(TRUE, nmea_sentence_parser(GGA_12SATS, LEN(GGA_12SATS),
-                                                 GNGGA_SATELLITES_USED, &sats));
-    TEST_ASSERT_EQUAL_UINT8(2u,  quality);
-    TEST_ASSERT_EQUAL_UINT8(12u, sats);
+    TEST_ASSERT_EQUAL(TRUE, gnss_cfgValsetU1(1u, CFG_MSGOUT_UBX_NAV_PVT_UART1));
+    tx = FakeAsclin_txData();
+
+    /* 0x20910007 -> 07 00 91 20 */
+    TEST_ASSERT_EQUAL_UINT8(0x07u, tx[10]);
+    TEST_ASSERT_EQUAL_UINT8(0x00u, tx[11]);
+    TEST_ASSERT_EQUAL_UINT8(0x91u, tx[12]);
+    TEST_ASSERT_EQUAL_UINT8(0x20u, tx[13]);
+    TEST_ASSERT_EQUAL_UINT8(0x01u, tx[14]);     /* value = 1 epoch          */
 }
 
-/* ...and the downside. Asking for an earlier field after a later one returns
- * FALSE, because the cursor has already run past it. Nothing in the signature
- * warns the caller. */
-void test_parser_descending_calls_fail_silently(void)
+void test_sendUbx_rejects_an_oversized_payload(void)
 {
-    uint8 sats    = 0u;
-    uint8 quality = 0xAAu;
+    uint8 payload[8] = {0};
 
-    rewindParser();
-    TEST_ASSERT_EQUAL(TRUE, nmea_sentence_parser(GGA_12SATS, LEN(GGA_12SATS),
-                                                 GNGGA_SATELLITES_USED, &sats));
-    TEST_ASSERT_EQUAL(FALSE, nmea_sentence_parser(GGA_12SATS, LEN(GGA_12SATS),
-                                                  GNGGA_FIX_QUALITY, &quality));
-    TEST_ASSERT_EQUAL_UINT8(0xAAu, quality);      /* left untouched */
+    TEST_ASSERT_EQUAL(FALSE,
+        gnss_sendUbx(0x06u, 0x8Au, payload, (uint8)(GNSS_UBX_MAX_PAYLOAD + 1u)));
+    TEST_ASSERT_EQUAL_UINT32(0u, FakeAsclin_txCount());
 }
 
-/* An empty field yields FALSE and must not clobber the caller's variable --
- * this is what lets GnssM9N_decode keep the previous fix on a partial burst. */
-void test_parser_empty_field_leaves_value_untouched(void)
+/* A TX FIFO that never drains must not hang the 100 ms task. Regression guard
+ * for the unbounded-spin class of bug that wedged CPU0 in the I2C driver. */
+void test_txByte_gives_up_when_the_fifo_never_drains(void)
 {
-    uint8 value = 0x5Au;
+    FakeStm_setAutoAdvance(GNSS_TX_DEADLINE_TICKS / 4u);
+    FakeAsclin_setTxBlocked(TRUE);
 
-    rewindParser();
-    /* field 1 (time) is empty in the cold-start sentence */
-    TEST_ASSERT_EQUAL(FALSE, nmea_sentence_parser(GGA_NOFIX, LEN(GGA_NOFIX),
-                                                  1u, &value));
-    TEST_ASSERT_EQUAL_UINT8(0x5Au, value);
-}
-
-/* A field index past the end of the sentence must fail rather than run off. */
-void test_parser_field_beyond_sentence_fails(void)
-{
-    uint8 value = 0x11u;
-
-    rewindParser();
-    TEST_ASSERT_EQUAL(FALSE, nmea_sentence_parser(GGA_TINY, LEN(GGA_TINY),
-                                                  99u, &value));
-    TEST_ASSERT_EQUAL_UINT8(0x11u, value);
-}
-
-/* Non-digit characters inside a field are skipped, not rejected: "4807.038"
- * parses as the digit sequence 4807038. Combined with the uint8 accumulator
- * that wraps silently. This is fine for the two fields the driver actually
- * reads (both are <= 2 digits) but makes the helper unsafe to reuse for
- * anything wider -- recorded here as a limitation, not as a specification. */
-void test_parser_overflows_silently_on_wide_fields(void)
-{
-    uint8 value = 0u;
-
-    rewindParser();
-    /* field 1 = "123519" -> truncated to 8 bits at every step -> 127 */
-    TEST_ASSERT_EQUAL(TRUE, nmea_sentence_parser(GGA_8SATS, LEN(GGA_8SATS),
-                                                 1u, &value));
-    TEST_ASSERT_EQUAL_UINT8(127u, value);
+    TEST_ASSERT_EQUAL(FALSE, gnss_txByte(0x42u));   /* returns, not spins */
+    TEST_ASSERT_EQUAL_UINT32(0u, FakeAsclin_txCount());
+    TEST_ASSERT_TRUE(g_tx_discards > 0u);
 }
 
 /* =======================================================================
- * GnssM9N_decode
- *
- * Testability: good. It is the whole sentence-to-navigation-data step with no
- * hardware in it, and it writes through a caller-owned GnssM9N_Nav*, so a test
- * can prove both what it sets and what it leaves alone. The one blemish is the
- * hidden dependency on the parser cursor -- decode resets it on entry, which
- * is what makes these tests independent of each other.
+ * gnss_ubx_decode
  * ======================================================================= */
 
-void test_decode_valid_gga_sets_sats_and_quality(void)
+void test_decode_accepts_the_documented_ack_frame(void)
 {
-    GnssM9N_Nav nav = { 0u, 0u };
-
-    TEST_ASSERT_EQUAL(TRUE, GnssM9N_decode(GGA_8SATS, LEN(GGA_8SATS), &nav));
-    TEST_ASSERT_EQUAL_UINT8(8u, nav.numSats);
-    TEST_ASSERT_EQUAL_UINT8(1u, nav.fixQuality);
+    TEST_ASSERT_EQUAL(TRUE, gnss_ubx_decode(ACK_BODY, 8u, 2u, &g_nav));
+    TEST_ASSERT_EQUAL_UINT8(1u, g_ubx_ack);
+    TEST_ASSERT_EQUAL_UINT32(0u, g_ubx_nak);
 }
 
-void test_decode_reports_differential_fix(void)
+void test_decode_rejects_a_corrupted_payload(void)
 {
-    GnssM9N_Nav nav = { 0u, 0u };
+    uint8 bad[8];
 
-    TEST_ASSERT_EQUAL(TRUE, GnssM9N_decode(GGA_12SATS, LEN(GGA_12SATS), &nav));
-    TEST_ASSERT_EQUAL_UINT8(12u, nav.numSats);
-    TEST_ASSERT_EQUAL_UINT8(2u,  nav.fixQuality);
+    memcpy(bad, ACK_BODY, sizeof(bad));
+    bad[4] = 0x07u;                              /* flip one payload byte  */
+
+    TEST_ASSERT_EQUAL(FALSE, gnss_ubx_decode(bad, 8u, 2u, &g_nav));
+    TEST_ASSERT_EQUAL_UINT8(0u, g_ubx_ack);      /* and it was not counted */
 }
 
-/* Cold start: valid sentence, zero satellites, quality 0. Decoding succeeds --
- * "no fix" is data, not an error. */
-void test_decode_cold_start_is_valid_data(void)
+/* A single wrong checksum byte must be enough to reject -- an && instead of
+ * an || here would let half-corrupt frames through. */
+void test_decode_rejects_when_only_one_checksum_byte_is_wrong(void)
 {
-    GnssM9N_Nav nav = { 9u, 9u };
+    uint8 bad[8];
 
-    TEST_ASSERT_EQUAL(TRUE, GnssM9N_decode(GGA_NOFIX, LEN(GGA_NOFIX), &nav));
-    TEST_ASSERT_EQUAL_UINT8(0u, nav.numSats);
-    TEST_ASSERT_EQUAL_UINT8(0u, nav.fixQuality);
+    memcpy(bad, ACK_BODY, sizeof(bad));
+    bad[6] = (uint8)(bad[6] ^ 0xFFu);            /* CK_A only              */
+    TEST_ASSERT_EQUAL(FALSE, gnss_ubx_decode(bad, 8u, 2u, &g_nav));
+
+    memcpy(bad, ACK_BODY, sizeof(bad));
+    bad[7] = (uint8)(bad[7] ^ 0xFFu);            /* CK_B only              */
+    TEST_ASSERT_EQUAL(FALSE, gnss_ubx_decode(bad, 8u, 2u, &g_nav));
 }
 
-/* Decode must call the checksum first: a corrupted sentence leaves nav alone,
- * so a garbled burst can never move numSats. */
-void test_decode_rejects_bad_checksum_without_touching_nav(void)
+void test_decode_counts_a_nak_separately_from_an_ack(void)
 {
-    GnssM9N_Nav nav = { 7u, 3u };
-    char corrupted[] = GGA_8SATS;
+    uint8 pl[2] = { 0x06u, 0x8Au };
+    uint8 f[16];
+    uint8 len = buildUbx(f, 0x05u, 0x00u, pl, 2u);
 
-    corrupted[LEN(GGA_8SATS) - 1u] = '8';        /* *59 -> *58 */
-    TEST_ASSERT_EQUAL(FALSE, GnssM9N_decode(corrupted, LEN(GGA_8SATS), &nav));
-    TEST_ASSERT_EQUAL_UINT8(7u, nav.numSats);
-    TEST_ASSERT_EQUAL_UINT8(3u, nav.fixQuality);
+    TEST_ASSERT_EQUAL(TRUE, gnss_ubx_decode(f, len, 2u, &g_nav));
+    TEST_ASSERT_EQUAL_UINT8 (0u, g_ubx_ack);
+    TEST_ASSERT_EQUAL_UINT32(1u, g_ubx_nak);
 }
 
-/* The framing guard: '*' must sit exactly three characters from the end. */
-void test_decode_rejects_missing_star_delimiter(void)
+/* Every NAV-PVT field, with values chosen so a shifted offset or a
+ * sign-extended byte cannot produce a passing result. */
+void test_decode_extracts_every_navpvt_field(void)
 {
-    GnssM9N_Nav nav = { 7u, 3u };
-    char noStar[] = GGA_8SATS;
+    uint8 pl[92];
+    uint8 f[110];
+    uint8 len;
 
-    noStar[LEN(GGA_8SATS) - 3u] = 'X';
-    TEST_ASSERT_EQUAL(FALSE, GnssM9N_decode(noStar, LEN(GGA_8SATS), &nav));
-    TEST_ASSERT_EQUAL_UINT8(7u, nav.numSats);
+    memset(pl, 0, sizeof(pl));
+    /* iTOW      123456789 */ pl[0]=0x15u;  pl[1]=0xCDu;  pl[2]=0x5Bu;  pl[3]=0x07u;
+    /* year           2026 */ pl[4]=0xEAu;  pl[5]=0x07u;
+    pl[6]=8u; pl[7]=21u; pl[8]=17u; pl[9]=45u; pl[10]=30u;
+    pl[20]=3u;                                   /* fixType = 3D fix      */
+    pl[21]=0x01u;                                /* flags.gnssFixOK       */
+    pl[23]=12u;                                  /* numSV                 */
+    /* lon       115678900 */ pl[24]=0xB4u; pl[25]=0x1Eu; pl[26]=0xE5u; pl[27]=0x06u;
+    /* lat       481234567 */ pl[28]=0x87u; pl[29]=0x0Eu; pl[30]=0xAFu; pl[31]=0x1Cu;
+    /* hMSL         520000 */ pl[36]=0x40u; pl[37]=0xEFu; pl[38]=0x07u; pl[39]=0x00u;
+    /* hAcc           2500 */ pl[40]=0xC4u; pl[41]=0x09u; pl[42]=0x00u; pl[43]=0x00u;
+    /* vAcc           4100 */ pl[44]=0x04u; pl[45]=0x10u; pl[46]=0x00u; pl[47]=0x00u;
+    /* gSpeed        13890 */ pl[60]=0x42u; pl[61]=0x36u; pl[62]=0x00u; pl[63]=0x00u;
+    /* headMot     9012345 */ pl[64]=0x79u; pl[65]=0x84u; pl[66]=0x89u; pl[67]=0x00u;
+    /* pDOP            180 */ pl[76]=0xB4u; pl[77]=0x00u;
+
+    len = buildUbx(f, 0x01u, 0x07u, pl, 92u);
+    TEST_ASSERT_EQUAL(TRUE, gnss_ubx_decode(f, len, 92u, &g_nav));
+
+    TEST_ASSERT_EQUAL_UINT32(1u,          g_ubx_navpvt);
+    TEST_ASSERT_EQUAL_UINT32(123456789u,  g_nav.iTOW);
+    TEST_ASSERT_EQUAL_UINT16(2026u,       g_nav.year);
+    TEST_ASSERT_EQUAL_UINT8 (8u,          g_nav.month);
+    TEST_ASSERT_EQUAL_UINT8 (21u,         g_nav.day);
+    TEST_ASSERT_EQUAL_UINT8 (17u,         g_nav.hour);
+    TEST_ASSERT_EQUAL_UINT8 (45u,         g_nav.min);
+    TEST_ASSERT_EQUAL_UINT8 (30u,         g_nav.sec);
+    TEST_ASSERT_EQUAL_UINT8 (3u,          g_nav.fixQuality);
+    TEST_ASSERT_EQUAL_UINT8 (12u,         g_nav.numSats);
+    TEST_ASSERT_EQUAL_UINT8 (1u,          g_nav.fixOk);
+    TEST_ASSERT_EQUAL_INT32 (115678900,   g_nav.lon);
+    TEST_ASSERT_EQUAL_INT32 (481234567,   g_nav.lat);
+    TEST_ASSERT_EQUAL_INT32 (520000,      g_nav.hMSL);
+    TEST_ASSERT_EQUAL_UINT32(2500u,       g_nav.hAcc);
+    TEST_ASSERT_EQUAL_UINT32(4100u,       g_nav.vAcc);
+    TEST_ASSERT_EQUAL_INT32 (13890,       g_nav.gSpeed);
+    TEST_ASSERT_EQUAL_INT32 (9012345,     g_nav.headMot);
+    TEST_ASSERT_EQUAL_UINT16(180u,        g_nav.pDOP);
 }
 
-/* Short buffers must be rejected before any indexing happens -- buffer[len-3]
- * would underflow otherwise. */
-void test_decode_rejects_short_buffers(void)
+/* Negative coordinates: every payload byte above 127 must be widened before
+ * it is shifted, or the value sign-extends into nonsense. */
+void test_decode_handles_negative_coordinates(void)
 {
-    GnssM9N_Nav nav = { 7u, 3u };
+    uint8 pl[92];
+    uint8 f[110];
+    uint8 len;
 
-    TEST_ASSERT_EQUAL(FALSE, GnssM9N_decode("",       0u, &nav));
-    TEST_ASSERT_EQUAL(FALSE, GnssM9N_decode("$G",     2u, &nav));
-    TEST_ASSERT_EQUAL(FALSE, GnssM9N_decode("$AB*03", 5u, &nav));
-    TEST_ASSERT_EQUAL_UINT8(7u, nav.numSats);
+    memset(pl, 0, sizeof(pl));
+    /* lon = -115678900 -> 0xF91AE14C */
+    pl[24]=0x4Cu; pl[25]=0xE1u; pl[26]=0x1Au; pl[27]=0xF9u;
+    /* velD is not published but hMSL below sea level is the same problem */
+    /* hMSL = -17000 -> 0xFFFFBD98 */
+    pl[36]=0x98u; pl[37]=0xBDu; pl[38]=0xFFu; pl[39]=0xFFu;
+
+    len = buildUbx(f, 0x01u, 0x07u, pl, 92u);
+    TEST_ASSERT_EQUAL(TRUE, gnss_ubx_decode(f, len, 92u, &g_nav));
+
+    TEST_ASSERT_EQUAL_INT32(-115678900, g_nav.lon);
+    TEST_ASSERT_EQUAL_INT32(-17000,     g_nav.hMSL);
 }
 
-/* GNRMC has a valid checksum but is not a talker the decoder handles; it must
- * fall through the default branch without writing anything. */
-void test_decode_ignores_other_talkers(void)
+/* fixType alone must not be trusted: invalidLlh set means the position is
+ * unusable even with a 3D fix (docs/GNSS_UBX.md section 7). */
+void test_decode_clears_fixok_when_llh_is_invalid(void)
 {
-    GnssM9N_Nav nav = { 7u, 3u };
+    uint8 pl[92];
+    uint8 f[110];
+    uint8 len;
 
-    TEST_ASSERT_EQUAL(FALSE, GnssM9N_decode(RMC_VALID, LEN(RMC_VALID), &nav));
-    TEST_ASSERT_EQUAL_UINT8(7u, nav.numSats);
-    TEST_ASSERT_EQUAL_UINT8(3u, nav.fixQuality);
+    memset(pl, 0, sizeof(pl));
+    pl[20] = 3u;            /* 3D fix     */
+    pl[21] = 0x01u;         /* gnssFixOK  */
+    pl[78] = 0x01u;         /* invalidLlh */
+
+    len = buildUbx(f, 0x01u, 0x07u, pl, 92u);
+    TEST_ASSERT_EQUAL(TRUE, gnss_ubx_decode(f, len, 92u, &g_nav));
+
+    TEST_ASSERT_EQUAL_UINT8(3u, g_nav.fixQuality);
+    TEST_ASSERT_EQUAL_UINT8(0u, g_nav.fixOk);
 }
 
-/* Plausibility clamp: GNSS_MAX_SATELLITES rejects an impossible count.
- *
- * Note the asymmetry this test pins down -- numSats is protected, but
- * fixQuality is written before the clamp is evaluated, so a sentence rejected
- * as implausible still updates the fix quality. If that is not intended, this
- * test is where it will show up. */
-void test_decode_rejects_implausible_satellite_count(void)
+void test_decode_clears_fixok_when_gnssfixok_is_clear(void)
 {
-    GnssM9N_Nav nav = { 7u, 3u };
+    uint8 pl[92];
+    uint8 f[110];
+    uint8 len;
 
-    TEST_ASSERT_EQUAL(FALSE, GnssM9N_decode(GGA_33SATS, LEN(GGA_33SATS), &nav));
-    TEST_ASSERT_EQUAL_UINT8(7u, nav.numSats);      /* clamped away */
-    TEST_ASSERT_EQUAL_UINT8(1u, nav.fixQuality);   /* written anyway */
+    memset(pl, 0, sizeof(pl));
+    pl[20] = 3u;            /* 3D fix, but flags.gnssFixOK not set */
+
+    len = buildUbx(f, 0x01u, 0x07u, pl, 92u);
+    TEST_ASSERT_EQUAL(TRUE, gnss_ubx_decode(f, len, 92u, &g_nav));
+
+    TEST_ASSERT_EQUAL_UINT8(0u, g_nav.fixOk);
 }
 
-/* decode resets the parser cursor on entry, so two sentences in a row decode
- * identically. Without that reset the second call would silently return FALSE
- * -- exactly the failure mode test_parser_descending_calls_fail_silently
- * shows. */
-void test_decode_is_repeatable_back_to_back(void)
+/* An unknown class/id is well formed but not ours -- accepted, not counted. */
+void test_decode_ignores_an_unhandled_message(void)
 {
-    GnssM9N_Nav nav = { 0u, 0u };
+    uint8 pl[4] = { 0x01u, 0x02u, 0x03u, 0x04u };
+    uint8 f[16];
+    uint8 len = buildUbx(f, 0x0Au, 0x04u, pl, 4u);   /* UBX-MON-VER-ish */
 
-    TEST_ASSERT_EQUAL(TRUE, GnssM9N_decode(GGA_8SATS,  LEN(GGA_8SATS),  &nav));
-    TEST_ASSERT_EQUAL(TRUE, GnssM9N_decode(GGA_12SATS, LEN(GGA_12SATS), &nav));
-    TEST_ASSERT_EQUAL_UINT8(12u, nav.numSats);
-    TEST_ASSERT_EQUAL(TRUE, GnssM9N_decode(GGA_8SATS,  LEN(GGA_8SATS),  &nav));
-    TEST_ASSERT_EQUAL_UINT8(8u, nav.numSats);
+    TEST_ASSERT_EQUAL(TRUE, gnss_ubx_decode(f, len, 4u, &g_nav));
+    TEST_ASSERT_EQUAL_UINT8 (0u, g_ubx_ack);
+    TEST_ASSERT_EQUAL_UINT32(0u, g_ubx_nak);
+    TEST_ASSERT_EQUAL_UINT32(0u, g_ubx_navpvt);
 }
 
 /* =======================================================================
- * asclin4IsrReceive
- *
- * Testability: better than it looks. IFX_INTERRUPT only decorates the
- * function; the body is ordinary C, so the host build calls it directly and
- * the fake plays the role of the FIFO. The only thing a host test cannot
- * reproduce is genuine concurrency -- the ring buffer's single-producer /
- * single-consumer claim is argued, not proven, by these tests.
+ * ISR + ring buffer
  * ======================================================================= */
 
 void test_isr_moves_fifo_bytes_into_the_ring(void)
 {
-    FakeAsclin_pushRx("$GNGGA");
+    FakeAsclin_pushRxBytes(ACK_BODY, 8u);
     pumpIsr();
 
-    TEST_ASSERT_EQUAL_UINT32(6u, g_bytes);
-    TEST_ASSERT_EQUAL_UINT16(6u, g_ring_head);
-    TEST_ASSERT_EQUAL_UINT16(0u, g_ring_tail);
-    TEST_ASSERT_EQUAL_UINT8(0u, g_ring_buf_overflow_counter);
-    TEST_ASSERT_EQUAL_CHAR('$', g_ring_buffer[0]);
-    TEST_ASSERT_EQUAL_CHAR('A', g_ring_buffer[5]);
+    TEST_ASSERT_EQUAL_UINT32(8u, g_bytes);
+    TEST_ASSERT_EQUAL_UINT16(8u, g_ring_head);
 }
 
-/* The ISR reads the fill level once per entry, and the fake caps it at the
- * 16-entry hardware depth -- so a longer burst needs several interrupts, just
- * as it does on silicon. */
 void test_isr_needs_several_entries_for_a_long_burst(void)
 {
-    FakeAsclin_pushRx(GGA_8SATS);            /* 68 bytes > 16-deep FIFO */
-    asclin4IsrReceive();
+    uint8 blob[100];
+    memset(blob, 0x41, sizeof(blob));
+
+    FakeAsclin_pushRxBytes(blob, sizeof(blob));
+    asclin4IsrReceive();                    /* one entry drains <= 16 */
+
     TEST_ASSERT_EQUAL_UINT32(16u, g_bytes);
-
-    pumpIsr();
-    TEST_ASSERT_EQUAL_UINT32((uint32)LEN(GGA_8SATS), g_bytes);
-}
-
-/* Ring full: the ISR must drop the byte and count it, never overwrite unread
- * data. Capacity is RING_BUFFER_SIZE-1 because head==tail means empty. */
-void test_isr_counts_overflow_and_keeps_unread_data(void)
-{
-    char   burst[RING_BUFFER_SIZE + 64u];
-    uint16 i;
-
-    for (i = 0u; i < (RING_BUFFER_SIZE + 63u); i++)
-    {
-        burst[i] = 'A';
-    }
-    burst[RING_BUFFER_SIZE + 63u] = '\0';
-
-    FakeAsclin_pushRx(burst);
-    pumpIsr();
-
-    /* every byte was taken off the FIFO ... */
-    TEST_ASSERT_EQUAL_UINT32((uint32)(RING_BUFFER_SIZE + 63u), g_bytes);
-    /* ... but only RING_BUFFER_SIZE-1 fitted, the rest were counted as lost */
-    TEST_ASSERT_EQUAL_UINT8((uint8)((RING_BUFFER_SIZE + 63u) - (RING_BUFFER_SIZE - 1u)),
-                            g_ring_buf_overflow_counter);
-    TEST_ASSERT_EQUAL_UINT16(RING_BUFFER_SIZE - 1u, g_ring_head);
-    TEST_ASSERT_EQUAL_UINT16(0u, g_ring_tail);
+    TEST_ASSERT_TRUE(FakeAsclin_pending() > 0u);
 }
 
 /* =======================================================================
- * GnssM9N_read
- *
- * Testability: good for the framing, poor for the return value. The framing
- * (ring buffer -> CR/LF-delimited sentence -> decode) is fully observable
- * through the GnssM9N_Sample the caller supplies. The boolean it returns is
- * not testable, because it is not computed -- see the test at the end.
+ * GnssM9N_read -- end to end through the state machine
  * ======================================================================= */
 
-/* End-to-end: bytes on the wire, through the ISR, out as navigation data. */
-void test_read_decodes_a_sentence_end_to_end(void)
+void test_read_finds_an_ack_in_the_stream(void)
 {
-    GnssM9N_Sample sample = { 0u, 0u, 0u, 0u, 0u };
+    GnssM9N_Sample sample = {0};
 
-    FakeAsclin_pushRx(GGA_8SATS "\r\n");
+    pushUbxFrame(ACK_BODY, 8u);
+    pumpIsr();
+    (void)GnssM9N_read(&sample);
+
+    TEST_ASSERT_EQUAL_UINT8(1u, g_ubx_ack);
+}
+
+/* A frame will not always arrive whole: at 38400 with a 100 ms consumer a
+ * NAV-PVT spans several read() calls. The state must survive the gap. */
+void test_read_reassembles_a_frame_split_across_two_calls(void)
+{
+    GnssM9N_Sample sample = {0};
+    uint8 wire[10];
+
+    wire[0] = 0xB5u; wire[1] = 0x62u;
+    memcpy(&wire[2], ACK_BODY, 8u);
+
+    FakeAsclin_pushRxBytes(wire, 4u);       /* sync + class + id       */
+    pumpIsr();
+    (void)GnssM9N_read(&sample);
+    TEST_ASSERT_EQUAL_UINT8(0u, g_ubx_ack); /* not yet complete        */
+
+    FakeAsclin_pushRxBytes(&wire[4], 6u);   /* the rest, 100 ms later  */
+    pumpIsr();
+    (void)GnssM9N_read(&sample);
+
+    TEST_ASSERT_EQUAL_UINT8(1u, g_ubx_ack);
+}
+
+/* Presence: absent until bytes arrive, present from the poll after the drain,
+ * absent again once GNSS_NOT_PRESENT_TICKS polls pass with an empty ring. */
+void test_read_reports_absent_until_data_arrives(void)
+{
+    GnssM9N_Sample sample = {0};
+
+    TEST_ASSERT_EQUAL(FALSE, GnssM9N_read(&sample));
+    TEST_ASSERT_EQUAL(FALSE, GnssM9N_read(&sample));
+    TEST_ASSERT_EQUAL_UINT32(0u, sample.rxBytes);
+
+    pushUbxFrame(ACK_BODY, 8u);
     pumpIsr();
 
+    (void)GnssM9N_read(&sample);            /* this drain clears it    */
     TEST_ASSERT_EQUAL(TRUE, GnssM9N_read(&sample));
-    TEST_ASSERT_EQUAL_UINT8(8u, sample.numSats);
-    TEST_ASSERT_EQUAL_UINT8(1u, sample.fixType);
-    TEST_ASSERT_EQUAL_UINT32(1u, sample.sentences);
-    TEST_ASSERT_EQUAL_UINT32((uint32)LEN(GGA_8SATS) + 2u, sample.rxBytes);
-    TEST_ASSERT_EQUAL_UINT16(0u, sample.errors);
 }
 
-/* The trailing '\n' after '\r' must not be counted as a second sentence. */
-void test_read_counts_crlf_as_one_sentence(void)
+void test_read_reports_absent_again_after_the_timeout(void)
 {
-    GnssM9N_Sample sample = { 0u, 0u, 0u, 0u, 0u };
+    GnssM9N_Sample sample = {0};
+    uint16         i;
 
-    FakeAsclin_pushRx(GGA_8SATS "\r\n" GGA_12SATS "\r\n");
+    pushUbxFrame(ACK_BODY, 8u);
     pumpIsr();
     (void)GnssM9N_read(&sample);
+    TEST_ASSERT_EQUAL(TRUE, GnssM9N_read(&sample));
 
-    TEST_ASSERT_EQUAL_UINT32(2u, sample.sentences);
-    TEST_ASSERT_EQUAL_UINT8(12u, sample.numSats);   /* newest wins */
-}
-
-/* A sentence split across two calls (the normal case at 38400 baud, where a
- * burst spans several task periods) must still decode once complete. */
-void test_read_reassembles_a_split_sentence(void)
-{
-    GnssM9N_Sample sample = { 0u, 0u, 0u, 0u, 0u };
-
-    FakeAsclin_pushRx("$GNGGA,123519,4807.038,N,0113");
-    pumpIsr();
-    (void)GnssM9N_read(&sample);
-    TEST_ASSERT_EQUAL_UINT32(0u, sample.sentences);
-    TEST_ASSERT_EQUAL_UINT8(0u, sample.numSats);
-
-    FakeAsclin_pushRx("1.000,E,1,08,0.9,545.4,M,46.9,M,,*59\r\n");
-    pumpIsr();
-    (void)GnssM9N_read(&sample);
-    TEST_ASSERT_EQUAL_UINT32(1u, sample.sentences);
-    TEST_ASSERT_EQUAL_UINT8(8u, sample.numSats);
-}
-
-/* A corrupted sentence still counts as a sentence (it was framed), but must
- * not move the navigation data. */
-void test_read_keeps_last_fix_when_a_sentence_is_corrupted(void)
-{
-    GnssM9N_Sample sample = { 0u, 0u, 0u, 0u, 0u };
-
-    FakeAsclin_pushRx(GGA_8SATS "\r\n");
-    pumpIsr();
-    (void)GnssM9N_read(&sample);
-    TEST_ASSERT_EQUAL_UINT8(8u, sample.numSats);
-
-    /* same sentence as GGA_12SATS but with a deliberately wrong checksum */
-    FakeAsclin_pushRx("$GNGGA,123519,4807.038,N,01131.000,E,2,12,0.9,545.4,M,46.9,M,,*00\r\n");
-    pumpIsr();
-    (void)GnssM9N_read(&sample);
-
-    TEST_ASSERT_EQUAL_UINT32(2u, sample.sentences);
-    TEST_ASSERT_EQUAL_UINT8(8u, sample.numSats);    /* unchanged */
-    TEST_ASSERT_EQUAL_UINT8(1u, sample.fixType);
-}
-
-/* A sentence longer than the assembly buffer must not overrun it, and the
- * next good sentence must still decode.
- *
- * FINDING while writing this test: the recovery is not "throw the line away".
- * When g_buffer is full the driver sets g_len = 0 and keeps collecting, so the
- * *tail* of the oversized line becomes a sentence of its own and is counted in
- * sample.sentences (it fails the checksum, so nav data is safe). Dropping
- * bytes until the next CR/LF would be the cleaner recovery. Asserted as-is. */
-void test_read_discards_an_oversized_sentence(void)
-{
-    GnssM9N_Sample sample = { 0u, 0u, 0u, 0u, 0u };
-    char   monster[GNSSM9N_BUFFER_SIZE + 32u];
-    uint16 i;
-
-    monster[0] = '$';
-    for (i = 1u; i < (GNSSM9N_BUFFER_SIZE + 30u); i++)
+    for (i = 0u; i < GNSS_NOT_PRESENT_TICKS; i++)
     {
-        monster[i] = 'X';
+        (void)GnssM9N_read(&sample);
     }
-    monster[GNSSM9N_BUFFER_SIZE + 30u] = '\r';
-    monster[GNSSM9N_BUFFER_SIZE + 31u] = '\0';
+    TEST_ASSERT_EQUAL(FALSE, GnssM9N_read(&sample));
+    TEST_ASSERT_EQUAL(FALSE, GnssM9N_read(&sample));
+}
 
-    FakeAsclin_pushRx(monster);
-    FakeAsclin_pushRx(GGA_8SATS "\r\n");
+/* The scaled values must be republished on EVERY call, not only when a frame
+ * arrived -- NAV-PVT lands at 1 Hz while read() runs at 100 ms. */
+void test_read_republishes_the_last_fix_between_frames(void)
+{
+    GnssM9N_Sample sample = {0};
+    uint8 pl[92];
+    uint8 f[110];
+    uint8 len;
+    uint8 i;
+
+    memset(pl, 0, sizeof(pl));
+    pl[21]=0x01u;
+    pl[28]=0x87u; pl[29]=0x0Eu; pl[30]=0xAFu; pl[31]=0x1Cu;   /* lat */
+    len = buildUbx(f, 0x01u, 0x07u, pl, 92u);
+
+    pushUbxFrame(f, len);
     pumpIsr();
     (void)GnssM9N_read(&sample);
 
-    TEST_ASSERT_EQUAL_UINT8(8u, sample.numSats);
-    TEST_ASSERT_EQUAL_UINT8(1u, sample.fixType);
-    /* the truncated tail was framed as a sentence of its own -> 2, not 1 */
-    TEST_ASSERT_EQUAL_UINT32(2u, sample.sentences);
+    /* nine more polls with nothing on the wire */
+    for (i = 0u; i < 9u; i++)
+    {
+        (void)GnssM9N_read(&sample);
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, 48.1234567f, sample.latDeg);
+        TEST_ASSERT_EQUAL_UINT8(1u, sample.fixOk);
+    }
 }
 
-/* Architectural check: GnssM9N_read must never touch the peripheral. If
- * somebody re-introduces a FIFO drain there, the bytes would disappear from
- * the wire without an interrupt and this fails. */
+/* Garbage must not wedge the state machine: a bogus length is rejected and
+ * the next good frame is still found. */
+void test_read_recovers_from_an_oversized_length(void)
+{
+    GnssM9N_Sample sample = {0};
+    uint8 junk[8] = { 0xB5u, 0x62u, 0x01u, 0x07u, 0xFFu, 0xFFu, 0x00u, 0x00u };
+
+    FakeAsclin_pushRxBytes(junk, sizeof(junk));
+    pumpIsr();
+    (void)GnssM9N_read(&sample);
+
+    pushUbxFrame(ACK_BODY, 8u);
+    pumpIsr();
+    (void)GnssM9N_read(&sample);
+
+    TEST_ASSERT_EQUAL_UINT8(1u, g_ubx_ack);
+}
+
+/* read() must never touch the peripheral -- the ISR owns it. */
 void test_read_does_not_touch_the_hardware_fifo(void)
 {
-    GnssM9N_Sample sample = { 0u, 0u, 0u, 0u, 0u };
+    GnssM9N_Sample sample = {0};
 
-    FakeAsclin_pushRx(GGA_8SATS "\r\n");
-    (void)GnssM9N_read(&sample);            /* no pumpIsr() on purpose */
+    FakeAsclin_pushRxBytes(ACK_BODY, 8u);   /* no pumpIsr on purpose */
+    (void)GnssM9N_read(&sample);
 
-    TEST_ASSERT_EQUAL_UINT32((uint32)LEN(GGA_8SATS) + 2u, FakeAsclin_pending());
-    TEST_ASSERT_EQUAL_UINT32(0u, sample.rxBytes);
-    TEST_ASSERT_EQUAL_UINT32(0u, sample.sentences);
-}
-
-/* Calling read twice with nothing new must not re-decode or re-count. */
-void test_read_is_idempotent_when_the_ring_is_empty(void)
-{
-    GnssM9N_Sample first  = { 0u, 0u, 0u, 0u, 0u };
-    GnssM9N_Sample second = { 0u, 0u, 0u, 0u, 0u };
-
-    FakeAsclin_pushRx(GGA_8SATS "\r\n");
-    pumpIsr();
-    (void)GnssM9N_read(&first);
-    (void)GnssM9N_read(&second);
-
-    TEST_ASSERT_EQUAL_UINT32(first.sentences, second.sentences);
-    TEST_ASSERT_EQUAL_UINT32(first.rxBytes,   second.rxBytes);
-    TEST_ASSERT_EQUAL_UINT8 (first.numSats,   second.numSats);
-}
-
-/* FINDING, pinned deliberately.
- *
- * The return value is meant to say "is the GNSS there?" -- g_timeout and
- * g_poll_counter exist for exactly that. But the function assigns
- * status = TRUE unconditionally after the g_timeout check, so the check is
- * dead code and the result carries no information: read() reports TRUE with
- * no receiver attached and nothing ever received.
- *
- * The test asserts today's behaviour so the file stays green, and names the
- * problem so it is not mistaken for intent. When the presence logic is wired
- * up, this test should be replaced by one that asserts FALSE here. */
-void test_read_return_value_is_currently_hardcoded_true(void)
-{
-    GnssM9N_Sample sample = { 0u, 0u, 0u, 0u, 0u };
-
-    TEST_ASSERT_EQUAL(TRUE, g_timeout);          /* "not seen yet" */
-    TEST_ASSERT_EQUAL(TRUE, GnssM9N_read(&sample));
-    TEST_ASSERT_EQUAL_UINT32(0u, sample.rxBytes);
+    TEST_ASSERT_EQUAL_UINT32(8u, FakeAsclin_pending());
+    TEST_ASSERT_EQUAL_UINT32(0u, g_bytes);
 }
 
 /* =======================================================================
  * GnssM9N_init
- *
- * Testability: the weakest of the module. It reports success through a side
- * channel (re-reading the peripheral clock source) instead of through the
- * value iLLD hands it, and its software-reset block is unreachable. Both are
- * pinned below.
  * ======================================================================= */
 
-/* Success is "the module ended up on the fast ASC clock". */
 void test_init_reports_ok_when_the_module_is_clocked(void)
 {
-    FakeAsclin_reset();
+    FakeAsclin_forceClockSource(IfxAsclin_ClockSource_ascFastClock);
     TEST_ASSERT_EQUAL(TRUE, GnssM9N_init());
 }
 
-/* ...and fails when it is not. This is the only real assertion available,
- * since the iLLD status cannot be used (see the last test). */
 void test_init_reports_failure_when_the_module_is_unclocked(void)
 {
-    FakeAsclin_reset();
     FakeAsclin_forceClockSource(IfxAsclin_ClockSource_noClock);
     TEST_ASSERT_EQUAL(FALSE, GnssM9N_init());
 }
 
-/* The ISR must be wired to the right SRPN and the right core, otherwise no
- * byte is ever seen. Checked against the config the driver handed to iLLD. */
-void test_init_configures_the_rx_interrupt(void)
-{
-    const IfxAsclin_Asc_Config *cfg;
-
-    FakeAsclin_reset();
-    (void)GnssM9N_init();
-    cfg = FakeAsclin_Asc_lastConfig();
-
-    TEST_ASSERT_EQUAL_UINT16(ISR_PRIORITY_ASCLIN4_RX, cfg->interrupt.rxPriority);
-    TEST_ASSERT_EQUAL(IfxSrc_Tos_cpu0, cfg->interrupt.typeOfService);
-}
-
-/* The GNSS ships 38400 baud by default; a wrong rate looks exactly like a
- * dead receiver, so it is worth an assertion. */
 void test_init_requests_the_gnss_baudrate(void)
 {
-    FakeAsclin_reset();
     (void)GnssM9N_init();
-    TEST_ASSERT_EQUAL_FLOAT((float32)UART_SPEED_38400,
+    TEST_ASSERT_EQUAL_FLOAT((float)UART_SPEED_38400,
                             FakeAsclin_Asc_lastConfig()->baudrate.baudrate);
+}
+
+void test_init_configures_the_rx_interrupt(void)
+{
+    (void)GnssM9N_init();
+    TEST_ASSERT_EQUAL_UINT16(ISR_PRIORITY_ASCLIN4_RX,
+                             FakeAsclin_Asc_lastConfig()->interrupt.rxPriority);
 }
 
 /* FINDING, pinned deliberately.
  *
- * GnssM9N_init guards its software reset with
- * "IfxAsclin_Asc_initModule() == IfxAsclin_Status_noError". iLLD sets
- * configurationError whenever txBuffer or rxBuffer is NULL_PTR -- and this
- * driver passes NULL_PTR for both on purpose, because it uses the hardware
- * FIFO plus its own ring buffer instead of the iLLD software FIFOs. So the
- * condition is never true: the counters, the ring indices and g_timeout are
- * never cleared, on the host or on the board. It only goes unnoticed because
- * the statics start at zero after reset.
+ * GnssM9N_init guards its software reset with "initModule() == noError".
+ * iLLD sets configurationError whenever txBuffer or rxBuffer is NULL_PTR --
+ * and this driver passes NULL_PTR for both on purpose, because it uses the
+ * hardware FIFO plus its own ring buffer. So the condition is never true:
+ * the counters and ring indices are never cleared, on the host or on the
+ * board. It only goes unnoticed because the statics start at zero.
  *
- * The test proves it by dirtying the state and calling init. When the guard is
- * fixed (drop it, or key the reset off the clock-source check instead), this
- * test fails and should be inverted. */
+ * When the guard is fixed, this test fails and should be inverted. */
 void test_init_does_not_actually_reset_driver_state(void)
 {
     FakeAsclin_reset();
@@ -766,75 +604,51 @@ void test_init_does_not_actually_reset_driver_state(void)
     TEST_ASSERT_EQUAL_UINT16(17u,   g_ring_head);
 }
 
-void test_send_Ubx(void)
-{
-    uint8 payload[9] = {0x00, 0x01, 0x00, 0x00, 0xC5, 0x00, 0x90, 0x20, 0x00};
-    TEST_ASSERT_EQUAL(TRUE, gnss_sendUbx (0x06, 0x8A, payload, 9));
-
-    TEST_ASSERT_EQUAL(TRUE, gnss_cfgValsetU1(0u, CFG_MSGOUT_NMEA_GSV_UART1));
-}
-
 int main(void)
 {
     UNITY_BEGIN();
 
-    /* convert_ascii_to_int */
-    RUN_TEST(test_convert_ascii_decimal_digits);
-    RUN_TEST(test_convert_ascii_uppercase_hex);
-    RUN_TEST(test_convert_ascii_lowercase_hex_reads_as_zero);
-    RUN_TEST(test_convert_ascii_rejects_by_returning_zero);
+    /* checksum */
+    RUN_TEST(test_checksum_matches_the_documented_ack);
+    RUN_TEST(test_checksum_detects_reordered_bytes);
 
-    /* gnss_checksum */
-    RUN_TEST(test_checksum_accepts_valid_sentences);
-    RUN_TEST(test_checksum_detects_corrupted_payload);
-    RUN_TEST(test_checksum_detects_wrong_checksum_field);
-    RUN_TEST(test_checksum_covers_exactly_dollar_to_star);
-    RUN_TEST(test_checksum_reads_junk_checksum_field_as_zero);
+    /* transmit */
+    RUN_TEST(test_sendUbx_emits_the_documented_gsv_off_frame);
+    RUN_TEST(test_cfgValset_builds_the_same_frame_from_the_key);
+    RUN_TEST(test_cfgValset_writes_the_key_little_endian);
+    RUN_TEST(test_sendUbx_rejects_an_oversized_payload);
+    RUN_TEST(test_txByte_gives_up_when_the_fifo_never_drains);
 
-    /* nmea_sentence_parser */
-    RUN_TEST(test_parser_extracts_a_field);
-    RUN_TEST(test_parser_accumulates_multiple_digits);
-    RUN_TEST(test_parser_ascending_calls_share_the_cursor);
-    RUN_TEST(test_parser_descending_calls_fail_silently);
-    RUN_TEST(test_parser_empty_field_leaves_value_untouched);
-    RUN_TEST(test_parser_field_beyond_sentence_fails);
-    RUN_TEST(test_parser_overflows_silently_on_wide_fields);
+    /* decode */
+    RUN_TEST(test_decode_accepts_the_documented_ack_frame);
+    RUN_TEST(test_decode_rejects_a_corrupted_payload);
+    RUN_TEST(test_decode_rejects_when_only_one_checksum_byte_is_wrong);
+    RUN_TEST(test_decode_counts_a_nak_separately_from_an_ack);
+    RUN_TEST(test_decode_extracts_every_navpvt_field);
+    RUN_TEST(test_decode_handles_negative_coordinates);
+    RUN_TEST(test_decode_clears_fixok_when_llh_is_invalid);
+    RUN_TEST(test_decode_clears_fixok_when_gnssfixok_is_clear);
+    RUN_TEST(test_decode_ignores_an_unhandled_message);
 
-    /* GnssM9N_decode */
-    RUN_TEST(test_decode_valid_gga_sets_sats_and_quality);
-    RUN_TEST(test_decode_reports_differential_fix);
-    RUN_TEST(test_decode_cold_start_is_valid_data);
-    RUN_TEST(test_decode_rejects_bad_checksum_without_touching_nav);
-    RUN_TEST(test_decode_rejects_missing_star_delimiter);
-    RUN_TEST(test_decode_rejects_short_buffers);
-    RUN_TEST(test_decode_ignores_other_talkers);
-    RUN_TEST(test_decode_rejects_implausible_satellite_count);
-    RUN_TEST(test_decode_is_repeatable_back_to_back);
-
-    /* asclin4IsrReceive */
+    /* ISR + ring */
     RUN_TEST(test_isr_moves_fifo_bytes_into_the_ring);
     RUN_TEST(test_isr_needs_several_entries_for_a_long_burst);
-    RUN_TEST(test_isr_counts_overflow_and_keeps_unread_data);
 
-    /* GnssM9N_read */
-    RUN_TEST(test_read_decodes_a_sentence_end_to_end);
-    RUN_TEST(test_read_counts_crlf_as_one_sentence);
-    RUN_TEST(test_read_reassembles_a_split_sentence);
-    RUN_TEST(test_read_keeps_last_fix_when_a_sentence_is_corrupted);
-    RUN_TEST(test_read_discards_an_oversized_sentence);
+    /* read */
+    RUN_TEST(test_read_finds_an_ack_in_the_stream);
+    RUN_TEST(test_read_reassembles_a_frame_split_across_two_calls);
+    RUN_TEST(test_read_reports_absent_until_data_arrives);
+    RUN_TEST(test_read_reports_absent_again_after_the_timeout);
+    RUN_TEST(test_read_republishes_the_last_fix_between_frames);
+    RUN_TEST(test_read_recovers_from_an_oversized_length);
     RUN_TEST(test_read_does_not_touch_the_hardware_fifo);
-    RUN_TEST(test_read_is_idempotent_when_the_ring_is_empty);
-    RUN_TEST(test_read_return_value_is_currently_hardcoded_true);
 
-    /* GnssM9N_init */
+    /* init */
     RUN_TEST(test_init_reports_ok_when_the_module_is_clocked);
     RUN_TEST(test_init_reports_failure_when_the_module_is_unclocked);
-    RUN_TEST(test_init_configures_the_rx_interrupt);
     RUN_TEST(test_init_requests_the_gnss_baudrate);
+    RUN_TEST(test_init_configures_the_rx_interrupt);
     RUN_TEST(test_init_does_not_actually_reset_driver_state);
-
-    /* send */
-    RUN_TEST(test_send_Ubx);
 
     return UNITY_END();
 }

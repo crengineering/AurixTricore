@@ -8,7 +8,7 @@
  *
  * All objects live at fixed addresses (TASKING __at), so this file does not
  * depend on the link run:
- *   Xcp_Data  (measurements)          0x70030000, 228 bytes, Measurements.h
+ *   Xcp_Data  (measurements)          0x70030000, 252 bytes, Measurements.h
  *   Xcp_Cal   (calibration, RAM only) 0x70030100, 64 bytes, Diagnostics.h
  *   Xcp_Nvm   (persistent, DFLASH)    0x70030200, 16 bytes, Nvm.h
  *   Xcp_Gpio  (GPIO control, RAM only) 0x70030300, 52 bytes, gpio.h
@@ -453,39 +453,45 @@ ASAP2_VERSION 1 61
       PHYS_UNIT "deg"
     /end MEASUREMENT
 
-    /begin MEASUREMENT gnssPresent "gnssPresent (no description in a2l_meta.json)"
-      UBYTE NO_COMPU_METHOD 0 0 0 255
+    /begin MEASUREMENT GnssPresent "1 if the NEO-M9N is answering (link alive), else 0"
+      UBYTE NO_COMPU_METHOD 0 0 0 1
       ECU_ADDRESS 0x700300CC
     /end MEASUREMENT
 
-    /begin MEASUREMENT gnssyear "gnssyear (no description in a2l_meta.json)"
+    /begin MEASUREMENT GnssYear "UTC year from UBX-NAV-PVT"
       UWORD NO_COMPU_METHOD 0 0 0 65535
       ECU_ADDRESS 0x700300CE
+      PHYS_UNIT "y"
     /end MEASUREMENT
 
-    /begin MEASUREMENT gnssmonth "gnssmonth (no description in a2l_meta.json)"
-      UBYTE NO_COMPU_METHOD 0 0 0 255
+    /begin MEASUREMENT GnssMonth "UTC month, 1..12"
+      UBYTE NO_COMPU_METHOD 0 0 0 12
       ECU_ADDRESS 0x700300D0
     /end MEASUREMENT
 
-    /begin MEASUREMENT gnssday "gnssday (no description in a2l_meta.json)"
-      UBYTE NO_COMPU_METHOD 0 0 0 255
+    /begin MEASUREMENT GnssDay "UTC day of month, 1..31"
+      UBYTE NO_COMPU_METHOD 0 0 0 31
       ECU_ADDRESS 0x700300D1
     /end MEASUREMENT
 
-    /begin MEASUREMENT gnsshour "gnsshour (no description in a2l_meta.json)"
-      UBYTE NO_COMPU_METHOD 0 0 0 255
+    /begin MEASUREMENT GnssHour "UTC hour, 0..23"
+      UBYTE NO_COMPU_METHOD 0 0 0 23
       ECU_ADDRESS 0x700300D2
     /end MEASUREMENT
 
-    /begin MEASUREMENT gnssmin "gnssmin (no description in a2l_meta.json)"
-      UBYTE NO_COMPU_METHOD 0 0 0 255
+    /begin MEASUREMENT GnssMinute "UTC minute, 0..59"
+      UBYTE NO_COMPU_METHOD 0 0 0 59
       ECU_ADDRESS 0x700300D3
     /end MEASUREMENT
 
-    /begin MEASUREMENT gnsssec "gnsssec (no description in a2l_meta.json)"
-      UBYTE NO_COMPU_METHOD 0 0 0 255
+    /begin MEASUREMENT GnssSecond "UTC second, 0..60 (60 during a leap second)"
+      UBYTE NO_COMPU_METHOD 0 0 0 60
       ECU_ADDRESS 0x700300D4
+    /end MEASUREMENT
+
+    /begin MEASUREMENT GnssFixOk "1 = position usable: NAV-PVT gnssFixOK set AND invalidLlh clear. Check this, not fixType alone"
+      UBYTE NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x700300D5
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssRxBytes "NEO-M9N bytes received on ASCLIN4 since boot - the primary link-health signal"
@@ -512,6 +518,42 @@ ASAP2_VERSION 1 61
     /begin MEASUREMENT GnssNumSats "satellites used in the solution - PHASE B, currently always 0"
       UBYTE NO_COMPU_METHOD 0 0 0 32
       ECU_ADDRESS 0x700300E3
+    /end MEASUREMENT
+
+    /begin MEASUREMENT GnssLatitude "latitude from UBX-NAV-PVT, WGS84. Stored as float32 so ~0.4 m of the receiver's 1.1 cm resolution is lost - well below its ~1.5 m accuracy"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -90 90
+      ECU_ADDRESS 0x700300E4
+      PHYS_UNIT "deg"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT GnssLongitude "longitude from UBX-NAV-PVT, WGS84"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -180 180
+      ECU_ADDRESS 0x700300E8
+      PHYS_UNIT "deg"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT GnssAltitude "height above mean sea level (NAV-PVT hMSL)"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -1000 20000
+      ECU_ADDRESS 0x700300EC
+      PHYS_UNIT "m"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT GnssGroundSpeed "2-D ground speed (NAV-PVT gSpeed)"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 500
+      ECU_ADDRESS 0x700300F0
+      PHYS_UNIT "m/s"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT GnssHeading "2-D heading of motion (NAV-PVT headMot); meaningless when stationary"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -180 360
+      ECU_ADDRESS 0x700300F4
+      PHYS_UNIT "deg"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT GnssHAccuracy "horizontal accuracy estimate (NAV-PVT hAcc) - the number that says whether the fix is trustworthy"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 10000
+      ECU_ADDRESS 0x700300F8
+      PHYS_UNIT "m"
     /end MEASUREMENT
 
     /* individual diagnostics bits (BIT_MASK views on DiagStatus) */

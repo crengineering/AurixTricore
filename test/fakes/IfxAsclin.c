@@ -58,6 +58,17 @@ void FakeAsclin_pushRx(const char *bytes)
     }
 }
 
+void FakeAsclin_pushRxBytes(const uint8 *bytes, uint32 len)
+{
+    uint32 i;
+
+    for (i = 0u; (i < len) && (s_writeIdx < FAKE_WIRE_CAPACITY); i++)
+    {
+        s_wire[s_writeIdx] = bytes[i];
+        s_writeIdx++;
+    }
+}
+
 void FakeAsclin_setFrameError(void) { s_frameError = TRUE; }
 void FakeAsclin_setRxOverflow(void) { s_rxOverflow = TRUE; }
 

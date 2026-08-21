@@ -36,7 +36,33 @@
 #define UBX_NAV_PVT_SEC           10u
 
 #define UBX_NAV_PVT_FIXTYPE       20u
+#define UBX_NAV_PVT_FLAGS         21u
 #define UBX_NAV_PVT_NUMSV         23u
+#define UBX_NAV_PVT_LON           24u
+#define UBX_NAV_PVT_LAT           28u
+#define UBX_NAV_PVT_HMSL          36u
+#define UBX_NAV_PVT_HACC          40u
+#define UBX_NAV_PVT_VACC          44u
+#define UBX_NAV_PVT_GSPEED        60u
+#define UBX_NAV_PVT_HEADMOT       64u
+#define UBX_NAV_PVT_PDOP          76u
+#define UBX_NAV_PVT_FLAGS3        78u
+#define UBX_NAV_PVT_ITOW           0u
+#define UBX_NAV_PVT_PAYLOAD_LEN   92u
+
+/* Frame layout of the RX buffer: class, id and the two length bytes come
+ * first, so a payload offset from the interface description needs +4. */
+#define UBX_PAYLOAD_OFFSET         4u
+
+#define UBX_CLASS_ACK             0x05u
+#define UBX_ID_ACK_ACK            0x01u
+#define UBX_ID_ACK_NAK            0x00u
+#define UBX_CLASS_NAV             0x01u
+#define UBX_ID_NAV_PVT            0x07u
+
+/* UBX-NAV-PVT flag bits (see docs/GNSS_UBX.md section 6) */
+#define UBX_PVT_FLAGS_GNSSFIXOK   0x01u
+#define UBX_PVT_FLAGS3_INVALIDLLH 0x01u
 
 
 /* local used variables */
@@ -58,9 +84,6 @@ static volatile char           g_ring_buffer[RING_BUFFER_SIZE];
 static volatile uint16         g_ring_head = 0u;
 static volatile uint16         g_ring_tail = 0u;
 
-/* nmea parser variables */
-static uint8                   nmea_parser_index = 0u;
-static uint8                   nmea_parser_bytes = 0u;
 static uint16                  g_ubx_payload_len = 0u;
 
 /* ubx variables */
@@ -69,15 +92,13 @@ static uint8 g_detect_ack = 0u;
 
 static gnss_parse_state_t parse_state = GNSS_IDLE;
 static uint8 last_byte;
+static uint32 g_ubx_nak    = 0u;
+static uint32 g_ubx_navpvt = 0u;
 static uint8 g_ubx_ack = 0u;
 
 
 /* local functions */
-static boolean GnssM9N_decode      (const char *buffer, uint8 buffer_len, GnssM9N_Nav *Nav);
 void           asclin4IsrReceive   (void);
-static uint8   convert_ascii_to_int(char elem);
-static uint8   nmea_sentence_parser(const char *buffer, uint8 buffer_len, uint8 stop_field, uint8 *value);
-static boolean gnss_checksum       (const char *buffer, uint8 buffer_len);
 static boolean GnssM9N_timeout     (void);
 static boolean gnss_txByte         (uint8 value);
 static boolean gnss_sendUbx        (uint8 msgClass, uint8 msgId, const uint8 *payload, uint8 payload_len);
@@ -211,6 +232,64 @@ static boolean gnss_sendUbx (uint8 msgClass, uint8 msgId, const uint8 *payload, 
     return send_success;
 }
 
+/* Assemble a little-endian 32-bit value from four payload bytes.
+ *
+ * Every byte is widened to uint32 BEFORE it is shifted. Without that the
+ * bytes promote to signed int and anything above 127 sign-extends, which
+ * silently corrupts every latitude, velocity and accuracy figure. */
+static uint32 ubx_rd_u32(const uint8 *p)
+{
+    return ((uint32)p[0])
+         | ((uint32)p[1] <<  8)
+         | ((uint32)p[2] << 16)
+         | ((uint32)p[3] << 24);
+}
+
+static uint16 ubx_rd_u16(const uint8 *p)
+{
+    return (uint16)(((uint16)p[0]) | ((uint16)p[1] << 8));
+}
+
+/* Decode UBX-NAV-PVT into Nav. The caller has already verified the checksum
+ * and the class/id, so this only does field extraction. */
+static void ubx_decode_navPvt(const uint8 *payload, GnssM9N_Nav *Nav)
+{
+    uint8 flags  = payload[UBX_NAV_PVT_FLAGS];
+    uint8 flags3 = payload[UBX_NAV_PVT_FLAGS3];
+
+    Nav->iTOW       = ubx_rd_u32(&payload[UBX_NAV_PVT_ITOW]);
+    Nav->year       = ubx_rd_u16(&payload[UBX_NAV_PVT_YEAR]);
+    Nav->month      = payload[UBX_NAV_PVT_MONTH];
+    Nav->day        = payload[UBX_NAV_PVT_DAY];
+    Nav->hour       = payload[UBX_NAV_PVT_HOUR];
+    Nav->min        = payload[UBX_NAV_PVT_MIN];
+    Nav->sec        = payload[UBX_NAV_PVT_SEC];
+
+    Nav->fixQuality = payload[UBX_NAV_PVT_FIXTYPE];
+    Nav->numSats    = payload[UBX_NAV_PVT_NUMSV];
+
+    Nav->lon        = (sint32)ubx_rd_u32(&payload[UBX_NAV_PVT_LON]);
+    Nav->lat        = (sint32)ubx_rd_u32(&payload[UBX_NAV_PVT_LAT]);
+    Nav->hMSL       = (sint32)ubx_rd_u32(&payload[UBX_NAV_PVT_HMSL]);
+    Nav->gSpeed     = (sint32)ubx_rd_u32(&payload[UBX_NAV_PVT_GSPEED]);
+    Nav->headMot    = (sint32)ubx_rd_u32(&payload[UBX_NAV_PVT_HEADMOT]);
+    Nav->hAcc       = ubx_rd_u32(&payload[UBX_NAV_PVT_HACC]);
+    Nav->vAcc       = ubx_rd_u32(&payload[UBX_NAV_PVT_VACC]);
+    Nav->pDOP       = ubx_rd_u16(&payload[UBX_NAV_PVT_PDOP]);
+
+    /* fixType alone is NOT enough -- the interface description requires the
+     * validity flags too (docs/GNSS_UBX.md section 7). */
+    if (((flags  & UBX_PVT_FLAGS_GNSSFIXOK)   != 0u) &&
+        ((flags3 & UBX_PVT_FLAGS3_INVALIDLLH) == 0u))
+    {
+        Nav->fixOk = 1u;
+    }
+    else
+    {
+        Nav->fixOk = 0u;
+    }
+}
+
 static boolean gnss_ubx_decode (const uint8 *buffer, uint8 buffer_len, uint8 payload_len, GnssM9N_Nav *Nav){
     uint8 ck_a = 0u;
     uint8 ck_b = 0u;
@@ -222,18 +301,37 @@ static boolean gnss_ubx_decode (const uint8 *buffer, uint8 buffer_len, uint8 pay
         return FALSE;
     }
 
-    if ((buffer[0] == 0x05u) &&
-        (buffer[1] == 0x01u) )
+    /* Dispatch on class/id. Anything else is ignored on purpose -- the frame
+     * was well formed, we simply do not consume that message. */
+    if (buffer[0] == UBX_CLASS_ACK)
     {
-        g_ubx_ack++;
+        if (buffer[1] == UBX_ID_ACK_ACK)
+        {
+            g_ubx_ack++;
+        }
+        else if (buffer[1] == UBX_ID_ACK_NAK)
+        {
+            g_ubx_nak++;
+        }
+        else
+        {
+            /* other ACK-class message */
+        }
     }
-    /* decode */
-    Nav->year  = (uint16) ((buffer[4u + UBX_NAV_PVT_YEAR]) | (buffer[4u + UBX_NAV_PVT_YEAR + 1u] <<8));
-    Nav->month = buffer[4u + UBX_NAV_PVT_MONTH];
-    Nav->day   = buffer[4u + UBX_NAV_PVT_DAY];
-    Nav->hour  = buffer[4u + UBX_NAV_PVT_HOUR];
-    Nav->min   = buffer[4u + UBX_NAV_PVT_MIN];
-    Nav->sec   = buffer[4u + UBX_NAV_PVT_SEC];
+    else if ((buffer[0] == UBX_CLASS_NAV) &&
+             (buffer[1] == UBX_ID_NAV_PVT))
+    {
+        /* Length guard: a short frame would read past the payload. */
+        if (payload_len >= UBX_NAV_PVT_PAYLOAD_LEN)
+        {
+            ubx_decode_navPvt(&buffer[UBX_PAYLOAD_OFFSET], Nav);
+            g_ubx_navpvt++;
+        }
+    }
+    else
+    {
+        /* not consumed */
+    }
 
     return TRUE;
 }
@@ -400,6 +498,17 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
     sample->errors    = g_errors;
     sample->fixType   = g_nav.fixQuality;
     sample->numSats   = g_nav.numSats;
+
+    /* Scale once, here, so every consumer sees the same units. Copied on
+     * EVERY call, not only when a frame arrived -- NAV-PVT lands at 1 Hz
+     * while this runs at 100 ms, so g_nav is the last-known value. */
+    sample->fixOk      = g_nav.fixOk;
+    sample->latDeg     = (float32)g_nav.lat     * 1.0e-7f;
+    sample->lonDeg     = (float32)g_nav.lon     * 1.0e-7f;
+    sample->altM       = (float32)g_nav.hMSL    * 1.0e-3f;
+    sample->speedMps   = (float32)g_nav.gSpeed  * 1.0e-3f;
+    sample->headingDeg = (float32)g_nav.headMot * 1.0e-5f;
+    sample->hAccM      = (float32)g_nav.hAcc    * 1.0e-3f;
     sample->year      = g_nav.year;
     sample->month     = g_nav.month;
     sample->day       = g_nav.day;

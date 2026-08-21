@@ -165,11 +165,24 @@ typedef struct
     uint8   gnsshour;
     uint8   gnssmin;
     uint8   gnsssec;
+    uint8   gnssfixOk;          /* 1 = position usable, see GnssM9N.h      */
+    uint8   gnssReserved[2];    /* pad: TASKING 2-aligns uint32, gen_a2l   */
+                                /* assumes 4 -- see docs/GNSS_UBX.md s.7   */
     uint32  gnssrxBytes;
     uint32  gnsssentences;
     uint16  gnsserrors;
     uint8   gnssfixType;
     uint8   gnssnumSats;
+
+    /* navigation solution from UBX-NAV-PVT. gnssnumSats above ends on a
+     * 4-byte boundary, so no padding is needed here -- but check
+     * Measurements.src if you add anything, TASKING aligns uint32 to 2. */
+    float32 gnsslatDeg;
+    float32 gnsslonDeg;
+    float32 gnssaltM;
+    float32 gnssspeedMps;
+    float32 gnssheadingDeg;
+    float32 gnsshAccM;
 
 } Xcp_Data;
 

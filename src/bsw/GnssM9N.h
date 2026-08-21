@@ -23,6 +23,16 @@ typedef struct
   uint8  hour;
   uint8  min;
   uint8  sec;
+
+  /* navigation solution, from UBX-NAV-PVT. Scaled to human units here so
+   * every consumer sees the same definition (see docs/GNSS_UBX.md section 6). */
+  uint8   fixOk;        /* flags.gnssFixOK AND NOT flags3.invalidLlh        */
+  float32 latDeg;
+  float32 lonDeg;
+  float32 altM;         /* height above mean sea level                     */
+  float32 speedMps;     /* ground speed, 2-D                               */
+  float32 headingDeg;   /* heading of motion, 2-D                          */
+  float32 hAccM;        /* horizontal accuracy estimate                    */
 }GnssM9N_Sample;
 
 typedef struct
@@ -35,6 +45,19 @@ typedef struct
   uint8  hour;
   uint8  min;
   uint8  sec;
+
+  /* UBX-NAV-PVT, kept in the receiver's native integer units so nothing is
+   * lost; scaling to float happens once, in GnssM9N_read. */
+  uint8  fixOk;         /* 1 = gnssFixOK set and lon/lat/height valid      */
+  sint32 lat;           /* 1e-7 deg                                        */
+  sint32 lon;           /* 1e-7 deg                                        */
+  sint32 hMSL;          /* mm above mean sea level                         */
+  sint32 gSpeed;        /* mm/s, 2-D                                       */
+  sint32 headMot;       /* 1e-5 deg                                        */
+  uint32 hAcc;          /* mm                                              */
+  uint32 vAcc;          /* mm                                              */
+  uint32 iTOW;          /* ms into the GPS week                            */
+  uint16 pDOP;          /* 0.01                                            */
 }GnssM9N_Nav;
 
 typedef enum
