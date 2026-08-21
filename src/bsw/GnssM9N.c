@@ -352,13 +352,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
         {
             case GNSS_IDLE:
                 g_len = 0;
-                if (byte == ('$'))
-                {
-                    parse_state = GNSS_NMEA;
-                    g_buffer[g_len] = byte;
-                    g_len++;
-                }
-                else if ((last_byte   == 0xB5u) &&
+                if ((last_byte   == 0xB5u) &&
                          ((uint8)byte == 0x62u) )
                 {
                     parse_state = GNSS_UBX;
@@ -387,33 +381,6 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
                 }
 
                 break;
-            case GNSS_NMEA:
-
-
-                if (byte == ('\r') || byte == ('\n'))
-                {
-                    if (g_len > 0u)
-                    {
-                        g_buffer[g_len] = '\0';
-                        //GnssM9N_decode((const char *)g_buffer, g_len, &g_nav);
-                        g_len = 0u;
-                        g_sentences++;
-                        parse_state = GNSS_IDLE;
-                    }
-                }
-
-                else if (g_len < GNSSM9N_BUFFER_SIZE - 1u)
-                {
-                    g_buffer[g_len] = byte;
-                    g_len++;
-                }
-                else
-                {
-                    g_len = 0u;
-                }
-
-                break;
-
             default:
                 break;
         }
@@ -441,135 +408,4 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
     sample->sec       = g_nav.sec;
 
     return status;
-}
-
-static boolean GnssM9N_decode(const char *buffer, uint8 buffer_len, GnssM9N_Nav *Nav){
-    boolean     decoding_status = FALSE;
-    gnss_type_t message_type    = NONE;
-    uint8       numSats         = 0u;
-    uint8       fixQuality      = 0u;
-    boolean     digit_read      = FALSE;
-    boolean     fixQuality_read = FALSE;
-
-
-    /* reset parser logic by every call */
-    nmea_parser_index = 0u;
-    nmea_parser_bytes = 0u;
-
-    if ( (buffer_len < 6u) ||
-         (buffer[buffer_len-3] != '*'))
-    {
-        return FALSE;
-    }
-
-    /* checksum */
-    if (gnss_checksum(buffer, buffer_len) != TRUE)
-    {
-        return FALSE;
-    }
-
-    /* parse sentences type */
-    if ( (buffer[1] == 'G') &&
-         (buffer[2] == 'N') &&
-         (buffer[3] == 'G') &&
-         (buffer[4] == 'G') &&
-         (buffer[5] == 'A') )
-    {
-        message_type = GNGGA;
-    }
-
-    switch (message_type)
-    {
-        case GNGGA:
-        {
-            /* detect number of satellites. Enum has to be ascending*/
-            fixQuality_read = nmea_sentence_parser(buffer, buffer_len, (uint8) GNGGA_FIX_QUALITY, &fixQuality);
-            digit_read      = nmea_sentence_parser(buffer, buffer_len, (uint8) GNGGA_SATELLITES_USED, &numSats);
-
-            if (numSats >= GNSS_MAX_SATELLITES)
-            {
-                decoding_status = FALSE;
-
-            }
-            else if (digit_read == TRUE)
-            {
-                Nav->numSats = numSats;
-                decoding_status = TRUE;
-            }
-
-            if (fixQuality_read == TRUE){
-                Nav->fixQuality = fixQuality;
-            }
-            break;
-        }
-        default:
-        {
-            decoding_status = FALSE;
-            break;
-        }
-    }
-    return decoding_status;
-}
-
-
-static uint8 convert_ascii_to_int(char elem)
-{
-    uint8 number = 0u;
-    if ((elem >= '0') &&
-        (elem <= '9')  )
-    {
-        number = elem - '0';
-    }
-    else if ((elem >= 'A') &&
-             (elem <= 'F')  )
-    {
-        number = elem - 'A' + 10u;
-    }
-    return number;
-}
-
-
-
-static boolean nmea_sentence_parser(const char *buffer, uint8 buffer_len, uint8 stop_field, uint8 *value)
-{
-    boolean status = FALSE;
-    uint8 local_value = 0u;
-    while ((nmea_parser_index <= stop_field) &&
-            (nmea_parser_bytes < buffer_len))
-    {
-        if ( (nmea_parser_index == stop_field) &&
-                (buffer[nmea_parser_bytes] >= '0') &&
-                (buffer[nmea_parser_bytes] <= '9'))
-        {
-            local_value = local_value *10 + buffer[nmea_parser_bytes] - '0';
-            status = TRUE;
-        }
-        if (buffer[nmea_parser_bytes] == ',')
-        {
-            nmea_parser_index++;
-        }
-        nmea_parser_bytes++;
-    }
-    if (status == TRUE)
-    {
-        *value = local_value;
-    }
-    return status;
-}
-
-static boolean gnss_checksum(const char *buffer, uint8 buffer_len)
-{
-    /* local variable declaration */
-    uint8       checksum         = 0u;
-    uint8       checksum_target  = 0u;
-
-    /* checksum calculation */
-    for (uint8 i=1u; i<buffer_len-3; i++)
-    {
-        checksum ^= buffer[i];
-    }
-
-    checksum_target = convert_ascii_to_int(buffer[buffer_len-2]) * 16 + convert_ascii_to_int(buffer[buffer_len-1]);
-
-    return (checksum == checksum_target);
 }

@@ -159,18 +159,18 @@ typedef struct
 
     /* gnss- see GnssM9N.h */
     uint8   gnssPresent;
-    uint8   gnssReserved[3];
-    uint32  gnssrxBytes;
-    uint32  gnsssentences;
-    uint16  gnsserrors;
-    uint8   gnssfixType;
-    uint8   gnssnumSats;
     uint16  gnssyear;
     uint8   gnssmonth;
     uint8   gnssday;
     uint8   gnsshour;
     uint8   gnssmin;
     uint8   gnsssec;
+    uint32  gnssrxBytes;
+    uint32  gnsssentences;
+    uint16  gnsserrors;
+    uint8   gnssfixType;
+    uint8   gnssnumSats;
+
 } Xcp_Data;
 
 void measurementsInit(void);    /* DTS + DTSC + EVR monitor init (CPU0)  */

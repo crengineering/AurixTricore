@@ -458,75 +458,60 @@ ASAP2_VERSION 1 61
       ECU_ADDRESS 0x700300CC
     /end MEASUREMENT
 
-    /begin MEASUREMENT gnssReserved_0 "gnssReserved (no description in a2l_meta.json)"
-      UBYTE NO_COMPU_METHOD 0 0 0 255
-      ECU_ADDRESS 0x700300CD
-    /end MEASUREMENT
-
-    /begin MEASUREMENT gnssReserved_1 "gnssReserved (no description in a2l_meta.json)"
-      UBYTE NO_COMPU_METHOD 0 0 0 255
+    /begin MEASUREMENT gnssyear "gnssyear (no description in a2l_meta.json)"
+      UWORD NO_COMPU_METHOD 0 0 0 65535
       ECU_ADDRESS 0x700300CE
     /end MEASUREMENT
 
-    /begin MEASUREMENT gnssReserved_2 "gnssReserved (no description in a2l_meta.json)"
+    /begin MEASUREMENT gnssmonth "gnssmonth (no description in a2l_meta.json)"
       UBYTE NO_COMPU_METHOD 0 0 0 255
-      ECU_ADDRESS 0x700300CF
+      ECU_ADDRESS 0x700300D0
+    /end MEASUREMENT
+
+    /begin MEASUREMENT gnssday "gnssday (no description in a2l_meta.json)"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x700300D1
+    /end MEASUREMENT
+
+    /begin MEASUREMENT gnsshour "gnsshour (no description in a2l_meta.json)"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x700300D2
+    /end MEASUREMENT
+
+    /begin MEASUREMENT gnssmin "gnssmin (no description in a2l_meta.json)"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x700300D3
+    /end MEASUREMENT
+
+    /begin MEASUREMENT gnsssec "gnsssec (no description in a2l_meta.json)"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x700300D4
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssRxBytes "NEO-M9N bytes received on ASCLIN4 since boot - the primary link-health signal"
       ULONG NO_COMPU_METHOD 0 0 0 4294967295
-      ECU_ADDRESS 0x700300D0
+      ECU_ADDRESS 0x700300D8
       PHYS_UNIT "bytes"
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssSentences "complete NMEA sentences assembled - ~6/s at the 1 Hz default nav rate"
       ULONG NO_COMPU_METHOD 0 0 0 4294967295
-      ECU_ADDRESS 0x700300D4
+      ECU_ADDRESS 0x700300DC
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssErrors "ASCLIN framing errors + RX FIFO overflows - must stay 0 on a healthy link"
       UWORD NO_COMPU_METHOD 0 0 0 65535
-      ECU_ADDRESS 0x700300D8
+      ECU_ADDRESS 0x700300E0
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssFixType "fix quality - PHASE B, currently always 0 (no NMEA parser yet)"
       UBYTE NO_COMPU_METHOD 0 0 0 5
-      ECU_ADDRESS 0x700300DA
+      ECU_ADDRESS 0x700300E2
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssNumSats "satellites used in the solution - PHASE B, currently always 0"
       UBYTE NO_COMPU_METHOD 0 0 0 32
-      ECU_ADDRESS 0x700300DB
-    /end MEASUREMENT
-
-    /begin MEASUREMENT gnssyear "gnssyear (no description in a2l_meta.json)"
-      UWORD NO_COMPU_METHOD 0 0 0 65535
-      ECU_ADDRESS 0x700300DC
-    /end MEASUREMENT
-
-    /begin MEASUREMENT gnssmonth "gnssmonth (no description in a2l_meta.json)"
-      UBYTE NO_COMPU_METHOD 0 0 0 255
-      ECU_ADDRESS 0x700300DE
-    /end MEASUREMENT
-
-    /begin MEASUREMENT gnssday "gnssday (no description in a2l_meta.json)"
-      UBYTE NO_COMPU_METHOD 0 0 0 255
-      ECU_ADDRESS 0x700300DF
-    /end MEASUREMENT
-
-    /begin MEASUREMENT gnsshour "gnsshour (no description in a2l_meta.json)"
-      UBYTE NO_COMPU_METHOD 0 0 0 255
-      ECU_ADDRESS 0x700300E0
-    /end MEASUREMENT
-
-    /begin MEASUREMENT gnssmin "gnssmin (no description in a2l_meta.json)"
-      UBYTE NO_COMPU_METHOD 0 0 0 255
-      ECU_ADDRESS 0x700300E1
-    /end MEASUREMENT
-
-    /begin MEASUREMENT gnsssec "gnsssec (no description in a2l_meta.json)"
-      UBYTE NO_COMPU_METHOD 0 0 0 255
-      ECU_ADDRESS 0x700300E2
+      ECU_ADDRESS 0x700300E3
     /end MEASUREMENT
 
     /* individual diagnostics bits (BIT_MASK views on DiagStatus) */
