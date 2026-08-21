@@ -22,6 +22,7 @@
 #define GNSS_UBX_SYNC2         0x62u
 #define GNSS_UBX_MAX_PAYLOAD   32u
 #define CFG_MSGOUT_NMEA_GSV_UART1  0x209100C5u
+#define CFG_MSGOUT_UBX_NAV_PVT_UART1  0x20910007u
 #define UBX_CFG_LAYER_RAM          0x01u
 #define UBX_CLASS_CFG              0x06u
 #define UBX_ID_CFG_VALSET          0x8Au
@@ -56,6 +57,7 @@ static uint8 g_detect_ack = 0u;
 
 static gnss_parse_state_t parse_state = GNSS_IDLE;
 static uint8 last_byte;
+static uint8 g_ubx_ack = 0u;
 
 
 /* local functions */
@@ -67,7 +69,8 @@ static boolean gnss_checksum       (const char *buffer, uint8 buffer_len);
 static boolean GnssM9N_timeout     (void);
 static boolean gnss_txByte         (uint8 value);
 static boolean gnss_sendUbx        (uint8 msgClass, uint8 msgId, const uint8 *payload, uint8 payload_len);
-static boolean gnss_ubx_decode     (const uint8 *buffer, uint8 buffer_len, uint8 payload);
+static boolean gnss_ubx_decode     (const uint8 *buffer, uint8 buffer_len, uint8 payload_len);
+static void    gnss_checksumUbx    (const uint8 *message, uint8 payload_len, uint8 *ck_a, uint8 *ck_b);
 
 IFX_INTERRUPT(asclin4IsrReceive, 0, ISR_PRIORITY_ASCLIN4_RX);
 
@@ -142,8 +145,14 @@ static boolean gnss_txByte(uint8 value)
     return discard != TRUE;
 }
 
-static boolean gnss_checksumUbx(uint8 *message, uint8 payload_len){
+static void gnss_checksumUbx(const uint8 *message, uint8 payload_len, uint8 *ck_a, uint8 *ck_b){
 
+    /* build checksum */
+    for(uint8 i= 0u; i < payload_len; i++)
+    {
+        *ck_a += message[i];
+        *ck_b += *ck_a;
+    }
 }
 
 static boolean gnss_sendUbx (uint8 msgClass, uint8 msgId, const uint8 *payload, uint8 payload_len)
@@ -173,11 +182,7 @@ static boolean gnss_sendUbx (uint8 msgClass, uint8 msgId, const uint8 *payload, 
     }
 
     /* build checksum */
-    for(uint8 i= 2u; i < 6u + payload_len; i++)
-    {
-        ck_a += ubx_message[i];
-        ck_b += ck_a;
-    }
+    (void)gnss_checksumUbx(&ubx_message[2], 4u+payload_len, &ck_a, &ck_b);
 
     ubx_message[6u+payload_len] = ck_a;
     ubx_message[6u+payload_len+1u] = ck_b;
@@ -194,9 +199,24 @@ static boolean gnss_sendUbx (uint8 msgClass, uint8 msgId, const uint8 *payload, 
     return send_success;
 }
 
-static boolean gnss_ubx_decode (const uint8 *buffer, uint8 buffer_len, uint8 payload){
+static boolean gnss_ubx_decode (const uint8 *buffer, uint8 buffer_len, uint8 payload_len){
+    uint8 ck_a = 0u;
+    uint8 ck_b = 0u;
+    gnss_checksumUbx(buffer, 4u+payload_len, &ck_a, &ck_b);
 
+    if ((buffer[buffer_len-1] != ck_b) ||
+        (buffer[buffer_len-2] != ck_a) )
+    {
+        return FALSE;
+    }
 
+    if ((buffer[0] == 0x05u) &&
+        (buffer[1] == 0x01u) )
+    {
+        g_ubx_ack++;
+    }
+
+    return TRUE;
 }
 
 
@@ -297,6 +317,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
         (gsv_deactivated == FALSE))
     {
         (void)gnss_cfgValsetU1(0u, CFG_MSGOUT_NMEA_GSV_UART1);
+        (void)gnss_cfgValsetU1(1u, CFG_MSGOUT_UBX_NAV_PVT_UART1);
         gsv_deactivated = TRUE;
     }
 
@@ -338,7 +359,10 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
 
                     if (g_len >= (g_ubx_payload_len + 6u))
                     {
-                        //decode
+                        if (gnss_ubx_decode(g_buffer, g_len, g_ubx_payload_len) != TRUE)
+                        {
+                            g_errors++;
+                        }
                         parse_state = GNSS_IDLE;
                     }
                 }
@@ -352,7 +376,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
                     if (g_len > 0u)
                     {
                         g_buffer[g_len] = '\0';
-                        GnssM9N_decode(g_buffer, g_len, &g_nav);
+                        GnssM9N_decode((const char *)g_buffer, g_len, &g_nav);
                         g_len = 0u;
                         g_sentences++;
                         parse_state = GNSS_IDLE;
