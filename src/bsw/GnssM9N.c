@@ -21,12 +21,12 @@
 #define GNSS_UBX_SYNC1         0xB5u
 #define GNSS_UBX_SYNC2         0x62u
 #define GNSS_UBX_MAX_PAYLOAD   32u
-#define CFG_MSGOUT_NMEA_GSV_UART1  0x209100C5u
+#define CFG_UART1OUTPROT_NMEA         0x10740002u
 #define CFG_MSGOUT_UBX_NAV_PVT_UART1  0x20910007u
 #define UBX_CFG_LAYER_RAM          0x01u
 #define UBX_CLASS_CFG              0x06u
 #define UBX_ID_CFG_VALSET          0x8Au
-#define UBX_PAYLOAD_LEN    9u
+#define UBX_PAYLOAD_LEN            9u
 
 #define UBX_NAV_PVT_YEAR           4u
 #define UBX_NAV_PVT_MONTH          6u
@@ -87,7 +87,7 @@ static volatile uint16         g_ring_tail = 0u;
 static uint16                  g_ubx_payload_len = 0u;
 
 /* ubx variables */
-static boolean gsv_deactivated = FALSE;
+static boolean gsv_cfg_sent = FALSE;
 static uint8 g_detect_ack = 0u;
 
 static gnss_parse_state_t parse_state = GNSS_IDLE;
@@ -399,7 +399,7 @@ boolean GnssM9N_init(void)
       g_poll_counter = GNSS_NOT_PRESENT_TICKS;
 
       /* reset TX to GNSS */
-      gsv_deactivated = FALSE;
+      gsv_cfg_sent = FALSE;
     }
 
     return (IfxAsclin_getClockSource(&MODULE_ASCLIN4) == IfxAsclin_ClockSource_ascFastClock);
@@ -430,12 +430,12 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
     }
 
     /* deactive unused sentences gsv_deactivated gsv_deactivate_increment */
-    if ((status == TRUE) &&
-        (gsv_deactivated == FALSE))
+    if ( (status == TRUE)           &&
+         (gsv_cfg_sent == FALSE) )
     {
-        (void)gnss_cfgValsetU1(0u, CFG_MSGOUT_NMEA_GSV_UART1);
+        (void)gnss_cfgValsetU1(1u, CFG_UART1OUTPROT_NMEA);
         (void)gnss_cfgValsetU1(1u, CFG_MSGOUT_UBX_NAV_PVT_UART1);
-        gsv_deactivated = TRUE;
+        gsv_cfg_sent = TRUE;
     }
 
     /* read from ring buffer */
@@ -450,8 +450,8 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
         {
             case GNSS_IDLE:
                 g_len = 0;
-                if ((last_byte   == 0xB5u) &&
-                         ((uint8)byte == 0x62u) )
+                if ( (last_byte   == 0xB5u) &&
+                     ((uint8)byte == 0x62u) )
                 {
                     parse_state = GNSS_UBX;
                 }
