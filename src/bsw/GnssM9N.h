@@ -73,22 +73,11 @@ typedef struct
 
 typedef enum
 {
-    NONE,
-    GNGGA,
-    GNGSA,
-    GNRMC
-}gnss_type_t;
-
-typedef enum
-{
     GNSS_IDLE,
     GNSS_UBX,
     GNSS_NMEA
 }gnss_parse_state_t;
 
-#define GNGGA_FIX_QUALITY     6u
-#define GNGGA_SATELLITES_USED 7u
-#define GNSS_MAX_SATELLITES  32u
 
 /** Initialise ASCLIN4 at 38400 on P22.5 (TX) / P22.6 (RX). TX and RX based on TC399 view */
 boolean GnssM9N_init(void);

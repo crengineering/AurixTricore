@@ -850,29 +850,31 @@ void test_init_configures_the_rx_interrupt(void)
                              FakeAsclin_Asc_lastConfig()->interrupt.rxPriority);
 }
 
-/* FINDING, pinned deliberately.
- *
- * GnssM9N_init guards its software reset with "initModule() == noError".
- * iLLD sets configurationError whenever txBuffer or rxBuffer is NULL_PTR --
- * and this driver passes NULL_PTR for both on purpose, because it uses the
- * hardware FIFO plus its own ring buffer. So the condition is never true:
- * the counters and ring indices are never cleared, on the host or on the
- * board. It only goes unnoticed because the statics start at zero.
- *
- * When the guard is fixed, this test fails and should be inverted. */
-void test_init_does_not_actually_reset_driver_state(void)
+/* The reset used to be dead code: it sat behind "initModule() == noError",
+ * and iLLD returns configurationError whenever tx/rxBuffer is NULL_PTR --
+ * which this driver passes on purpose. Fixed 2026-08-22; this test is the
+ * inverted version of the one that pinned the bug. */
+void test_init_resets_driver_state(void)
 {
     FakeAsclin_reset();
 
-    g_bytes     = 4242u;
-    g_sentences = 99u;
-    g_ring_head = 17u;
+    g_bytes           = 4242u;
+    g_sentences       = 99u;
+    g_ring_head       = 17u;
+    g_ubx_ack         = 5u;
+    parse_state       = GNSS_UBX;
+    g_ubx_payload_len = 77u;
+    g_nav.numSats     = 9u;
 
     (void)GnssM9N_init();
 
-    TEST_ASSERT_EQUAL_UINT32(4242u, g_bytes);
-    TEST_ASSERT_EQUAL_UINT32(99u,   g_sentences);
-    TEST_ASSERT_EQUAL_UINT16(17u,   g_ring_head);
+    TEST_ASSERT_EQUAL_UINT32(0u, g_bytes);
+    TEST_ASSERT_EQUAL_UINT32(0u, g_sentences);
+    TEST_ASSERT_EQUAL_UINT16(0u, g_ring_head);
+    TEST_ASSERT_EQUAL_UINT8 (0u, g_ubx_ack);
+    TEST_ASSERT_EQUAL(GNSS_IDLE, parse_state);
+    TEST_ASSERT_EQUAL_UINT16(0u, g_ubx_payload_len);
+    TEST_ASSERT_EQUAL_UINT8 (0u, g_nav.numSats);
 }
 
 int main(void)
@@ -935,7 +937,7 @@ int main(void)
     RUN_TEST(test_init_reports_failure_when_the_module_is_unclocked);
     RUN_TEST(test_init_requests_the_gnss_baudrate);
     RUN_TEST(test_init_configures_the_rx_interrupt);
-    RUN_TEST(test_init_does_not_actually_reset_driver_state);
+    RUN_TEST(test_init_resets_driver_state);
 
     return UNITY_END();
 }

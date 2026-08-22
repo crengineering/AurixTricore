@@ -15,7 +15,11 @@
 #define GNSS_TIMEOUT_MS        2000u    /* > the ~850 ms gap between 1 Hz bursts */
 #define GNSS_NOT_PRESENT_TICKS (GNSS_TIMEOUT_MS / GNSS_POLL_PERIOD_MS)
 #define RING_BUFFER_SIZE       512u
-#define GNSS_TX_DEADLINE_TICKS 1000000
+
+/* Largest UBX payload the shared frame buffer can hold: it also carries the
+ * 4-byte header and the 2 checksum bytes. */
+#define GNSS_UBX_MAX_RX_PAYLOAD (GNSSM9N_BUFFER_SIZE - 6u)
+#define GNSS_TX_DEADLINE_TICKS 1000000u
 
 /* UBX */
 #define GNSS_UBX_SYNC1         0xB5u
@@ -107,7 +111,6 @@
 
 
 /* local used variables */
-static IfxAsclin_Asc           g_asclin;
 
 static uint8                   g_buffer[GNSSM9N_BUFFER_SIZE];
 static uint8                   g_len         = 0u;
@@ -118,10 +121,14 @@ static boolean                 g_timeout     = TRUE;
 static uint16                  g_poll_counter = GNSS_NOT_PRESENT_TICKS;
 static uint8                   g_ring_buf_overflow_counter = 0u;
 static GnssM9N_Nav             g_nav;
+
+/* All-zero template so GnssM9N_init can clear g_nav without memset (which
+ * would pull in string.h) and without listing every field. */
+static const GnssM9N_Nav       s_navZero = {0};
 static uint8                   g_tx_discards = 0u;
 
 /* isr variables */
-static volatile char           g_ring_buffer[RING_BUFFER_SIZE];
+static volatile uint8          g_ring_buffer[RING_BUFFER_SIZE];
 static volatile uint16         g_ring_head = 0u;
 static volatile uint16         g_ring_tail = 0u;
 
@@ -154,6 +161,9 @@ static boolean gnss_cfgValsetU1    (uint8 value, uint32 key);
 static boolean gnss_cfgValsetU2    (uint16 value, uint32 key);
 
 
+/* cppcheck-suppress misra-c2012-17.3 ; deviation: IFX_INTERRUPT is a vendor
+ * macro that emits the vector-table entry; cppcheck does not expand it and
+ * reports the handler as an implicit declaration. */
 IFX_INTERRUPT(asclin4IsrReceive, 0, ISR_PRIORITY_ASCLIN4_RX);
 
 /* cppcheck-suppress misra-c2012-8.7 ; deviation: referenced by the interrupt
@@ -163,7 +173,8 @@ void asclin4IsrReceive(void)
     uint8 fill_level = IfxAsclin_getRxFifoFillLevel(&MODULE_ASCLIN4);
     for (uint8 i=0u; i<fill_level; i++)
     {
-        char fifo_byte = (char)(IfxAsclin_readRxData(&MODULE_ASCLIN4) & 0xFFu);
+        uint32 rx_word   = IfxAsclin_readRxData(&MODULE_ASCLIN4);
+        uint8  fifo_byte = (uint8)(rx_word & 0xFFu);
         g_bytes++;
 
         uint16 ring_next = g_ring_head +1u;
@@ -265,12 +276,15 @@ static boolean gnss_sendUbx (uint8 msgClass, uint8 msgId, const uint8 *payload, 
     uint8   ck_b         = 0u;
     boolean send_success = TRUE;
 
+    /* Single point of exit (MISRA 15.5): the body is skipped rather than
+     * returned from early. */
     if ( (payload_len > GNSS_UBX_MAX_PAYLOAD) ||
          (payload_len == 0u)            )
     {
-        return FALSE;
+        send_success = FALSE;
     }
-
+    else
+    {
     ubx_message[0u] = GNSS_UBX_SYNC1;
     ubx_message[1u] = GNSS_UBX_SYNC2;
     ubx_message[2u] = msgClass;
@@ -303,6 +317,7 @@ static boolean gnss_sendUbx (uint8 msgClass, uint8 msgId, const uint8 *payload, 
          (msgClass == UBX_CLASS_CFG) )
     {
         g_cfg_expected_acks++;
+    }
     }
 
     return send_success;
@@ -432,15 +447,24 @@ static void ubx_decode_navPvt(const uint8 *payload, GnssM9N_Nav *Nav)
 }
 
 static boolean gnss_ubx_decode (const uint8 *buffer, uint8 buffer_len, uint8 payload_len, GnssM9N_Nav *Nav){
-    uint8 ck_a = 0u;
-    uint8 ck_b = 0u;
+    uint8   ck_a  = 0u;
+    uint8   ck_b  = 0u;
+    boolean valid = TRUE;
+
+    /* Named indices: "buffer_len - 1" promotes to int and would be compared
+     * against a uint8 array element (MISRA 10.4). */
+    uint8 idx_ck_b = (uint8)(buffer_len - 1u);
+    uint8 idx_ck_a = (uint8)(buffer_len - 2u);
+
     gnss_checksumUbx(buffer, 4u+payload_len, &ck_a, &ck_b);
 
-    if ((buffer[buffer_len-1] != ck_b) ||
-        (buffer[buffer_len-2] != ck_a) )
+    if ((buffer[idx_ck_b] != ck_b) ||
+        (buffer[idx_ck_a] != ck_a) )
     {
-        return FALSE;
+        valid = FALSE;
     }
+    else
+    {
 
     /* Dispatch on class/id. Anything else is ignored on purpose -- the frame
      * was well formed, we simply do not consume that message. */
@@ -473,8 +497,9 @@ static boolean gnss_ubx_decode (const uint8 *buffer, uint8 buffer_len, uint8 pay
     {
         /* not consumed */
     }
+    }
 
-    return TRUE;
+    return valid;
 }
 
 
@@ -519,9 +544,21 @@ boolean GnssM9N_init(void)
     config.rxBuffer     = NULL_PTR;
     config.rxBufferSize = 0;
 
-    status = IfxAsclin_Asc_initModule(&g_asclin, &config);
+    /* Block scope: used only here, and an internal-linkage name must be
+     * unique across every translation unit -- Uart.c owns a g_asclin too
+     * (MISRA 5.9 / 8.9). */
+    static IfxAsclin_Asc s_gnssAsclin;
 
-    if (status == IfxAsclin_Status_noError)
+    status = IfxAsclin_Asc_initModule(&s_gnssAsclin, &config);
+
+    /* The reset used to sit behind "status == IfxAsclin_Status_noError",
+     * which is NEVER true here: iLLD returns configurationError whenever
+     * txBuffer or rxBuffer is NULL_PTR, and this driver passes NULL_PTR for
+     * both on purpose (it owns the HW FIFO and its own ring). The whole block
+     * was therefore dead code on the host AND on silicon -- it only went
+     * unnoticed because the statics start at zero after a cold boot. It now
+     * runs unconditionally, so a warm re-init genuinely clears the state. */
+    (void)status;
     {
       /* hardware reset on silicon */
       IfxAsclin_flushRxFifo(&MODULE_ASCLIN4);
@@ -540,23 +577,42 @@ boolean GnssM9N_init(void)
       g_poll_counter = GNSS_NOT_PRESENT_TICKS;
 
       /* reset TX to GNSS */
-      gsv_cfg_sent = FALSE;
+      gsv_cfg_sent        = FALSE;
+      g_cfg_expected_acks = 0u;
+      g_tx_discards       = 0u;
+
+      /* UBX receive state */
+      parse_state       = GNSS_IDLE;
+      last_byte         = 0u;
+      g_ubx_payload_len = 0u;
+      g_ubx_ack         = 0u;
+      g_ubx_nak         = 0u;
+      g_ubx_navpvt      = 0u;
+      g_detect_ack      = 0u;
+
+      /* navigation solution */
+      g_nav = s_navZero;
+
+      g_buffer[0] = 0u;
     }
 
+    /* cppcheck-suppress misra-c2012-10.4 ; deviation: both operands are the
+     * vendor enum IfxAsclin_ClockSource; cppcheck cannot resolve the return
+     * type of the iLLD accessor and reports an essential-type mismatch. */
     return (IfxAsclin_getClockSource(&MODULE_ASCLIN4) == IfxAsclin_ClockSource_ascFastClock);
 }
 
 static boolean GnssM9N_timeout(void)
 {
-    if (g_poll_counter >= GNSS_NOT_PRESENT_TICKS)
+    boolean expired = TRUE;
+
+    if (g_poll_counter < GNSS_NOT_PRESENT_TICKS)
     {
-        return TRUE;
+        g_poll_counter++;
+        expired = FALSE;
     }
-    else
-    {
-        g_poll_counter ++;
-        return FALSE;
-    }
+
+    return expired;
 }
 
 /*
@@ -594,7 +650,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
     uint16 head = g_ring_head;
     while (g_ring_tail != head)
     {
-        char byte = g_ring_buffer[g_ring_tail];
+        uint8 byte = g_ring_buffer[g_ring_tail];
 
 
        /*  decode statemachine for NMEA & UBX */
@@ -602,8 +658,8 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
         {
             case GNSS_IDLE:
                 g_len = 0;
-                if ( (last_byte   == 0xB5u) &&
-                     ((uint8)byte == 0x62u) )
+                if ( (last_byte == 0xB5u) &&
+                     (byte      == 0x62u) )
                 {
                     parse_state = GNSS_UBX;
                 }
@@ -615,8 +671,11 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
                 g_len++;
 
                 if (g_len > 3u){
-                    g_ubx_payload_len = ((uint8)g_buffer[3]<<8) | ((uint8)(g_buffer[2]));
-                    if (g_ubx_payload_len > 94){
+                    /* ubx_rd_u16 widens each byte before shifting; the
+                     * hand-rolled version shifted a uint8 by 8, past its
+                     * own width (MISRA 12.2). */
+                    g_ubx_payload_len = ubx_rd_u16(&g_buffer[2]);
+                    if (g_ubx_payload_len > GNSS_UBX_MAX_RX_PAYLOAD){
                         parse_state = GNSS_IDLE;
                     }
 
