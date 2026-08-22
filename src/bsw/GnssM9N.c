@@ -117,14 +117,10 @@ static uint8                   g_len         = 0u;
 static uint16                  g_errors      = 0u;
 static volatile uint32         g_bytes       = 0u;
 static uint32                  g_sentences   = 0u;
-static boolean                 g_timeout     = TRUE;
 static uint16                  g_poll_counter = GNSS_NOT_PRESENT_TICKS;
 static uint8                   g_ring_buf_overflow_counter = 0u;
 static GnssM9N_Nav             g_nav;
 
-/* All-zero template so GnssM9N_init can clear g_nav without memset (which
- * would pull in string.h) and without listing every field. */
-static const GnssM9N_Nav       s_navZero = {0};
 static uint8                   g_tx_discards = 0u;
 
 /* isr variables */
@@ -573,7 +569,6 @@ boolean GnssM9N_init(void)
       g_errors       = 0u;
       g_bytes        = 0u;
       g_sentences    = 0u;
-      g_timeout      = TRUE;
       g_poll_counter = GNSS_NOT_PRESENT_TICKS;
 
       /* reset TX to GNSS */
@@ -591,7 +586,10 @@ boolean GnssM9N_init(void)
       g_detect_ack      = 0u;
 
       /* navigation solution */
-      g_nav = s_navZero;
+      /* All-zero template, block scope: clears g_nav without memset (which
+       * would pull in string.h) and without listing every field. */
+      static const GnssM9N_Nav navZero = {0};
+      g_nav = navZero;
 
       g_buffer[0] = 0u;
     }

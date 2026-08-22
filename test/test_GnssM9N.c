@@ -89,7 +89,6 @@ static void resetDriverState(void)
     g_errors                    = 0u;
     g_bytes                     = 0u;
     g_sentences                 = 0u;
-    g_timeout                   = TRUE;
     g_poll_counter              = GNSS_NOT_PRESENT_TICKS;
     g_ring_head                 = 0u;
     g_ring_tail                 = 0u;
