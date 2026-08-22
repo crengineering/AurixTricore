@@ -249,6 +249,7 @@ void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)
         g_xcpData.gnssspeedMps   = sample_info.speedMps;
         g_xcpData.gnssheadingDeg = sample_info.headingDeg;
         g_xcpData.gnsshAccM      = sample_info.hAccM;
+        g_xcpData.gnssvAccM      = sample_info.vAccM;
         g_xcpData.gnssyear      = sample_info.year;
         g_xcpData.gnssmonth     = sample_info.month;
         g_xcpData.gnssday       = sample_info.day;
@@ -279,6 +280,7 @@ void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)
         g_xcpData.gnssspeedMps   = 0.0f;
         g_xcpData.gnssheadingDeg = 0.0f;
         g_xcpData.gnsshAccM      = 0.0f;
+        g_xcpData.gnssvAccM      = 0.0f;
     }
 }
 

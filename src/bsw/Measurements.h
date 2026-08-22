@@ -186,6 +186,7 @@ typedef struct
     float32 gnssspeedMps;
     float32 gnssheadingDeg;
     float32 gnsshAccM;
+    float32 gnssvAccM;
 
 } Xcp_Data;
 

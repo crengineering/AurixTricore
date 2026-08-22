@@ -25,12 +25,28 @@
 #define CFG_MSGOUT_UBX_NAV_PVT_UART1  0x20910007u
 #define CFG_RATE_MEAS                 0x30210001u
 #define CFG_RATE_NAV                  0x30210002u
+#define CFG_NAVSPG_DYNMODEL           0x20110021u
 #define UBX_CFG_LAYER_RAM          0x01u
 #define UBX_CLASS_CFG              0x06u
 #define UBX_ID_CFG_VALSET          0x8Au
 #define UBX_VALSET_U1_LEN             9u
 #define UBX_VALSET_U2_LEN            10u
 #define UBX_MEAS_RATE               100u /* 100ms --> 10Hz */
+
+/* Dynamic platform model (CFG-NAVSPG-DYNMODEL, table 21 of the interface
+ * description). The receiver runs an internal Kalman filter; this tells it
+ * what motion to expect, which sets how much it trusts a new measurement
+ * against its own prediction.
+ *
+ * The default is PORT (0) -- gentle handheld motion. On a multirotor that
+ * model rejects real acceleration as implausible, so the reported position
+ * lags the true one, and ground-oriented models additionally assume altitude
+ * changes slowly.
+ *
+ * AIR1 (<1 g) rather than AIR2: the first flights are vertical only, so the
+ * horizontal dynamics stay low and the extra headroom of AIR2 would only add
+ * noise. Revisit when the quadcopter starts manoeuvring. */
+#define UBX_DYNMODEL_AIR1             6u
 
 #define UBX_NAV_PVT_YEAR           4u
 #define UBX_NAV_PVT_MONTH          6u
@@ -570,6 +586,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
         (void)gnss_cfgValsetU1(1u           , CFG_MSGOUT_UBX_NAV_PVT_UART1); /* 1/epoch */
         (void)gnss_cfgValsetU2(UBX_MEAS_RATE, CFG_RATE_MEAS);
         (void)gnss_cfgValsetU2(1u           , CFG_RATE_NAV);
+        (void)gnss_cfgValsetU1(UBX_DYNMODEL_AIR1, CFG_NAVSPG_DYNMODEL);
         gsv_cfg_sent = TRUE;
     }
 
@@ -650,6 +667,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
     sample->speedMps   = (float32)g_nav.gSpeed  * 1.0e-3f;
     sample->headingDeg = (float32)g_nav.headMot * 1.0e-5f;
     sample->hAccM      = (float32)g_nav.hAcc    * 1.0e-3f;
+    sample->vAccM      = (float32)g_nav.vAcc    * 1.0e-3f;
     sample->year      = g_nav.year;
     sample->month     = g_nav.month;
     sample->day       = g_nav.day;

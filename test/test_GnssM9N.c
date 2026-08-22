@@ -56,6 +56,23 @@ static const uint8 NAVPVT_ON_FRAME[17] = {
     0x53u, 0x48u
 };
 
+/* Two-byte values: note the length field reads 0x0A, not 0x09. */
+static const uint8 RATE_MEAS_FRAME[18] = {
+    0xB5u, 0x62u, 0x06u, 0x8Au, 0x0Au, 0x00u,
+    0x00u, 0x01u, 0x00u, 0x00u, 0x01u, 0x00u, 0x21u, 0x30u, 0x64u, 0x00u,
+    0x51u, 0xB9u
+};
+static const uint8 RATE_NAV_FRAME[18] = {
+    0xB5u, 0x62u, 0x06u, 0x8Au, 0x0Au, 0x00u,
+    0x00u, 0x01u, 0x00u, 0x00u, 0x02u, 0x00u, 0x21u, 0x30u, 0x01u, 0x00u,
+    0xEFu, 0xF9u
+};
+static const uint8 DYNMODEL_FRAME[17] = {
+    0xB5u, 0x62u, 0x06u, 0x8Au, 0x09u, 0x00u,
+    0x00u, 0x01u, 0x00u, 0x00u, 0x21u, 0x00u, 0x11u, 0x20u, 0x06u,
+    0xF2u, 0x4Fu
+};
+
 /* --- helpers ----------------------------------------------------------- */
 
 /* Put the driver back into its power-on state.
@@ -236,6 +253,64 @@ void test_cfgValset_writes_the_key_little_endian(void)
     TEST_ASSERT_EQUAL_UINT8(0x91u, tx[12]);
     TEST_ASSERT_EQUAL_UINT8(0x20u, tx[13]);
     TEST_ASSERT_EQUAL_UINT8(0x01u, tx[14]);     /* value = 1 epoch          */
+}
+
+void test_cfgValsetU2_builds_the_rate_meas_frame(void)
+{
+    TEST_ASSERT_EQUAL(TRUE, gnss_cfgValsetU2(UBX_MEAS_RATE, CFG_RATE_MEAS));
+
+    TEST_ASSERT_EQUAL_UINT32(18u, FakeAsclin_txCount());
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(RATE_MEAS_FRAME, FakeAsclin_txData(), 18);
+}
+
+void test_cfgValsetU2_builds_the_rate_nav_frame(void)
+{
+    TEST_ASSERT_EQUAL(TRUE, gnss_cfgValsetU2(1u, CFG_RATE_NAV));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(RATE_NAV_FRAME, FakeAsclin_txData(), 18);
+}
+
+/* A U2 value is little-endian like the key. 100 = 0x0064 -> 64 00. */
+void test_cfgValsetU2_writes_the_value_little_endian(void)
+{
+    const uint8 *tx;
+
+    TEST_ASSERT_EQUAL(TRUE, gnss_cfgValsetU2(1000u, CFG_RATE_MEAS));
+    tx = FakeAsclin_txData();
+
+    TEST_ASSERT_EQUAL_UINT8(0x0Au, tx[4]);      /* payload length = 10   */
+    TEST_ASSERT_EQUAL_UINT8(0xE8u, tx[14]);     /* 1000 = 0x03E8         */
+    TEST_ASSERT_EQUAL_UINT8(0x03u, tx[15]);
+}
+
+/* AIR1, not the PORT default -- a ground model constrains altitude and
+ * rejects real acceleration as implausible. */
+void test_cfgValset_builds_the_dynmodel_frame(void)
+{
+    TEST_ASSERT_EQUAL(TRUE,
+        gnss_cfgValsetU1(UBX_DYNMODEL_AIR1, CFG_NAVSPG_DYNMODEL));
+
+    TEST_ASSERT_EQUAL_UINT32(17u, FakeAsclin_txCount());
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(DYNMODEL_FRAME, FakeAsclin_txData(), 17);
+    TEST_ASSERT_EQUAL_UINT8(6u, FakeAsclin_txData()[14]);   /* AIR1, not 0 */
+}
+
+/* Every CFG-VALSET must carry msgId 0x8A. A wrong id here silently becomes a
+ * different CFG message -- 0x09 is UBX-CFG-CFG, clear/save/load -- and the
+ * receiver NAKs it without any other visible effect. */
+void test_every_valset_uses_the_right_class_and_id(void)
+{
+    const uint8 *tx;
+
+    gnss_cfgValsetU1(0u, CFG_UART1OUTPROT_NMEA);
+    tx = FakeAsclin_txData();
+    TEST_ASSERT_EQUAL_UINT8(0x06u, tx[2]);
+    TEST_ASSERT_EQUAL_UINT8(0x8Au, tx[3]);
+
+    FakeAsclin_reset();
+    gnss_cfgValsetU2(UBX_MEAS_RATE, CFG_RATE_MEAS);
+    tx = FakeAsclin_txData();
+    TEST_ASSERT_EQUAL_UINT8(0x06u, tx[2]);
+    TEST_ASSERT_EQUAL_UINT8(0x8Au, tx[3]);
 }
 
 void test_sendUbx_rejects_an_oversized_payload(void)
@@ -486,25 +561,34 @@ void test_navok_is_independent_of_time_validity(void)
 void test_cfgok_is_false_until_every_command_is_acked(void)
 {
     GnssM9N_Sample sample = {0};
+    uint8  expected;
     uint16 i;
 
     /* nothing sent yet */
     (void)GnssM9N_read(&sample);
     TEST_ASSERT_EQUAL_UINT8(0u, sample.cfgOk);
 
-    /* data arrives -> presence -> the two CFG-VALSETs go out */
+    /* data arrives -> presence -> the whole config burst goes out */
     pushUbxFrame(ACK_BODY, 8u);
     pumpIsr();
     for (i = 0u; i < 3u; i++) { (void)GnssM9N_read(&sample); }
     TEST_ASSERT_TRUE(gsv_cfg_sent != FALSE);
-    TEST_ASSERT_EQUAL_UINT8(2u, g_cfg_expected_acks);
 
-    /* only one ACK came back -> still not OK */
-    TEST_ASSERT_EQUAL_UINT8(1u, g_ubx_ack);
-    (void)GnssM9N_read(&sample);
+    /* Counted, not compared against a literal: adding a key must not
+     * silently invalidate the check. */
+    expected = g_cfg_expected_acks;
+    TEST_ASSERT_TRUE(expected > 1u);
+
+    /* one ACK short -> still not OK */
+    while (g_ubx_ack < (expected - 1u))
+    {
+        pushUbxFrame(ACK_BODY, 8u);
+        pumpIsr();
+        (void)GnssM9N_read(&sample);
+    }
     TEST_ASSERT_EQUAL_UINT8(0u, sample.cfgOk);
 
-    /* the second ACK arrives */
+    /* the last one arrives */
     pushUbxFrame(ACK_BODY, 8u);
     pumpIsr();
     (void)GnssM9N_read(&sample);
@@ -804,6 +888,11 @@ int main(void)
     RUN_TEST(test_cfgValset_builds_the_nmea_off_frame);
     RUN_TEST(test_cfgValset_nmea_off_really_carries_zero);
     RUN_TEST(test_cfgValset_builds_the_navpvt_on_frame);
+    RUN_TEST(test_cfgValsetU2_builds_the_rate_meas_frame);
+    RUN_TEST(test_cfgValsetU2_builds_the_rate_nav_frame);
+    RUN_TEST(test_cfgValsetU2_writes_the_value_little_endian);
+    RUN_TEST(test_cfgValset_builds_the_dynmodel_frame);
+    RUN_TEST(test_every_valset_uses_the_right_class_and_id);
     RUN_TEST(test_cfgValset_writes_the_key_little_endian);
     RUN_TEST(test_sendUbx_rejects_an_oversized_payload);
     RUN_TEST(test_txByte_gives_up_when_the_fifo_never_drains);

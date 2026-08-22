@@ -471,6 +471,13 @@
       "desc": "THE flag to gate sensor fusion on: fix valid AND 3D AND horizontal accuracy within 10 m. Independent of GnssTimeOk",
       "lo": "0",
       "hi": "1"
+    },
+    "gnssvAccM": {
+      "name": "GnssVAccuracy",
+      "desc": "vertical accuracy estimate (NAV-PVT vAcc). Typically 1.5-2x worse than horizontal - all satellites are above the receiver, so the geometry for the vertical component is poor",
+      "unit": "m",
+      "lo": "0",
+      "hi": "10000"
     }
   },
   "Xcp_Cal": {

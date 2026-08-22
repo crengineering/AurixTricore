@@ -36,6 +36,9 @@ typedef struct
   float32 speedMps;     /* ground speed, 2-D                               */
   float32 headingDeg;   /* heading of motion, 2-D                          */
   float32 hAccM;        /* horizontal accuracy estimate                    */
+  float32 vAccM;        /* vertical accuracy -- typically 1.5..2x hAccM,    */
+                        /* every satellite is above you so the geometry for */
+                        /* the vertical component is inherently poor        */
 }GnssM9N_Sample;
 
 typedef struct
