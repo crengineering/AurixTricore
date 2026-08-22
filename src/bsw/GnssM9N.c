@@ -23,10 +23,14 @@
 #define GNSS_UBX_MAX_PAYLOAD   32u
 #define CFG_UART1OUTPROT_NMEA         0x10740002u
 #define CFG_MSGOUT_UBX_NAV_PVT_UART1  0x20910007u
+#define CFG_RATE_MEAS                 0x30210001u
+#define CFG_RATE_NAV                  0x30210002u
 #define UBX_CFG_LAYER_RAM          0x01u
 #define UBX_CLASS_CFG              0x06u
 #define UBX_ID_CFG_VALSET          0x8Au
-#define UBX_PAYLOAD_LEN            9u
+#define UBX_VALSET_U1_LEN             9u
+#define UBX_VALSET_U2_LEN            10u
+#define UBX_MEAS_RATE               100u /* 100ms --> 10Hz */
 
 #define UBX_NAV_PVT_YEAR           4u
 #define UBX_NAV_PVT_MONTH          6u
@@ -130,6 +134,9 @@ static boolean gnss_txByte         (uint8 value);
 static boolean gnss_sendUbx        (uint8 msgClass, uint8 msgId, const uint8 *payload, uint8 payload_len);
 static boolean gnss_ubx_decode     (const uint8 *buffer, uint8 buffer_len, uint8 payload_len, GnssM9N_Nav *Nav);
 static void    gnss_checksumUbx    (const uint8 *message, uint8 payload_len, uint8 *ck_a, uint8 *ck_b);
+static boolean gnss_cfgValsetU1    (uint8 value, uint32 key);
+static boolean gnss_cfgValsetU2    (uint16 value, uint32 key);
+
 
 IFX_INTERRUPT(asclin4IsrReceive, 0, ISR_PRIORITY_ASCLIN4_RX);
 
@@ -163,7 +170,7 @@ void asclin4IsrReceive(void)
 
 static boolean gnss_cfgValsetU1(uint8 value, uint32 key)
 {
-    uint8 payload[UBX_PAYLOAD_LEN];
+    uint8 payload[UBX_VALSET_U1_LEN];
     boolean status = FALSE;
 
     payload[0] = 0u;
@@ -176,7 +183,28 @@ static boolean gnss_cfgValsetU1(uint8 value, uint32 key)
     payload[7] = (uint8) ((key>>24) & 0xFFu);
     payload[8] = value;
 
-    status = gnss_sendUbx(UBX_CLASS_CFG, UBX_ID_CFG_VALSET, payload, UBX_PAYLOAD_LEN);
+    status = gnss_sendUbx(UBX_CLASS_CFG, UBX_ID_CFG_VALSET, payload, UBX_VALSET_U1_LEN);
+
+    return status;
+}
+
+static boolean gnss_cfgValsetU2(uint16 value, uint32 key)
+{
+    uint8 payload[UBX_VALSET_U2_LEN];
+    boolean status = FALSE;
+
+    payload[0] = 0u;
+    payload[1] = UBX_CFG_LAYER_RAM;
+    payload[2] = 0u;
+    payload[3] = 0u;
+    payload[4] = (uint8) ( key      & 0xFFu);
+    payload[5] = (uint8) ((key >>8) & 0xFFu);
+    payload[6] = (uint8) ((key>>16) & 0xFFu);
+    payload[7] = (uint8) ((key>>24) & 0xFFu);
+    payload[8] = (uint8) ( value    & 0xFFu);
+    payload[9] = (uint8) ((value>>8)& 0xFFu);
+
+    status = gnss_sendUbx(UBX_CLASS_CFG, UBX_ID_CFG_VALSET, payload, UBX_VALSET_U2_LEN);
 
     return status;
 }
@@ -253,6 +281,12 @@ static boolean gnss_sendUbx (uint8 msgClass, uint8 msgId, const uint8 *payload, 
         {
             send_success = FALSE;
         }
+    }
+
+    if ( (send_success == TRUE)      &&
+         (msgClass == UBX_CLASS_CFG) )
+    {
+        g_cfg_expected_acks++;
     }
 
     return send_success;
@@ -532,9 +566,10 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
     if ( (status == TRUE)           &&
          (gsv_cfg_sent == FALSE) )
     {
-        (void)gnss_cfgValsetU1(0u, CFG_UART1OUTPROT_NMEA);        /* 0 = off */
-        (void)gnss_cfgValsetU1(1u, CFG_MSGOUT_UBX_NAV_PVT_UART1); /* 1/epoch */
-        g_cfg_expected_acks = 2u;
+        (void)gnss_cfgValsetU1(0u           , CFG_UART1OUTPROT_NMEA);        /* 0 = off */
+        (void)gnss_cfgValsetU1(1u           , CFG_MSGOUT_UBX_NAV_PVT_UART1); /* 1/epoch */
+        (void)gnss_cfgValsetU2(UBX_MEAS_RATE, CFG_RATE_MEAS);
+        (void)gnss_cfgValsetU2(1u           , CFG_RATE_NAV);
         gsv_cfg_sent = TRUE;
     }
 
