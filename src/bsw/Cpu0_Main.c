@@ -378,9 +378,22 @@ static void Task_Measure100ms(void)
     /* GNSS: publish + report */
     GnssM9N_Sample gnss_sample = {0};
     boolean        gnssPresent;
-    boolean        gnssPlausible = TRUE;
+    boolean        gnssPlausible;
 
     gnssPresent = GnssM9N_read(&gnss_sample);
+
+    /* Plausible = the receiver accepted every configuration command we sent.
+     *
+     * Without this the config path is fire-and-forget: a rejected key changes
+     * nothing observable on the wire, so a silently unconfigured receiver
+     * would look perfectly healthy. Raising DIAG_GNSS_IMPLAUSIBLE puts it on
+     * the diagnostics LED and in the GUI instead.
+     *
+     * NOT gated on navOk -- "no satellites" is the normal indoor state, not a
+     * fault, and a diagnostics word that is permanently red is one nobody
+     * reads. PeriphDiag debounces this for PD_IMPLAUSIBLE_TICKS (1 s) and only
+     * evaluates it when the read succeeded, so the boot window is covered. */
+    gnssPlausible = (gnss_sample.cfgOk != 0u) ? TRUE : FALSE;
     measurementsSetGnss(gnssPresent, gnss_sample);
     PeriphDiag_report(PERIPH_DIAG_GNSS, gnssPresent, gnssPlausible, (float)gnss_sample.rxBytes);
 

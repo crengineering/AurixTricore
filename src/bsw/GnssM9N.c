@@ -34,6 +34,7 @@
 #define UBX_NAV_PVT_HOUR           8u
 #define UBX_NAV_PVT_MIN            9u
 #define UBX_NAV_PVT_SEC           10u
+#define UBX_NAV_PVT_TIME_VALIDITY 11u
 
 #define UBX_NAV_PVT_FIXTYPE       20u
 #define UBX_NAV_PVT_FLAGS         21u
@@ -63,6 +64,26 @@
 /* UBX-NAV-PVT flag bits (see docs/GNSS_UBX.md section 6) */
 #define UBX_PVT_FLAGS_GNSSFIXOK   0x01u
 #define UBX_PVT_FLAGS3_INVALIDLLH 0x01u
+
+/* UBX-NAV-PVT `valid` bitfield, payload offset 11. The interface description
+ * (section 3.3.4) is explicit: a value field is only meaningful when its
+ * validity flag is set. */
+#define UBX_PVT_VALID_DATE        0x01u
+#define UBX_PVT_VALID_TIME        0x02u
+#define UBX_PVT_VALID_FULLYRESOLV 0x04u
+
+/* fixType values worth acting on (docs/GNSS_UBX.md section 6). 2D has no
+ * trustworthy altitude, so it is not enough for a 3-D state estimate. */
+#define UBX_FIXTYPE_3D            3u
+#define UBX_FIXTYPE_GNSS_DR       4u
+
+/* Horizontal accuracy above which the fix is not worth fusing [mm].
+ *
+ * Deliberately loose: this is a coarse "the receiver is lost" gate, not a
+ * flight-quality decision. The ASW gets hAccM in metres and should apply its
+ * own, tighter threshold for whatever it is doing -- 10 m is fine for a
+ * position hold reference, far too loose for a precision landing. */
+#define GNSS_HACC_USABLE_MM       10000u
 
 
 /* local used variables */
@@ -95,6 +116,11 @@ static uint8 last_byte;
 static uint32 g_ubx_nak    = 0u;
 static uint32 g_ubx_navpvt = 0u;
 static uint8 g_ubx_ack = 0u;
+
+/* How many CFG-VALSET acknowledgements we are still waiting for. Counted
+ * rather than compared against a literal so adding a key cannot silently
+ * invalidate the check. */
+static uint8 g_cfg_expected_acks = 0u;
 
 
 /* local functions */
@@ -256,14 +282,54 @@ static void ubx_decode_navPvt(const uint8 *payload, GnssM9N_Nav *Nav)
 {
     uint8 flags  = payload[UBX_NAV_PVT_FLAGS];
     uint8 flags3 = payload[UBX_NAV_PVT_FLAGS3];
+    uint8 valid  = payload[UBX_NAV_PVT_TIME_VALIDITY];
 
-    Nav->iTOW       = ubx_rd_u32(&payload[UBX_NAV_PVT_ITOW]);
-    Nav->year       = ubx_rd_u16(&payload[UBX_NAV_PVT_YEAR]);
-    Nav->month      = payload[UBX_NAV_PVT_MONTH];
-    Nav->day        = payload[UBX_NAV_PVT_DAY];
-    Nav->hour       = payload[UBX_NAV_PVT_HOUR];
-    Nav->min        = payload[UBX_NAV_PVT_MIN];
-    Nav->sec        = payload[UBX_NAV_PVT_SEC];
+    /* Publish the raw validity bits as well as the derived flags: when the
+     * time looks wrong, which of the three is clear says why. */
+    Nav->validDate     = ((valid & UBX_PVT_VALID_DATE)        != 0u) ? 1u : 0u;
+    Nav->validTime     = ((valid & UBX_PVT_VALID_TIME)        != 0u) ? 1u : 0u;
+    Nav->fullyResolved = ((valid & UBX_PVT_VALID_FULLYRESOLV) != 0u) ? 1u : 0u;
+
+    /* fullyResolved is included on purpose: date and time can both be flagged
+     * valid while the receiver still carries seconds-level uncertainty, which
+     * is useless for timestamping a measurement. */
+    Nav->timeOk = ((Nav->validDate     != 0u) &&
+                   (Nav->validTime     != 0u) &&
+                   (Nav->fullyResolved != 0u)) ? 1u : 0u;
+
+    /* iTOW is GPS time of week, not UTC -- it is meaningful whenever the
+     * receiver has a fix, independent of whether UTC has been resolved, so
+     * it is NOT gated on validDate. It is the right timestamp to fuse on. */
+    Nav->iTOW = ubx_rd_u32(&payload[UBX_NAV_PVT_ITOW]);
+
+    /* Zero the calendar fields rather than publish the receiver's internal
+     * free-running clock: with no satellite it counts up from a firmware
+     * epoch (seen as 2020-08-02 on 2026-08-22), which looks like real data. */
+    if (Nav->validDate != 0u)
+    {
+        Nav->year       = ubx_rd_u16(&payload[UBX_NAV_PVT_YEAR]);
+        Nav->month      = payload[UBX_NAV_PVT_MONTH];
+        Nav->day        = payload[UBX_NAV_PVT_DAY];
+    }
+    else
+    {
+        Nav->year       = 0u;
+        Nav->month      = 0u;
+        Nav->day        = 0u;
+    }
+
+    if (Nav->validTime != 0u)
+    {
+        Nav->hour       = payload[UBX_NAV_PVT_HOUR];
+        Nav->min        = payload[UBX_NAV_PVT_MIN];
+        Nav->sec        = payload[UBX_NAV_PVT_SEC];
+    }
+    else
+    {
+        Nav->hour       = 0u;
+        Nav->min        = 0u;
+        Nav->sec        = 0u;
+    }
 
     Nav->fixQuality = payload[UBX_NAV_PVT_FIXTYPE];
     Nav->numSats    = payload[UBX_NAV_PVT_NUMSV];
@@ -287,6 +353,31 @@ static void ubx_decode_navPvt(const uint8 *payload, GnssM9N_Nav *Nav)
     else
     {
         Nav->fixOk = 0u;
+    }
+
+    /* navOk -- the single flag downstream code should gate on.
+     *
+     * Three independent things have to hold, and none of them implies the
+     * others:
+     *   fixOk     the receiver itself says the solution is valid
+     *   3D fix    a 2D fix invents an altitude from an assumed plane
+     *   hAcc      a fix can be "valid" and still be tens of metres out
+     *             while the receiver reacquires
+     *
+     * Time validity is NOT part of this. UTC resolution and position quality
+     * are separate: the receiver can know the time from one satellite while
+     * having no position at all, and can hold a good fix through a leap
+     * second it has not resolved. */
+    if ((Nav->fixOk != 0u) &&
+        ((Nav->fixQuality == UBX_FIXTYPE_3D) ||
+         (Nav->fixQuality == UBX_FIXTYPE_GNSS_DR)) &&
+        (Nav->hAcc <= GNSS_HACC_USABLE_MM))
+    {
+        Nav->navOk = 1u;
+    }
+    else
+    {
+        Nav->navOk = 0u;
     }
 }
 
@@ -429,12 +520,21 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
         status = TRUE;
     }
 
-    /* deactive unused sentences gsv_deactivated gsv_deactivate_increment */
+    /* One-shot receiver configuration, once the link has proven itself.
+     *
+     * Sent only after presence is TRUE: the M9N is still booting while
+     * GnssM9N_init runs, and a frame sent into a receiver that is not
+     * listening yet is lost without any trace.
+     *
+     * RAM layer only (see gnss_cfgValsetU1), so a power cycle undoes anything
+     * wrong here -- including a mistake that would otherwise silence the
+     * receiver permanently. */
     if ( (status == TRUE)           &&
          (gsv_cfg_sent == FALSE) )
     {
-        (void)gnss_cfgValsetU1(1u, CFG_UART1OUTPROT_NMEA);
-        (void)gnss_cfgValsetU1(1u, CFG_MSGOUT_UBX_NAV_PVT_UART1);
+        (void)gnss_cfgValsetU1(0u, CFG_UART1OUTPROT_NMEA);        /* 0 = off */
+        (void)gnss_cfgValsetU1(1u, CFG_MSGOUT_UBX_NAV_PVT_UART1); /* 1/epoch */
+        g_cfg_expected_acks = 2u;
         gsv_cfg_sent = TRUE;
     }
 
@@ -502,7 +602,13 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
     /* Scale once, here, so every consumer sees the same units. Copied on
      * EVERY call, not only when a frame arrived -- NAV-PVT lands at 1 Hz
      * while this runs at 100 ms, so g_nav is the last-known value. */
+    /* cfgOk: every configuration command we sent came back acknowledged.
+     * FALSE before the send too -- an unconfigured receiver is not "OK". */
+    sample->cfgOk      = ((gsv_cfg_sent != FALSE) &&
+                          (g_ubx_ack >= g_cfg_expected_acks)) ? 1u : 0u;
     sample->fixOk      = g_nav.fixOk;
+    sample->timeOk     = g_nav.timeOk;
+    sample->navOk      = g_nav.navOk;
     sample->latDeg     = (float32)g_nav.lat     * 1.0e-7f;
     sample->lonDeg     = (float32)g_nav.lon     * 1.0e-7f;
     sample->altM       = (float32)g_nav.hMSL    * 1.0e-3f;

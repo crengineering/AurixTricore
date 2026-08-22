@@ -26,7 +26,10 @@ typedef struct
 
   /* navigation solution, from UBX-NAV-PVT. Scaled to human units here so
    * every consumer sees the same definition (see docs/GNSS_UBX.md section 6). */
+  uint8   cfgOk;        /* 1 = every CFG-VALSET we sent was acknowledged    */
   uint8   fixOk;        /* flags.gnssFixOK AND NOT flags3.invalidLlh        */
+  uint8   timeOk;       /* UTC date+time resolved -- see GnssM9N.c          */
+  uint8   navOk;        /* THE flag to gate sensor fusion on -- see below   */
   float32 latDeg;
   float32 lonDeg;
   float32 altM;         /* height above mean sea level                     */
@@ -45,6 +48,11 @@ typedef struct
   uint8  hour;
   uint8  min;
   uint8  sec;
+  uint8  validDate;      /* valid bit 0                                    */
+  uint8  validTime;      /* valid bit 1                                    */
+  uint8  fullyResolved;  /* valid bit 2: no second-level uncertainty left  */
+  uint8  timeOk;         /* all three of the above                         */
+  uint8  navOk;          /* fixOk AND 3D AND hAcc within the usable gate   */
 
   /* UBX-NAV-PVT, kept in the receiver's native integer units so nothing is
    * lost; scaling to float happens once, in GnssM9N_read. */

@@ -35,11 +35,25 @@ static const uint8 ACK_BODY[8] = {
     0x05u, 0x01u, 0x02u, 0x00u, 0x06u, 0x8Au, 0x98u, 0xC1u
 };
 
-/* The complete CFG-VALSET that disables NMEA GSV on UART1, RAM layer. */
+/* The CFG-VALSET example from docs/GNSS_UBX.md section 1 (GSV off, RAM layer).
+ * Kept as a fixed reference for the framing even though the driver no longer
+ * sends this particular key -- it is the frame the note documents. */
 static const uint8 GSV_OFF_FRAME[17] = {
     0xB5u, 0x62u, 0x06u, 0x8Au, 0x09u, 0x00u,
     0x00u, 0x01u, 0x00u, 0x00u, 0xC5u, 0x00u, 0x91u, 0x20u, 0x00u,
     0x10u, 0xFDu
+};
+
+/* What the driver actually sends at boot, both RAM layer. */
+static const uint8 NMEA_OFF_FRAME[17] = {
+    0xB5u, 0x62u, 0x06u, 0x8Au, 0x09u, 0x00u,
+    0x00u, 0x01u, 0x00u, 0x00u, 0x02u, 0x00u, 0x74u, 0x10u, 0x00u,
+    0x20u, 0xB7u
+};
+static const uint8 NAVPVT_ON_FRAME[17] = {
+    0xB5u, 0x62u, 0x06u, 0x8Au, 0x09u, 0x00u,
+    0x00u, 0x01u, 0x00u, 0x00u, 0x07u, 0x00u, 0x91u, 0x20u, 0x01u,
+    0x53u, 0x48u
 };
 
 /* --- helpers ----------------------------------------------------------- */
@@ -69,7 +83,8 @@ static void resetDriverState(void)
     g_ubx_navpvt                = 0u;
     g_tx_discards               = 0u;
     g_detect_ack                = 0u;
-    gsv_deactivated             = FALSE;
+    gsv_cfg_sent                = FALSE;
+    g_cfg_expected_acks         = 0u;
     parse_state                 = GNSS_IDLE;
     last_byte                   = 0u;
     memset(&g_nav, 0, sizeof(g_nav));
@@ -184,12 +199,28 @@ void test_sendUbx_emits_the_documented_gsv_off_frame(void)
 
 /* The helper must build that payload itself -- this is what catches a
  * byte-swapped key or a wrong layer. */
-void test_cfgValset_builds_the_same_frame_from_the_key(void)
+void test_cfgValset_builds_the_nmea_off_frame(void)
 {
-    TEST_ASSERT_EQUAL(TRUE, gnss_cfgValsetU1(0u, CFG_MSGOUT_NMEA_GSV_UART1));
+    TEST_ASSERT_EQUAL(TRUE, gnss_cfgValsetU1(0u, CFG_UART1OUTPROT_NMEA));
 
     TEST_ASSERT_EQUAL_UINT32(17u, FakeAsclin_txCount());
-    TEST_ASSERT_EQUAL_UINT8_ARRAY(GSV_OFF_FRAME, FakeAsclin_txData(), 17);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(NMEA_OFF_FRAME, FakeAsclin_txData(), 17);
+}
+
+/* Value 0 disables. A 1 here would ENABLE NMEA -- the opposite of the intent,
+ * and nothing else in the system would notice. */
+void test_cfgValset_nmea_off_really_carries_zero(void)
+{
+    (void)gnss_cfgValsetU1(0u, CFG_UART1OUTPROT_NMEA);
+    TEST_ASSERT_EQUAL_UINT8(0x00u, FakeAsclin_txData()[14]);
+}
+
+void test_cfgValset_builds_the_navpvt_on_frame(void)
+{
+    TEST_ASSERT_EQUAL(TRUE, gnss_cfgValsetU1(1u, CFG_MSGOUT_UBX_NAV_PVT_UART1));
+
+    TEST_ASSERT_EQUAL_UINT32(17u, FakeAsclin_txCount());
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(NAVPVT_ON_FRAME, FakeAsclin_txData(), 17);
 }
 
 void test_cfgValset_writes_the_key_little_endian(void)
@@ -288,6 +319,7 @@ void test_decode_extracts_every_navpvt_field(void)
     /* iTOW      123456789 */ pl[0]=0x15u;  pl[1]=0xCDu;  pl[2]=0x5Bu;  pl[3]=0x07u;
     /* year           2026 */ pl[4]=0xEAu;  pl[5]=0x07u;
     pl[6]=8u; pl[7]=21u; pl[8]=17u; pl[9]=45u; pl[10]=30u;
+    pl[11]=0x07u;                                /* valid: date+time+resolved */
     pl[20]=3u;                                   /* fixType = 3D fix      */
     pl[21]=0x01u;                                /* flags.gnssFixOK       */
     pl[23]=12u;                                  /* numSV                 */
@@ -322,6 +354,161 @@ void test_decode_extracts_every_navpvt_field(void)
     TEST_ASSERT_EQUAL_INT32 (13890,       g_nav.gSpeed);
     TEST_ASSERT_EQUAL_INT32 (9012345,     g_nav.headMot);
     TEST_ASSERT_EQUAL_UINT16(180u,        g_nav.pDOP);
+    TEST_ASSERT_EQUAL_UINT8 (1u,          g_nav.timeOk);
+    TEST_ASSERT_EQUAL_UINT8 (1u,          g_nav.navOk);
+}
+
+/* =======================================================================
+ * validity gating
+ * ======================================================================= */
+
+/* With no satellite the receiver reports a free-running internal clock (seen
+ * as 2020-08-02 on 2026-08-22) and clears validDate. Publishing that would
+ * look exactly like a real timestamp, so the calendar fields are zeroed. */
+void test_decode_zeroes_the_date_when_validdate_is_clear(void)
+{
+    uint8 pl[92];
+    uint8 f[110];
+    uint8 len;
+
+    memset(pl, 0, sizeof(pl));
+    pl[4]=0xE4u; pl[5]=0x07u;                    /* year 2020, but...     */
+    pl[6]=8u; pl[7]=2u;
+    pl[11]=0x00u;                                /* ...validDate is clear */
+
+    len = buildUbx(f, 0x01u, 0x07u, pl, 92u);
+    TEST_ASSERT_EQUAL(TRUE, gnss_ubx_decode(f, len, 92u, &g_nav));
+
+    TEST_ASSERT_EQUAL_UINT16(0u, g_nav.year);
+    TEST_ASSERT_EQUAL_UINT8 (0u, g_nav.month);
+    TEST_ASSERT_EQUAL_UINT8 (0u, g_nav.day);
+    TEST_ASSERT_EQUAL_UINT8 (0u, g_nav.timeOk);
+}
+
+/* iTOW is GPS time of week, not UTC -- it must survive an unresolved UTC. */
+void test_decode_keeps_itow_when_utc_is_unresolved(void)
+{
+    uint8 pl[92];
+    uint8 f[110];
+    uint8 len;
+
+    memset(pl, 0, sizeof(pl));
+    pl[0]=0x15u; pl[1]=0xCDu; pl[2]=0x5Bu; pl[3]=0x07u;
+    pl[11]=0x00u;
+
+    len = buildUbx(f, 0x01u, 0x07u, pl, 92u);
+    TEST_ASSERT_EQUAL(TRUE, gnss_ubx_decode(f, len, 92u, &g_nav));
+
+    TEST_ASSERT_EQUAL_UINT32(123456789u, g_nav.iTOW);
+}
+
+/* validDate and validTime set but fullyResolved clear = seconds-level
+ * uncertainty remains, which is useless for timestamping. */
+void test_decode_requires_fullyresolved_for_timeok(void)
+{
+    uint8 pl[92];
+    uint8 f[110];
+    uint8 len;
+
+    memset(pl, 0, sizeof(pl));
+    pl[11] = 0x03u;                              /* date + time, not resolved */
+
+    len = buildUbx(f, 0x01u, 0x07u, pl, 92u);
+    TEST_ASSERT_EQUAL(TRUE, gnss_ubx_decode(f, len, 92u, &g_nav));
+
+    TEST_ASSERT_EQUAL_UINT8(1u, g_nav.validDate);
+    TEST_ASSERT_EQUAL_UINT8(1u, g_nav.validTime);
+    TEST_ASSERT_EQUAL_UINT8(0u, g_nav.fullyResolved);
+    TEST_ASSERT_EQUAL_UINT8(0u, g_nav.timeOk);
+}
+
+/* navOk is the fusion gate. A 2D fix has no trustworthy altitude. */
+void test_navok_rejects_a_2d_fix(void)
+{
+    uint8 pl[92];
+    uint8 f[110];
+    uint8 len;
+
+    memset(pl, 0, sizeof(pl));
+    pl[20] = 2u;                                 /* 2D fix    */
+    pl[21] = 0x01u;                              /* gnssFixOK */
+
+    len = buildUbx(f, 0x01u, 0x07u, pl, 92u);
+    TEST_ASSERT_EQUAL(TRUE, gnss_ubx_decode(f, len, 92u, &g_nav));
+
+    TEST_ASSERT_EQUAL_UINT8(1u, g_nav.fixOk);    /* the receiver is happy */
+    TEST_ASSERT_EQUAL_UINT8(0u, g_nav.navOk);    /* we are not            */
+}
+
+/* A fix can be flagged valid and still be far out while reacquiring. */
+void test_navok_rejects_a_poor_accuracy_fix(void)
+{
+    uint8 pl[92];
+    uint8 f[110];
+    uint8 len;
+
+    memset(pl, 0, sizeof(pl));
+    pl[20] = 3u;
+    pl[21] = 0x01u;
+    /* hAcc = 50000 mm = 50 m, past GNSS_HACC_USABLE_MM */
+    pl[40]=0x50u; pl[41]=0xC3u; pl[42]=0x00u; pl[43]=0x00u;
+
+    len = buildUbx(f, 0x01u, 0x07u, pl, 92u);
+    TEST_ASSERT_EQUAL(TRUE, gnss_ubx_decode(f, len, 92u, &g_nav));
+
+    TEST_ASSERT_EQUAL_UINT8(1u, g_nav.fixOk);
+    TEST_ASSERT_EQUAL_UINT8(0u, g_nav.navOk);
+}
+
+/* Time and position validity are independent: the receiver can know the time
+ * from a single satellite while having no position at all. */
+void test_navok_is_independent_of_time_validity(void)
+{
+    uint8 pl[92];
+    uint8 f[110];
+    uint8 len;
+
+    memset(pl, 0, sizeof(pl));
+    pl[11] = 0x00u;                              /* UTC unresolved        */
+    pl[20] = 3u;
+    pl[21] = 0x01u;
+    pl[40]=0xC4u; pl[41]=0x09u;                  /* hAcc 2.5 m            */
+
+    len = buildUbx(f, 0x01u, 0x07u, pl, 92u);
+    TEST_ASSERT_EQUAL(TRUE, gnss_ubx_decode(f, len, 92u, &g_nav));
+
+    TEST_ASSERT_EQUAL_UINT8(0u, g_nav.timeOk);
+    TEST_ASSERT_EQUAL_UINT8(1u, g_nav.navOk);
+}
+
+/* cfgOk drives DIAG_GNSS_IMPLAUSIBLE: FALSE until every CFG-VALSET we sent
+ * has been acknowledged, so a silently rejected key raises a fault. */
+void test_cfgok_is_false_until_every_command_is_acked(void)
+{
+    GnssM9N_Sample sample = {0};
+    uint16 i;
+
+    /* nothing sent yet */
+    (void)GnssM9N_read(&sample);
+    TEST_ASSERT_EQUAL_UINT8(0u, sample.cfgOk);
+
+    /* data arrives -> presence -> the two CFG-VALSETs go out */
+    pushUbxFrame(ACK_BODY, 8u);
+    pumpIsr();
+    for (i = 0u; i < 3u; i++) { (void)GnssM9N_read(&sample); }
+    TEST_ASSERT_TRUE(gsv_cfg_sent != FALSE);
+    TEST_ASSERT_EQUAL_UINT8(2u, g_cfg_expected_acks);
+
+    /* only one ACK came back -> still not OK */
+    TEST_ASSERT_EQUAL_UINT8(1u, g_ubx_ack);
+    (void)GnssM9N_read(&sample);
+    TEST_ASSERT_EQUAL_UINT8(0u, sample.cfgOk);
+
+    /* the second ACK arrives */
+    pushUbxFrame(ACK_BODY, 8u);
+    pumpIsr();
+    (void)GnssM9N_read(&sample);
+    TEST_ASSERT_EQUAL_UINT8(1u, sample.cfgOk);
 }
 
 /* Negative coordinates: every payload byte above 127 must be widened before
@@ -614,7 +801,9 @@ int main(void)
 
     /* transmit */
     RUN_TEST(test_sendUbx_emits_the_documented_gsv_off_frame);
-    RUN_TEST(test_cfgValset_builds_the_same_frame_from_the_key);
+    RUN_TEST(test_cfgValset_builds_the_nmea_off_frame);
+    RUN_TEST(test_cfgValset_nmea_off_really_carries_zero);
+    RUN_TEST(test_cfgValset_builds_the_navpvt_on_frame);
     RUN_TEST(test_cfgValset_writes_the_key_little_endian);
     RUN_TEST(test_sendUbx_rejects_an_oversized_payload);
     RUN_TEST(test_txByte_gives_up_when_the_fifo_never_drains);
@@ -625,6 +814,15 @@ int main(void)
     RUN_TEST(test_decode_rejects_when_only_one_checksum_byte_is_wrong);
     RUN_TEST(test_decode_counts_a_nak_separately_from_an_ack);
     RUN_TEST(test_decode_extracts_every_navpvt_field);
+
+    /* validity gating */
+    RUN_TEST(test_decode_zeroes_the_date_when_validdate_is_clear);
+    RUN_TEST(test_decode_keeps_itow_when_utc_is_unresolved);
+    RUN_TEST(test_decode_requires_fullyresolved_for_timeok);
+    RUN_TEST(test_navok_rejects_a_2d_fix);
+    RUN_TEST(test_navok_rejects_a_poor_accuracy_fix);
+    RUN_TEST(test_navok_is_independent_of_time_validity);
+    RUN_TEST(test_cfgok_is_false_until_every_command_is_acked);
     RUN_TEST(test_decode_handles_negative_coordinates);
     RUN_TEST(test_decode_clears_fixok_when_llh_is_invalid);
     RUN_TEST(test_decode_clears_fixok_when_gnssfixok_is_clear);

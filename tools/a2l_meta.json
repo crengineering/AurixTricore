@@ -377,7 +377,7 @@
     },
     "gnssfixOk": {
       "name": "GnssFixOk",
-      "desc": "1 = position usable: NAV-PVT gnssFixOK set AND invalidLlh clear. Check this, not fixType alone",
+      "desc": "1 = the receiver says the solution is valid (gnssFixOK set, invalidLlh clear). Necessary but NOT sufficient - use GnssNavOk",
       "lo": "0",
       "hi": "1"
     },
@@ -460,8 +460,17 @@
       "lo": "0",
       "hi": "10000"
     },
-    "gnssReserved": {
-      "skip": true
+    "gnsstimeOk": {
+      "name": "GnssTimeOk",
+      "desc": "1 = UTC date and time are fully resolved. When 0 the date/time fields read 0 - the receiver's own free-running clock is NOT published, it looks like real data",
+      "lo": "0",
+      "hi": "1"
+    },
+    "gnssnavOk": {
+      "name": "GnssNavOk",
+      "desc": "THE flag to gate sensor fusion on: fix valid AND 3D AND horizontal accuracy within 10 m. Independent of GnssTimeOk",
+      "lo": "0",
+      "hi": "1"
     }
   },
   "Xcp_Cal": {

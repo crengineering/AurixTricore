@@ -165,9 +165,12 @@ typedef struct
     uint8   gnsshour;
     uint8   gnssmin;
     uint8   gnsssec;
-    uint8   gnssfixOk;          /* 1 = position usable, see GnssM9N.h      */
-    uint8   gnssReserved[2];    /* pad: TASKING 2-aligns uint32, gen_a2l   */
-                                /* assumes 4 -- see docs/GNSS_UBX.md s.7   */
+    uint8   gnssfixOk;          /* 1 = receiver says the solution is valid */
+    uint8   gnsstimeOk;         /* 1 = UTC date+time fully resolved        */
+    uint8   gnssnavOk;          /* 1 = safe to fuse; see GnssM9N.c         */
+                                /* these three also pad gnssrxBytes to a   */
+                                /* 4-byte boundary: TASKING 2-aligns       */
+                                /* uint32, gen_a2l.py assumes 4            */
     uint32  gnssrxBytes;
     uint32  gnsssentences;
     uint16  gnsserrors;

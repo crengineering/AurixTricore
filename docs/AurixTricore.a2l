@@ -489,9 +489,19 @@ ASAP2_VERSION 1 61
       ECU_ADDRESS 0x700300D4
     /end MEASUREMENT
 
-    /begin MEASUREMENT GnssFixOk "1 = position usable: NAV-PVT gnssFixOK set AND invalidLlh clear. Check this, not fixType alone"
+    /begin MEASUREMENT GnssFixOk "1 = the receiver says the solution is valid (gnssFixOK set, invalidLlh clear). Necessary but NOT sufficient - use GnssNavOk"
       UBYTE NO_COMPU_METHOD 0 0 0 1
       ECU_ADDRESS 0x700300D5
+    /end MEASUREMENT
+
+    /begin MEASUREMENT GnssTimeOk "1 = UTC date and time are fully resolved. When 0 the date/time fields read 0 - the receiver's own free-running clock is NOT published, it looks like real data"
+      UBYTE NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x700300D6
+    /end MEASUREMENT
+
+    /begin MEASUREMENT GnssNavOk "THE flag to gate sensor fusion on: fix valid AND 3D AND horizontal accuracy within 10 m. Independent of GnssTimeOk"
+      UBYTE NO_COMPU_METHOD 0 0 0 1
+      ECU_ADDRESS 0x700300D7
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssRxBytes "NEO-M9N bytes received on ASCLIN4 since boot - the primary link-health signal"

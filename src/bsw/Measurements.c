@@ -241,6 +241,8 @@ void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)
         g_xcpData.gnssfixType   = sample_info.fixType;
         g_xcpData.gnssnumSats   = sample_info.numSats;
         g_xcpData.gnssfixOk      = sample_info.fixOk;
+        g_xcpData.gnsstimeOk     = sample_info.timeOk;
+        g_xcpData.gnssnavOk      = sample_info.navOk;
         g_xcpData.gnsslatDeg     = sample_info.latDeg;
         g_xcpData.gnsslonDeg     = sample_info.lonDeg;
         g_xcpData.gnssaltM       = sample_info.altM;
@@ -269,6 +271,8 @@ void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)
         g_xcpData.gnssmin       = 0u;
         g_xcpData.gnsssec       = 0u;
         g_xcpData.gnssfixOk      = 0u;
+        g_xcpData.gnsstimeOk     = 0u;
+        g_xcpData.gnssnavOk      = 0u;
         g_xcpData.gnsslatDeg     = 0.0f;
         g_xcpData.gnsslonDeg     = 0.0f;
         g_xcpData.gnssaltM       = 0.0f;

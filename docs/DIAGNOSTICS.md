@@ -80,6 +80,14 @@ unterschiedliche Reparaturen bedeuten:
 * **IMPLAUSIBLE** — antwortet und ändert sich, liegt aber außerhalb des
   physikalisch Möglichen: Skalierung, Kalibrierung oder Messelement defekt.
 
+> ⚠️ **Beim GNSS (Bit 30) bedeutet IMPLAUSIBLE etwas anderes:** „der Empfänger
+> hat nicht jedes Konfigurationskommando quittiert“ (`cfgOk`, siehe
+> `Cpu0_Main.c` Task_Measure100ms). Grund: eine abgelehnte `CFG-VALSET` ändert
+> **nichts** Sichtbares auf der Leitung — ein still unkonfigurierter Empfänger
+> sähe kerngesund aus. Das Bit ist *nicht* an `navOk` gekoppelt: „kein
+> Satellit“ ist der normale Zustand in Innenräumen, kein Fehler. Ein dauerhaft
+> rotes Diagnosewort liest niemand mehr. Details: `docs/GNSS_UBX.md`.
+
 **Kurzschluss vs. Leitungsbruch:** Bei ruhendem Bus müssen beide Leitungen über
 die Pull-ups HIGH sein. Eine Leitung dauerhaft LOW (Bit 13/14) ist ein
 Kurzschluss nach GND oder ein blockierender Slave. Ein **Leitungsbruch** sieht
