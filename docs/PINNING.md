@@ -164,7 +164,7 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 > **The interim MPU‑6050 (GY‑521) was physically removed on 2026‑07‑31** along
 > with the BMP388. From firmware **v1.14.0** there is no `Task_Imu`: the IMU and
 > attitude fields of the XCP block are published as zero once at start‑up with
-> `imuPresent = 0` and `ahrsState = AHRS_NO_SENSOR`, and the `PERIPH_DIAG_IMU`
+> `imuPresent = 0`, and the `PERIPH_DIAG_IMU`
 > slot is declared **unfitted** (`PeriphDiag_setFitted()`) so it raises no
 > diagnostics bits. `src/bsw/Mpu6050.c` stays in‑tree as the I2C fallback and as
 > part of the peripheral driver pool (wiring: **`docs/MPU6050.md`**); it has no

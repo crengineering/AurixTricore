@@ -28,8 +28,6 @@
 /* Temporary bring-up switch: 1 = drive P22.8/P22.7 as GPIO instead of starting
  * the QSPI, to prove whether those pads can drive at all. Set back to 0. */
 #define SPI_PAD_TEST  (0)
-#include "Ahrs.h"
-#include "SysTime.h"
 #include "PeriphDiag.h"
 #include "EthStats.h"
 #include "CtrlReplay.h"     /* ASW replay harness; single BSW->ASW init
@@ -308,47 +306,16 @@ static void Task_Imu(void)
 {
     Icm42688_Sample sample = { { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 0.0f };
     boolean         present;
-    static uint32   lastTicks = 0u;
-    uint32          nowTicks;
-    float32         dt;
 
     /* Called unconditionally, like the other sensor tasks: Icm42688_read()
      * owns the presence state and uses these calls to probe for a reconnected
      * sensor. */
     present = Icm42688_read(&sample);
 
-    /* Measured dt, not the nominal 20 ms: the scheduler dispatches on a
-     * "period elapsed" test, so the real interval jitters and integrating the
-     * nominal value would bias the attitude. STM0 ticks are 10 ns. */
-    nowTicks  = SysTime_getTicks();
     {
-        /* Elapsed lands in an object before the cast (MISRA 10.8). Unsigned
-         * subtraction is wrap-safe across the STM rollover. */
-        const uint32 elapsed = nowTicks - lastTicks;
-        dt = (float32)elapsed * 1e-8f;
-    }
-    lastTicks = nowTicks;
-
-    /* AHRS first: it owns the gyro bias, and the rates published below are
-     * corrected with the value it measured at start-up. */
-    Ahrs_update(sample.acc, sample.gyro, dt, present);
-    measurementsSetAttitude();
-
-    {
-        float32 bias[3];
-        float32 gyrCorr[3];
-        uint8   i;
-
-        /* Publish the CORRECTED rate, not the raw one: a stationary board with
-         * an uncorrected gyro offset looks like it is slowly yawing. The bias
-         * stays visible separately as biasX/Y/Z, so the raw value is still
-         * recoverable as corrected + bias. */
-        Ahrs_getGyroBias(bias);
-        for (i = 0u; i < 3u; i++)
-        {
-            gyrCorr[i] = sample.gyro[i] - bias[i];
-        }
-        measurementsSetImu(present, sample.acc, gyrCorr, sample.tempC);
+        /* Raw angular rate: there is no bias estimator in the tree, so the
+         * published value still carries the sensor offset. */
+        measurementsSetImu(present, sample.acc, sample.gyro, sample.tempC);
 
         /* |a| must stay inside the configured +/-16 g full scale; a sustained
          * 0 g means a dead element rather than free fall, which never lasts
@@ -520,7 +487,6 @@ int core0_main(void)
         Uart_println("");
     }
     icm42688DebugDump();
-    Ahrs_init();            /* starts the gyro-bias calibration - hold still */
 
     /* init of the GNSS*/
     if (GnssM9N_init() != FALSE)
@@ -564,7 +530,6 @@ int core0_main(void)
     CtrlReplay_init();
     EthStats_init();        /* MMC octet counters; after the MAC is up */
     Uart_println("Ethernet started");
-    Uart_println("AHRS calibrating gyro bias - keep the board still ~2 s");
 
     while (TRUE)
     {

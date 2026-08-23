@@ -149,21 +149,21 @@
     },
     "gyroX": {
       "name": "ImuGyroX",
-      "desc": "ICM-42688-P angular rate X, bias corrected (raw = this + AhrsGyroBiasX)",
+      "desc": "ICM-42688-P angular rate X (RAW, no bias estimator)",
       "unit": "deg/s",
       "lo": "-2000",
       "hi": "2000"
     },
     "gyroY": {
       "name": "ImuGyroY",
-      "desc": "ICM-42688-P angular rate Y, bias corrected (raw = this + AhrsGyroBiasY)",
+      "desc": "ICM-42688-P angular rate Y (RAW, no bias estimator)",
       "unit": "deg/s",
       "lo": "-2000",
       "hi": "2000"
     },
     "gyroZ": {
       "name": "ImuGyroZ",
-      "desc": "ICM-42688-P angular rate Z, bias corrected (raw = this + AhrsGyroBiasZ)",
+      "desc": "ICM-42688-P angular rate Z (RAW, no bias estimator)",
       "unit": "deg/s",
       "lo": "-2000",
       "hi": "2000"
@@ -174,84 +174,6 @@
       "unit": "degC",
       "lo": "-40",
       "hi": "85"
-    },
-    "ahrsState": {
-      "name": "AhrsState",
-      "desc": "attitude estimator state: 0 calibrating, 1 running, 2 no sensor",
-      "lo": "0",
-      "hi": "2"
-    },
-    "ahrsAccOk": {
-      "name": "AhrsAccelTrusted",
-      "desc": "1 while |a| is near 1 g and the accelerometer is being fused",
-      "lo": "0",
-      "hi": "1"
-    },
-    "ahrsReserved": {
-      "skip": true
-    },
-    "roll": {
-      "name": "AhrsRoll",
-      "desc": "estimated roll (phi), flight_ctrl phi_ist[0]",
-      "unit": "rad",
-      "lo": "-3.15",
-      "hi": "3.15"
-    },
-    "pitch": {
-      "name": "AhrsPitch",
-      "desc": "estimated pitch (theta), flight_ctrl phi_ist[1]",
-      "unit": "rad",
-      "lo": "-1.58",
-      "hi": "1.58"
-    },
-    "yaw": {
-      "name": "AhrsYaw",
-      "desc": "estimated yaw (psi), flight_ctrl phi_ist[2] - gyro only, drifts",
-      "unit": "rad",
-      "lo": "-100",
-      "hi": "100"
-    },
-    "rateP": {
-      "name": "AhrsRateP",
-      "desc": "body roll rate p, bias corrected, flight_ctrl om_ist[0]",
-      "unit": "rad/s",
-      "lo": "-35",
-      "hi": "35"
-    },
-    "rateQ": {
-      "name": "AhrsRateQ",
-      "desc": "body pitch rate q, bias corrected, flight_ctrl om_ist[1]",
-      "unit": "rad/s",
-      "lo": "-35",
-      "hi": "35"
-    },
-    "rateR": {
-      "name": "AhrsRateR",
-      "desc": "body yaw rate r, bias corrected, flight_ctrl om_ist[2]",
-      "unit": "rad/s",
-      "lo": "-35",
-      "hi": "35"
-    },
-    "biasX": {
-      "name": "AhrsGyroBiasX",
-      "desc": "gyro bias X measured at start-up",
-      "unit": "deg/s",
-      "lo": "-50",
-      "hi": "50"
-    },
-    "biasY": {
-      "name": "AhrsGyroBiasY",
-      "desc": "gyro bias Y measured at start-up",
-      "unit": "deg/s",
-      "lo": "-50",
-      "hi": "50"
-    },
-    "biasZ": {
-      "name": "AhrsGyroBiasZ",
-      "desc": "gyro bias Z measured at start-up",
-      "unit": "deg/s",
-      "lo": "-50",
-      "hi": "50"
     },
     "coreExecUs": {
       "name": "Core{i}ExecTime",

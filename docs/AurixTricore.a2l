@@ -8,7 +8,7 @@
  *
  * All objects live at fixed addresses (TASKING __at), so this file does not
  * depend on the link run:
- *   Xcp_Data  (measurements)          0x70030000, 256 bytes, Measurements.h
+ *   Xcp_Data  (measurements)          0x70030000, 216 bytes, Measurements.h
  *   Xcp_Cal   (calibration, RAM only) 0x70030100, 64 bytes, Diagnostics.h
  *   Xcp_Nvm   (persistent, DFLASH)    0x70030200, 16 bytes, Nvm.h
  *   Xcp_Gpio  (GPIO control, RAM only) 0x70030300, 52 bytes, gpio.h
@@ -210,19 +210,19 @@ ASAP2_VERSION 1 61
       PHYS_UNIT "g"
     /end MEASUREMENT
 
-    /begin MEASUREMENT ImuGyroX "ICM-42688-P angular rate X, bias corrected (raw = this + AhrsGyroBiasX)"
+    /begin MEASUREMENT ImuGyroX "ICM-42688-P angular rate X (RAW, no bias estimator)"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -2000 2000
       ECU_ADDRESS 0x70030044
       PHYS_UNIT "deg/s"
     /end MEASUREMENT
 
-    /begin MEASUREMENT ImuGyroY "ICM-42688-P angular rate Y, bias corrected (raw = this + AhrsGyroBiasY)"
+    /begin MEASUREMENT ImuGyroY "ICM-42688-P angular rate Y (RAW, no bias estimator)"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -2000 2000
       ECU_ADDRESS 0x70030048
       PHYS_UNIT "deg/s"
     /end MEASUREMENT
 
-    /begin MEASUREMENT ImuGyroZ "ICM-42688-P angular rate Z, bias corrected (raw = this + AhrsGyroBiasZ)"
+    /begin MEASUREMENT ImuGyroZ "ICM-42688-P angular rate Z (RAW, no bias estimator)"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -2000 2000
       ECU_ADDRESS 0x7003004C
       PHYS_UNIT "deg/s"
@@ -234,341 +234,277 @@ ASAP2_VERSION 1 61
       PHYS_UNIT "degC"
     /end MEASUREMENT
 
-    /begin MEASUREMENT AhrsState "attitude estimator state: 0 calibrating, 1 running, 2 no sensor"
-      UBYTE NO_COMPU_METHOD 0 0 0 2
-      ECU_ADDRESS 0x70030054
-    /end MEASUREMENT
-
-    /begin MEASUREMENT AhrsAccelTrusted "1 while |a| is near 1 g and the accelerometer is being fused"
-      UBYTE NO_COMPU_METHOD 0 0 0 1
-      ECU_ADDRESS 0x70030055
-    /end MEASUREMENT
-
-    /begin MEASUREMENT AhrsRoll "estimated roll (phi), flight_ctrl phi_ist[0]"
-      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -3.15 3.15
-      ECU_ADDRESS 0x70030058
-      PHYS_UNIT "rad"
-    /end MEASUREMENT
-
-    /begin MEASUREMENT AhrsPitch "estimated pitch (theta), flight_ctrl phi_ist[1]"
-      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -1.58 1.58
-      ECU_ADDRESS 0x7003005C
-      PHYS_UNIT "rad"
-    /end MEASUREMENT
-
-    /begin MEASUREMENT AhrsYaw "estimated yaw (psi), flight_ctrl phi_ist[2] - gyro only, drifts"
-      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -100 100
-      ECU_ADDRESS 0x70030060
-      PHYS_UNIT "rad"
-    /end MEASUREMENT
-
-    /begin MEASUREMENT AhrsRateP "body roll rate p, bias corrected, flight_ctrl om_ist[0]"
-      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -35 35
-      ECU_ADDRESS 0x70030064
-      PHYS_UNIT "rad/s"
-    /end MEASUREMENT
-
-    /begin MEASUREMENT AhrsRateQ "body pitch rate q, bias corrected, flight_ctrl om_ist[1]"
-      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -35 35
-      ECU_ADDRESS 0x70030068
-      PHYS_UNIT "rad/s"
-    /end MEASUREMENT
-
-    /begin MEASUREMENT AhrsRateR "body yaw rate r, bias corrected, flight_ctrl om_ist[2]"
-      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -35 35
-      ECU_ADDRESS 0x7003006C
-      PHYS_UNIT "rad/s"
-    /end MEASUREMENT
-
-    /begin MEASUREMENT AhrsGyroBiasX "gyro bias X measured at start-up"
-      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -50 50
-      ECU_ADDRESS 0x70030070
-      PHYS_UNIT "deg/s"
-    /end MEASUREMENT
-
-    /begin MEASUREMENT AhrsGyroBiasY "gyro bias Y measured at start-up"
-      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -50 50
-      ECU_ADDRESS 0x70030074
-      PHYS_UNIT "deg/s"
-    /end MEASUREMENT
-
-    /begin MEASUREMENT AhrsGyroBiasZ "gyro bias Z measured at start-up"
-      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -50 50
-      ECU_ADDRESS 0x70030078
-      PHYS_UNIT "deg/s"
-    /end MEASUREMENT
-
     /begin MEASUREMENT Core0ExecTime "CPU0 busy time in the last 100 ms window"
       ULONG NO_COMPU_METHOD 0 0 0 100000
-      ECU_ADDRESS 0x7003007C
+      ECU_ADDRESS 0x70030054
       PHYS_UNIT "us"
     /end MEASUREMENT
 
     /begin MEASUREMENT Core1ExecTime "CPU0 busy time in the last 100 ms window"
       ULONG NO_COMPU_METHOD 0 0 0 100000
-      ECU_ADDRESS 0x70030080
+      ECU_ADDRESS 0x70030058
       PHYS_UNIT "us"
     /end MEASUREMENT
 
     /begin MEASUREMENT Core2ExecTime "CPU0 busy time in the last 100 ms window"
       ULONG NO_COMPU_METHOD 0 0 0 100000
-      ECU_ADDRESS 0x70030084
+      ECU_ADDRESS 0x7003005C
       PHYS_UNIT "us"
     /end MEASUREMENT
 
     /begin MEASUREMENT Core3ExecTime "CPU0 busy time in the last 100 ms window"
       ULONG NO_COMPU_METHOD 0 0 0 100000
-      ECU_ADDRESS 0x70030088
+      ECU_ADDRESS 0x70030060
       PHYS_UNIT "us"
     /end MEASUREMENT
 
     /begin MEASUREMENT Core4ExecTime "CPU0 busy time in the last 100 ms window"
       ULONG NO_COMPU_METHOD 0 0 0 100000
-      ECU_ADDRESS 0x7003008C
+      ECU_ADDRESS 0x70030064
       PHYS_UNIT "us"
     /end MEASUREMENT
 
     /begin MEASUREMENT Core5ExecTime "CPU0 busy time in the last 100 ms window"
       ULONG NO_COMPU_METHOD 0 0 0 100000
-      ECU_ADDRESS 0x70030090
+      ECU_ADDRESS 0x70030068
       PHYS_UNIT "us"
     /end MEASUREMENT
 
     /begin MEASUREMENT Core0Load "CPU0 busy fraction of the window"
       UWORD NO_COMPU_METHOD 0 0 0 1000
-      ECU_ADDRESS 0x70030094
+      ECU_ADDRESS 0x7003006C
       PHYS_UNIT "per mille"
     /end MEASUREMENT
 
     /begin MEASUREMENT Core1Load "CPU0 busy fraction of the window"
       UWORD NO_COMPU_METHOD 0 0 0 1000
-      ECU_ADDRESS 0x70030096
+      ECU_ADDRESS 0x7003006E
       PHYS_UNIT "per mille"
     /end MEASUREMENT
 
     /begin MEASUREMENT Core2Load "CPU0 busy fraction of the window"
       UWORD NO_COMPU_METHOD 0 0 0 1000
-      ECU_ADDRESS 0x70030098
+      ECU_ADDRESS 0x70030070
       PHYS_UNIT "per mille"
     /end MEASUREMENT
 
     /begin MEASUREMENT Core3Load "CPU0 busy fraction of the window"
       UWORD NO_COMPU_METHOD 0 0 0 1000
-      ECU_ADDRESS 0x7003009A
+      ECU_ADDRESS 0x70030072
       PHYS_UNIT "per mille"
     /end MEASUREMENT
 
     /begin MEASUREMENT Core4Load "CPU0 busy fraction of the window"
       UWORD NO_COMPU_METHOD 0 0 0 1000
-      ECU_ADDRESS 0x7003009C
+      ECU_ADDRESS 0x70030074
       PHYS_UNIT "per mille"
     /end MEASUREMENT
 
     /begin MEASUREMENT Core5Load "CPU0 busy fraction of the window"
       UWORD NO_COMPU_METHOD 0 0 0 1000
-      ECU_ADDRESS 0x7003009E
+      ECU_ADDRESS 0x70030076
       PHYS_UNIT "per mille"
     /end MEASUREMENT
 
     /begin MEASUREMENT Core0Alive "CPU0 liveness counter, frozen if the core hung"
       UWORD NO_COMPU_METHOD 0 0 0 65535
-      ECU_ADDRESS 0x700300A0
+      ECU_ADDRESS 0x70030078
     /end MEASUREMENT
 
     /begin MEASUREMENT Core1Alive "CPU0 liveness counter, frozen if the core hung"
       UWORD NO_COMPU_METHOD 0 0 0 65535
-      ECU_ADDRESS 0x700300A2
+      ECU_ADDRESS 0x7003007A
     /end MEASUREMENT
 
     /begin MEASUREMENT Core2Alive "CPU0 liveness counter, frozen if the core hung"
       UWORD NO_COMPU_METHOD 0 0 0 65535
-      ECU_ADDRESS 0x700300A4
+      ECU_ADDRESS 0x7003007C
     /end MEASUREMENT
 
     /begin MEASUREMENT Core3Alive "CPU0 liveness counter, frozen if the core hung"
       UWORD NO_COMPU_METHOD 0 0 0 65535
-      ECU_ADDRESS 0x700300A6
+      ECU_ADDRESS 0x7003007E
     /end MEASUREMENT
 
     /begin MEASUREMENT Core4Alive "CPU0 liveness counter, frozen if the core hung"
       UWORD NO_COMPU_METHOD 0 0 0 65535
-      ECU_ADDRESS 0x700300A8
+      ECU_ADDRESS 0x70030080
     /end MEASUREMENT
 
     /begin MEASUREMENT Core5Alive "CPU0 liveness counter, frozen if the core hung"
       UWORD NO_COMPU_METHOD 0 0 0 65535
-      ECU_ADDRESS 0x700300AA
+      ECU_ADDRESS 0x70030082
     /end MEASUREMENT
 
     /begin MEASUREMENT EthBytesPerSec "Ethernet throughput, transmit and receive summed"
       ULONG NO_COMPU_METHOD 0 0 0 125000000
-      ECU_ADDRESS 0x700300AC
+      ECU_ADDRESS 0x70030084
       PHYS_UNIT "B/s"
     /end MEASUREMENT
 
     /begin MEASUREMENT EthUtilisation "link utilisation against the negotiated line rate"
       UWORD NO_COMPU_METHOD 0 0 0 1000
-      ECU_ADDRESS 0x700300B0
+      ECU_ADDRESS 0x70030088
       PHYS_UNIT "per mille"
     /end MEASUREMENT
 
     /begin MEASUREMENT EthLinkSpeed "negotiated link rate"
       UWORD NO_COMPU_METHOD 0 0 0 1000
-      ECU_ADDRESS 0x700300B2
+      ECU_ADDRESS 0x7003008A
       PHYS_UNIT "Mbit/s"
     /end MEASUREMENT
 
     /begin MEASUREMENT MagPresent "1 if the MMC5983MA answered at init, else 0"
       UBYTE NO_COMPU_METHOD 0 0 0 1
-      ECU_ADDRESS 0x700300B4
+      ECU_ADDRESS 0x7003008C
     /end MEASUREMENT
 
     /begin MEASUREMENT MagX "MMC5983MA magnetic field X"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -8 8
-      ECU_ADDRESS 0x700300B8
+      ECU_ADDRESS 0x70030090
       PHYS_UNIT "G"
     /end MEASUREMENT
 
     /begin MEASUREMENT MagY "MMC5983MA magnetic field Y"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -8 8
-      ECU_ADDRESS 0x700300BC
+      ECU_ADDRESS 0x70030094
       PHYS_UNIT "G"
     /end MEASUREMENT
 
     /begin MEASUREMENT MagZ "MMC5983MA magnetic field Z"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -8 8
-      ECU_ADDRESS 0x700300C0
+      ECU_ADDRESS 0x70030098
       PHYS_UNIT "G"
     /end MEASUREMENT
 
     /begin MEASUREMENT MagFieldMagnitude "total field |B| - independent of orientation, ~0.48 G in Munich"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 8
-      ECU_ADDRESS 0x700300C4
+      ECU_ADDRESS 0x7003009C
       PHYS_UNIT "G"
     /end MEASUREMENT
 
     /begin MEASUREMENT MagHeading "heading from X/Y - LEVEL ONLY, uncalibrated, no declination"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 360
-      ECU_ADDRESS 0x700300C8
+      ECU_ADDRESS 0x700300A0
       PHYS_UNIT "deg"
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssPresent "1 if the NEO-M9N is answering (link alive), else 0"
       UBYTE NO_COMPU_METHOD 0 0 0 1
-      ECU_ADDRESS 0x700300CC
+      ECU_ADDRESS 0x700300A4
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssYear "UTC year from UBX-NAV-PVT"
       UWORD NO_COMPU_METHOD 0 0 0 65535
-      ECU_ADDRESS 0x700300CE
+      ECU_ADDRESS 0x700300A6
       PHYS_UNIT "y"
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssMonth "UTC month, 1..12"
       UBYTE NO_COMPU_METHOD 0 0 0 12
-      ECU_ADDRESS 0x700300D0
+      ECU_ADDRESS 0x700300A8
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssDay "UTC day of month, 1..31"
       UBYTE NO_COMPU_METHOD 0 0 0 31
-      ECU_ADDRESS 0x700300D1
+      ECU_ADDRESS 0x700300A9
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssHour "UTC hour, 0..23"
       UBYTE NO_COMPU_METHOD 0 0 0 23
-      ECU_ADDRESS 0x700300D2
+      ECU_ADDRESS 0x700300AA
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssMinute "UTC minute, 0..59"
       UBYTE NO_COMPU_METHOD 0 0 0 59
-      ECU_ADDRESS 0x700300D3
+      ECU_ADDRESS 0x700300AB
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssSecond "UTC second, 0..60 (60 during a leap second)"
       UBYTE NO_COMPU_METHOD 0 0 0 60
-      ECU_ADDRESS 0x700300D4
+      ECU_ADDRESS 0x700300AC
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssFixOk "1 = the receiver says the solution is valid (gnssFixOK set, invalidLlh clear). Necessary but NOT sufficient - use GnssNavOk"
       UBYTE NO_COMPU_METHOD 0 0 0 1
-      ECU_ADDRESS 0x700300D5
+      ECU_ADDRESS 0x700300AD
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssTimeOk "1 = UTC date and time are fully resolved. When 0 the date/time fields read 0 - the receiver's own free-running clock is NOT published, it looks like real data"
       UBYTE NO_COMPU_METHOD 0 0 0 1
-      ECU_ADDRESS 0x700300D6
+      ECU_ADDRESS 0x700300AE
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssNavOk "THE flag to gate sensor fusion on: fix valid AND 3D AND horizontal accuracy within 10 m. Independent of GnssTimeOk"
       UBYTE NO_COMPU_METHOD 0 0 0 1
-      ECU_ADDRESS 0x700300D7
+      ECU_ADDRESS 0x700300AF
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssRxBytes "NEO-M9N bytes received on ASCLIN4 since boot - the primary link-health signal"
       ULONG NO_COMPU_METHOD 0 0 0 4294967295
-      ECU_ADDRESS 0x700300D8
+      ECU_ADDRESS 0x700300B0
       PHYS_UNIT "bytes"
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssSentences "complete NMEA sentences assembled - ~6/s at the 1 Hz default nav rate"
       ULONG NO_COMPU_METHOD 0 0 0 4294967295
-      ECU_ADDRESS 0x700300DC
+      ECU_ADDRESS 0x700300B4
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssErrors "ASCLIN framing errors + RX FIFO overflows - must stay 0 on a healthy link"
       UWORD NO_COMPU_METHOD 0 0 0 65535
-      ECU_ADDRESS 0x700300E0
+      ECU_ADDRESS 0x700300B8
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssFixType "fix quality - PHASE B, currently always 0 (no NMEA parser yet)"
       UBYTE NO_COMPU_METHOD 0 0 0 5
-      ECU_ADDRESS 0x700300E2
+      ECU_ADDRESS 0x700300BA
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssNumSats "satellites used in the solution - PHASE B, currently always 0"
       UBYTE NO_COMPU_METHOD 0 0 0 32
-      ECU_ADDRESS 0x700300E3
+      ECU_ADDRESS 0x700300BB
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssLatitude "latitude from UBX-NAV-PVT, WGS84. Stored as float32 so ~0.4 m of the receiver's 1.1 cm resolution is lost - well below its ~1.5 m accuracy"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -90 90
-      ECU_ADDRESS 0x700300E4
+      ECU_ADDRESS 0x700300BC
       PHYS_UNIT "deg"
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssLongitude "longitude from UBX-NAV-PVT, WGS84"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -180 180
-      ECU_ADDRESS 0x700300E8
+      ECU_ADDRESS 0x700300C0
       PHYS_UNIT "deg"
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssAltitude "height above mean sea level (NAV-PVT hMSL)"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -1000 20000
-      ECU_ADDRESS 0x700300EC
+      ECU_ADDRESS 0x700300C4
       PHYS_UNIT "m"
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssGroundSpeed "2-D ground speed (NAV-PVT gSpeed)"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 500
-      ECU_ADDRESS 0x700300F0
+      ECU_ADDRESS 0x700300C8
       PHYS_UNIT "m/s"
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssHeading "2-D heading of motion (NAV-PVT headMot); meaningless when stationary"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -180 360
-      ECU_ADDRESS 0x700300F4
+      ECU_ADDRESS 0x700300CC
       PHYS_UNIT "deg"
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssHAccuracy "horizontal accuracy estimate (NAV-PVT hAcc) - the number that says whether the fix is trustworthy"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 10000
-      ECU_ADDRESS 0x700300F8
+      ECU_ADDRESS 0x700300D0
       PHYS_UNIT "m"
     /end MEASUREMENT
 
     /begin MEASUREMENT GnssVAccuracy "vertical accuracy estimate (NAV-PVT vAcc). Typically 1.5-2x worse than horizontal - all satellites are above the receiver, so the geometry for the vertical component is poor"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 10000
-      ECU_ADDRESS 0x700300FC
+      ECU_ADDRESS 0x700300D4
       PHYS_UNIT "m"
     /end MEASUREMENT
 

@@ -39,53 +39,44 @@
  *   0x38  float32  accelX      acceleration X [g]              (0 when absent)
  *   0x3C  float32  accelY      acceleration Y [g]
  *   0x40  float32  accelZ      acceleration Z [g]
- *   0x44  float32  gyroX       angular rate X [deg/s], BIAS-CORRECTED
- *                              (raw = this + biasX; 0 when absent)
+ *   0x44  float32  gyroX       angular rate X [deg/s], RAW -- there is no
+ *                              bias estimator in the tree (0 when absent)
  *   0x48  float32  gyroY       angular rate Y [deg/s]
  *   0x4C  float32  gyroZ       angular rate Z [deg/s]
  *   0x50  float32  imuTempC    IMU die temperature [degC]      (0 when absent)
  *
- *   --- attitude estimate (Ahrs.c), matches flight_ctrl.h conventions ---
- *   0x54  uint8    ahrsState   0 = calibrating, 1 = running, 2 = no sensor
- *   0x55  uint8    ahrsAccOk   1 while |a| ~= 1 g and the acc is trusted
- *   0x56  uint8    ahrsReserved[2]
- *   0x58  float32  roll        phi   [rad]   -> flight_ctrl phi_ist[0]
- *   0x5C  float32  pitch       theta [rad]   -> flight_ctrl phi_ist[1]
- *   0x60  float32  yaw         psi   [rad]   -> flight_ctrl phi_ist[2] (drifts)
- *   0x64  float32  rateP       p [rad/s]     -> flight_ctrl om_ist[0]
- *   0x68  float32  rateQ       q [rad/s]     -> flight_ctrl om_ist[1]
- *   0x6C  float32  rateR       r [rad/s]     -> flight_ctrl om_ist[2]
- *   0x70  float32  biasX       measured gyro bias X [deg/s]
- *   0x74  float32  biasY       measured gyro bias Y [deg/s]
- *   0x78  float32  biasZ       measured gyro bias Z [deg/s]
- *
  *   --- per-core execution time (CoreStats.c) ---
- *   0x7C  uint32   coreExecUs[6]    busy time per 100 ms window, per core [us]
- *   0x94  uint16   coreLoadPmil[6]  that time as per mille of the window
- *   0xA0  uint16   coreAlive[6]     +1 per window; frozen => that core hung
+ *   0x54  uint32   coreExecUs[6]    busy time per 100 ms window, per core [us]
+ *   0x6C  uint16   coreLoadPmil[6]  that time as per mille of the window
+ *   0x78  uint16   coreAlive[6]     +1 per window; frozen => that core hung
  *
  *   --- Ethernet (EthStats.c) ---
- *   0xAC  uint32   ethBytesPerSec   TX+RX throughput [bytes/s]
- *   0xB0  uint16   ethUtilPmil      link utilisation [per mille, 0..1000]
- *   0xB2  uint16   ethLinkMbits     negotiated link rate [Mbit/s]
+ *   0x84  uint32   ethBytesPerSec   TX+RX throughput [bytes/s]
+ *   0x88  uint16   ethUtilPmil      link utilisation [per mille, 0..1000]
+ *   0x8A  uint16   ethLinkMbits     negotiated link rate [Mbit/s]
  *
  *   --- magnetometer (Mmc5983.c), appended in v1.15.0 ---
  *   Appended at the END on purpose: every address above keeps its value, so
  *   the existing A2L entries and the GUI need no rework to stay correct.
- *   0xB4  uint8    magPresent  1 if the MMC5983MA answered at init, else 0
- *   0xB5  uint8    magReserved[3]  padding to 4-byte float alignment
- *   0xB8  float32  magX        field X [gauss] (1 G = 100 uT; 0 when absent)
- *   0xBC  float32  magY        field Y [gauss]
- *   0xC0  float32  magZ        field Z [gauss]
- *   0xC4  float32  magFieldG   |B| [gauss] — the orientation-INDEPENDENT
+ *   0x8C  uint8    magPresent  1 if the MMC5983MA answered at init, else 0
+ *   0x8D  uint8    magReserved[3]  padding to 4-byte float alignment
+ *   0x90  float32  magX        field X [gauss] (1 G = 100 uT; 0 when absent)
+ *   0x94  float32  magY        field Y [gauss]
+ *   0x98  float32  magZ        field Z [gauss]
+ *   0x9C  float32  magFieldG   |B| [gauss] — the orientation-INDEPENDENT
  *                              magnitude, ~0.48 G in Munich. The single most
  *                              useful number here: it must not change as the
  *                              board is rotated, so it validates scaling and
  *                              axis assembly at a glance (docs/MMC5983MA.md 8.5)
- *   0xC8  float32  magHeadingDeg  0..360, LEVEL-ONLY and uncalibrated, no
+ *   0xA0  float32  magHeadingDeg  0..360, LEVEL-ONLY and uncalibrated, no
  *                              declination — a bring-up aid, not navigation
  *
- * Total size 0xCC = 204 bytes. Exceeds XCP MAX_CTO (64), so clients read it in
+ *   --- GNSS (GnssM9N.c), appended in v1.18.0; ends at 0xD8 ---
+ *
+ * Total size 0xD8 = 216 bytes, leaving 40 bytes before Xcp_Cal at
+ * 0x70030100. That headroom exists only because the attitude block was
+ * removed on 2026-08-22 -- before that the block ended exactly at 0x100 and
+ * had nothing left. Exceeds XCP MAX_CTO (64), so clients read it in
  * several SHORT_UPLOADs — AurixGUI already does this for the IMU sub-block.
  * DAQ has room: 8 ODTs x 63 B = 504 B (see XCP_DAQ_MAX_ODTS in Xcp.c).
  */
@@ -122,20 +113,6 @@ typedef struct
     float32 gyroY;
     float32 gyroZ;
     float32 imuTempC;
-
-    /* attitude estimate — see Ahrs.h */
-    uint8   ahrsState;
-    uint8   ahrsAccOk;
-    uint8   ahrsReserved[2];
-    float32 roll;
-    float32 pitch;
-    float32 yaw;
-    float32 rateP;
-    float32 rateQ;
-    float32 rateR;
-    float32 biasX;
-    float32 biasY;
-    float32 biasZ;
 
     /* per-core execution time — see CoreStats.h */
     uint32  coreExecUs[6];
@@ -208,9 +185,6 @@ void measurementsSetMag(boolean present, const float32 mag[3], float32 headingDe
  * acc is [g] and gyro is [deg/s] BIAS-CORRECTED, each in X,Y,Z order. */
 void measurementsSetImu(boolean present, const float32 acc[3], const float32 gyro[3],
                         float32 temperatureC);
-
-/* Publish the attitude estimate (Ahrs.c) into the XCP block. */
-void measurementsSetAttitude(void);
 
 /* Publish per-core execution time and Ethernet utilisation. Called from the
  * 100 ms task on CPU0; reads the other cores' slots in g_coreStats. */

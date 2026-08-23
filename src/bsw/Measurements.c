@@ -2,7 +2,6 @@
 #include "Diagnostics.h"
 #include "Nvm.h"
 #include "Version.h"
-#include "Ahrs.h"
 #include "CoreStats.h"
 #include "EthStats.h"
 #include "Dts/Dts/IfxDts_Dts.h"
@@ -84,20 +83,6 @@ void measurementsInit(void)
 
     {
         uint8 i;
-        g_xcpData.ahrsState      = 0u;
-        g_xcpData.ahrsAccOk      = 0u;
-        g_xcpData.ahrsReserved[0] = 0u;
-        g_xcpData.ahrsReserved[1] = 0u;
-        g_xcpData.roll  = 0.0f;
-        g_xcpData.pitch = 0.0f;
-        g_xcpData.yaw   = 0.0f;
-        g_xcpData.rateP = 0.0f;
-        g_xcpData.rateQ = 0.0f;
-        g_xcpData.rateR = 0.0f;
-        g_xcpData.biasX = 0.0f;
-        g_xcpData.biasY = 0.0f;
-        g_xcpData.biasZ = 0.0f;
-
         for (i = 0u; i < CORESTATS_NUM_CORES; i++)
         {
             g_xcpData.coreExecUs[i]   = 0u;
@@ -108,29 +93,6 @@ void measurementsInit(void)
         g_xcpData.ethUtilPmil    = 0u;
         g_xcpData.ethLinkMbits   = 0u;
     }
-}
-
-void measurementsSetAttitude(void)
-{
-    float32 phi[3];
-    float32 om[3];
-    float32 bias[3];
-
-    Ahrs_getAttitude(phi);
-    Ahrs_getRates(om);
-    Ahrs_getGyroBias(bias);
-
-    g_xcpData.ahrsState = (uint8)Ahrs_getState();
-    g_xcpData.ahrsAccOk = (Ahrs_isAccelTrusted() != FALSE) ? 1u : 0u;
-    g_xcpData.roll      = phi[0];
-    g_xcpData.pitch     = phi[1];
-    g_xcpData.yaw       = phi[2];
-    g_xcpData.rateP     = om[0];
-    g_xcpData.rateQ     = om[1];
-    g_xcpData.rateR     = om[2];
-    g_xcpData.biasX     = bias[0];
-    g_xcpData.biasY     = bias[1];
-    g_xcpData.biasZ     = bias[2];
 }
 
 void measurementsSetSystemLoad(void)
@@ -186,7 +148,7 @@ void measurementsSetMag(boolean present, const float32 mag[3], float32 headingDe
         g_xcpData.magY       = mag[1];
         g_xcpData.magZ       = mag[2];
         /* |B| is computed here rather than in the driver so that every
-         * consumer — diagnostics, GUI, later the AHRS — uses one definition.
+         * consumer — diagnostics, GUI, later the fusion — uses one definition.
          * It is the orientation-independent check that validates scaling. */
         g_xcpData.magFieldG  = sqrtf((mag[0] * mag[0]) + (mag[1] * mag[1])
                                      + (mag[2] * mag[2]));

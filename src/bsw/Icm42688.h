@@ -32,7 +32,7 @@
 #define ICM42688_WHO_AM_I_VALUE   (0x47u)
 
 /** One IMU sample. Deliberately laid out like Mpu6050_Sample so the existing
- *  AHRS and measurement path take it unchanged. */
+ *  measurement path takes it unchanged. */
 typedef struct
 {
     float32 acc[3];    /**< acceleration [g],     sensor frame, X/Y/Z */

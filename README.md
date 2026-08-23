@@ -27,7 +27,7 @@ bench.
 | BMP581 barometer (I2C0 `0x47`) | ✅ HW-validated |
 | MMC5983MA magnetometer (I2C0 `0x30`) | ✅ HW-validated |
 | ICM-42688-P IMU (QSPI0) | ✅ HW-validated |
-| AHRS complementary filter (NED, nose-up = +90°) | ✅ |
+| Attitude estimation | ❌ removed 2026-08-22 — being rewritten from scratch |
 | Diagnostics: 28 debounced status bits, per-device peripheral health | ✅ |
 | GPIO / PWM feature on Port 00 (GTM TOM), XCP-controlled duty | ✅ |
 | Flight-control replay harness (UDP 5556) | ✅ |
@@ -122,7 +122,7 @@ reason.
 
 | Core | Role | LED |
 |---|---|---|
-| CPU0 | Ethernet/lwIP, XCP, all sensors, AHRS, diagnostics, NVM | D306 (P20.11) |
+| CPU0 | Ethernet/lwIP, XCP, all sensors, diagnostics, NVM | D306 (P20.11) |
 | CPU1 | sync + 10 ms idle task | D307 (P20.12) |
 | CPU2 | sync + 10 ms idle task | — (D308's pin is now QSPI0 SCLK) |
 | CPU3 | sync + 10 ms idle task | D309 (P20.14) |
@@ -257,7 +257,7 @@ reproduces locally with one command.
 ## Known gaps
 
 - **`docs/AurixTricore.a2l` is stale.** Its header claims v1.3.0 and a 180-byte
-  `Xcp_Data`; the reality is v1.17.0 and 204 bytes. Every sensor, AHRS, core-load
+  `Xcp_Data`; the reality is v1.17.0 and 204 bytes. Every sensor, core-load
   and Ethernet field added since v1.3.0 is missing. Regenerating it is the
   highest-value cleanup in the repo.
 - **CPU1–5 idle at 0.00 %** while CPU0 carries the entire load. The pattern to
