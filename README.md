@@ -425,7 +425,8 @@ its own licences — Infineon iLLD, SSW/SFR infrastructure, the CpuGeneric servi
 layer and the Ethernet port under the **Boost Software License 1.0**, lwIP under
 **BSD-3-Clause**, Unity under **MIT**. All are permissive and redistributable,
 and every original licence header is preserved. Full table with SPDX identifiers
-and upstream sources: [THIRD_PARTY.md](THIRD_PARTY.md).
+and upstream sources, plus the scope of the MIT grant and the trademark notice:
+[THIRD_PARTY.md](THIRD_PARTY.md).
 
 Infineon datasheets and reference manuals are **not** redistributed here.
 
