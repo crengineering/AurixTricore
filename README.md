@@ -13,8 +13,7 @@ bench.
 
 ### Companion repositories
 
-This is the firmware half of a three-repository project. Each side documents
-itself; nothing is described twice.
+This is the firmware half of a three-repository project.
 
 | Repository | Owns |
 |---|---|
@@ -29,8 +28,7 @@ itself; nothing is described twice.
 *TriBoard TC3X9 V2.0 running v1.18.0. ICM-42688-P on QSPI0, BMP581 and MMC5983MA
 sharing I2C0, NEO-M9N on ASCLIN4, RGMII to the host running AurixGUI, console on
 ASCLIN0 over the on-board USB-to-UART. Every pin is listed in
-[`docs/PINNING.md`](docs/PINNING.md), which is the single source of truth — the
-labels above name the interfaces only, so the two cannot drift apart.*
+[`docs/PINNING.md`](docs/PINNING.md).*
 
 ### System architecture
 
