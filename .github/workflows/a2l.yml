@@ -28,6 +28,12 @@ concurrency:  # supersede an in-flight run when new commits land on the same ref
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege: every job here only reads the checkout. Declared
+# explicitly so the token stays read-only regardless of the repository
+# default, which matters once anyone can open a pull request.
+permissions:
+  contents: read
+
 jobs:
   a2l:
     name: A2L matches the C structs

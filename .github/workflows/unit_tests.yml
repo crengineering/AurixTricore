@@ -10,6 +10,12 @@ concurrency:  # if commits getting staged and pipeline is not finished, it stops
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege: every job here only reads the checkout. Declared
+# explicitly so the token stays read-only regardless of the repository
+# default, which matters once anyone can open a pull request.
+permissions:
+  contents: read
+
 jobs:
   unittests:
     name: C Unit tests
