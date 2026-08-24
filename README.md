@@ -24,6 +24,34 @@ itself; nothing is described twice.
 
 ---
 
+![TriBoard TC3X9 with the IMU, barometer, magnetometer and GNSS receiver wired to the PERIPHERALS header](docs/img/AURIX-Triboard-setup.jpg)
+
+*TriBoard TC3X9 V2.0 running v1.18.0. ICM-42688-P on QSPI0, BMP581 and MMC5983MA
+sharing I2C0, NEO-M9N on ASCLIN4, RGMII to the host running AurixGUI, console on
+ASCLIN0 over the on-board USB-to-UART. Every pin is listed in
+[`docs/PINNING.md`](docs/PINNING.md), which is the single source of truth — the
+labels above name the interfaces only, so the two cannot drift apart.*
+
+### System architecture
+
+[![Single-line system architecture: LiPo pack through fusing and distribution to the 4-in-1 ESC and four motors, and the TC399 with its 5 V supply, peripherals header and the four sensors](docs/img/system-architecture.png)](docs/img/system-architecture.png)
+
+*Single-line diagram of the whole vehicle — power distribution and fusing, the
+4-in-1 ESC and motor bus, the 5 V regulator feeding the board, and every sensor
+line off the peripherals header including the level shifting and the pull-ups.
+Click to open full size and zoom.*
+
+> **Target design, not yet built.** The sensor and Ethernet half is implemented and
+> hardware-validated; the propulsion half — LiPo, fusing, ESC, motors and the DShot
+> lines to them — is the planned architecture. DShot is an open item in
+> [Status](#status). Annotated in German.
+
+Source: [`docs/system-architecture.drawio`](docs/system-architecture.drawio), editable in
+[diagrams.net](https://app.diagrams.net/). The PNG is an editable export too, so
+either file reopens as a diagram.
+
+---
+
 ## What runs today
 
 | Area | State |
