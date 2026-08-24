@@ -34,15 +34,15 @@ src/bsw/             Base software (owns hardware + generic services;
   Version.h          SW version (bump on releases; then verify via XCP —
                      amk may miss the rebuild of including files!)
   Uart.c, led.c, scheduler.c
-src/asw/             Application software (vision pipeline, from M1 on;
-                     calls BSW only, never iLLD — see asw/README.md)
+src/asw/             Application software (flight control: flight_ctrl.c,
+                     CtrlReplay.c, state estimator to come; calls BSW only,
+                     never iLLD — see asw/README.md)
 docs/                CODEMAP.md (what a change touches, across code/A2L/GUI/docs
                      — read before adding a sensor, field, diag bit or param),
                      ILLD_NOTES.md (READ FIRST for any iLLD work — signatures +
                      the traps; saves grepping 801 vendor files), PINNING.md
                      (pin allocation SSoT), DIAGNOSTICS.md (diag bits, cal
-                     block), OBJECT_DETECTION.md (vision roadmap),
-                     per-peripheral notes (BMP581.md, ICM42688P.md, …),
+                     block), per-peripheral notes (BMP581.md, ICM42688P.md, …),
                      AurixTricore.a2l, Infineon PDFs (use the readpdf skill)
 tools/               xcp_test.py, nvm_test.py (pyXCP validation)
                      misra_check.py + misra_baseline.txt (MISRA gate, see below)

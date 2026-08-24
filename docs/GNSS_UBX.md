@@ -349,5 +349,5 @@ Trust this note's silence only within the list above.
 
 - `docs/PINNING.md` §2.7 — ASCLIN4 pins, the 1 kΩ/2 kΩ divider on P22.5, supply
 - `docs/ILLD_NOTES.md` — ASCLIN driver traps
-- `docs/SENSORS.md:133` — the NAV-PVT bandwidth/CPU budget this note enables
+- `docs/PINNING.md` §2.5 — I2C0 bus budget and the CPU load this note enables
 - `src/bsw/GnssM9N.c` — driver; `test/test_GnssM9N.c` — host tests
