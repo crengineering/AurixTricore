@@ -246,6 +246,18 @@ void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)
     }
 }
 
+void measurementsSetFusion(boolean present, float32 elapsed)
+{
+    if (present != FALSE)
+    {
+        g_xcpData.fusionElapsed = elapsed;
+    }
+    else
+    {
+        g_xcpData.fusionElapsed = 0.0f;
+    }
+}
+
 void measurementsUpdate(void)
 {
     uint8 rawVdd   = IfxPmsEvr_getSecondaryAdcResult(&MODULE_PMS, IfxPmsEvr_SupplyMode_evrc);

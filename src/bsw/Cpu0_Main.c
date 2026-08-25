@@ -24,6 +24,8 @@
 #include "Spi.h"
 #include "Icm42688.h"
 #include "GnssM9N.h"
+#include "fusion.h"
+#include "SysTime.h"
 
 /* Temporary bring-up switch: 1 = drive P22.8/P22.7 as GPIO instead of starting
  * the QSPI, to prove whether those pads can drive at all. Set back to 0. */
@@ -306,11 +308,16 @@ static void Task_Imu(void)
 {
     Icm42688_Sample sample = { { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 0.0f };
     boolean         present;
+    static uint32   last_ticks = 0u;
 
     /* Called unconditionally, like the other sensor tasks: Icm42688_read()
      * owns the presence state and uses these calls to probe for a reconnected
      * sensor. */
     present = Icm42688_read(&sample);
+
+    /* update sensor fusion */
+    Fusion_update(sample.acc, SysTime_getTimeElapsedS(&last_ticks), present);
+    measurementsSetFusion(present, SysTime_getTimeElapsedS(&last_ticks));
 
     {
         /* Raw angular rate: there is no bias estimator in the tree, so the

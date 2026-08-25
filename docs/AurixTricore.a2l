@@ -8,7 +8,7 @@
  *
  * All objects live at fixed addresses (TASKING __at), so this file does not
  * depend on the link run:
- *   Xcp_Data  (measurements)          0x70030000, 216 bytes, Measurements.h
+ *   Xcp_Data  (measurements)          0x70030000, 220 bytes, Measurements.h
  *   Xcp_Cal   (calibration, RAM only) 0x70030100, 64 bytes, Diagnostics.h
  *   Xcp_Nvm   (persistent, DFLASH)    0x70030200, 16 bytes, Nvm.h
  *   Xcp_Gpio  (GPIO control, RAM only) 0x70030300, 52 bytes, gpio.h
@@ -506,6 +506,11 @@ ASAP2_VERSION 1 61
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 10000
       ECU_ADDRESS 0x700300D4
       PHYS_UNIT "m"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT fusionElapsed "fusionElapsed (no description in a2l_meta.json)"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -1e12 1e12
+      ECU_ADDRESS 0x700300D8
     /end MEASUREMENT
 
     /* individual diagnostics bits (BIT_MASK views on DiagStatus) */

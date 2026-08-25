@@ -11,10 +11,12 @@
 #define SYSTIME_H
 
 #include <stdint.h>
+#include "Ifx_Types.h"
 
 /* Lower 32 bit of the STM0 counter (100 MHz after PLL init, 1 tick =
  * 10 ns); wraps after ~42.9 s. Deltas computed with unsigned
  * subtraction stay correct across a single wrap. */
 uint32_t SysTime_getTicks(void);
+float32  SysTime_getTimeElapsedS(uint32 *lastTicks);
 
 #endif /* SYSTIME_H */

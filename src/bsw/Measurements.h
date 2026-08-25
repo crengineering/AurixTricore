@@ -165,6 +165,8 @@ typedef struct
     float32 gnsshAccM;
     float32 gnssvAccM;
 
+    float32 fusionElapsed;
+
 } Xcp_Data;
 
 void measurementsInit(void);    /* DTS + DTSC + EVR monitor init (CPU0)  */
@@ -194,5 +196,10 @@ void measurementsSetSystemLoad(void);
  * Publish the latest gnss sample into the XCP block. Called by the measurement task
  */
 void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info);
+
+/*
+ * Publish the fusion results
+ */
+void measurementsSetFusion(boolean present, float32 elapsed);
 
 #endif /* MEASUREMENTS_H_ */

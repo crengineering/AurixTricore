@@ -2,4 +2,9 @@
  * \file GnssM9N.c
  * \brief
  *********************************************************************************************************************/
+#include "fusion.h"
 
+
+void Fusion_update(const float32 acc[3], float32 dt, boolean valid){
+
+}
