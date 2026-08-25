@@ -8,9 +8,9 @@ uint32_t SysTime_getTicks(void)
     return (uint32_t)IfxStm_getLower(&MODULE_STM0);
 }
 
-float32 SysTime_getTimeElapsedS(uint32 *lastTicks){
-    uint32 now = SysTime_getTicks();
-    uint32 elapsed = now - *lastTicks;
+float SysTime_getTimeElapsedS(uint32_t *lastTicks){
+    uint32_t now = SysTime_getTicks();
+    uint32_t elapsed = now - *lastTicks;
     *lastTicks = now;
 
     return (float) (elapsed * 1e-08f);

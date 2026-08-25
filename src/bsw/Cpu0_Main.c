@@ -316,8 +316,9 @@ static void Task_Imu(void)
     present = Icm42688_read(&sample);
 
     /* update sensor fusion */
-    Fusion_update(sample.acc, SysTime_getTimeElapsedS(&last_ticks), present);
-    measurementsSetFusion(present, SysTime_getTimeElapsedS(&last_ticks));
+    float32         elapsedTime = SysTime_getTimeElapsedS(&last_ticks);
+    Fusion_update(sample.acc, elapsedTime , present);
+    measurementsSetFusion(present, elapsedTime);
 
     {
         /* Raw angular rate: there is no bias estimator in the tree, so the
