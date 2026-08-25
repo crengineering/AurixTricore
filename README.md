@@ -32,12 +32,14 @@ ASCLIN0 over the on-board USB-to-UART. Every pin is listed in
 
 ### System architecture
 
-[![Single-line system architecture: LiPo pack through fusing and distribution to the 4-in-1 ESC and four motors, and the TC399 with its 5 V supply, peripherals header and the four sensors](docs/img/system-architecture.png)](docs/img/system-architecture.png)
+[![System architecture: LiPo pack through anti-spark connector, fusing and distribution to the 4-in-1 ESC and four motors, a separately fused and filtered branch into the board's X501 power connector, and every sensor line off the peripherals header](docs/img/system-architecture.png)](docs/img/system-architecture.png)
 
-*Single-line diagram of the whole vehicle — power distribution and fusing, the
-4-in-1 ESC and motor bus, the 5 V regulator feeding the board, and every sensor
-line off the peripherals header including the level shifting and the pull-ups.
-Click to open full size and zoom.*
+*System architecture. Power distribution from the pack through the XT90-S
+anti-spark connector, an 80 A fuse and the XT60 splitter to the 4-in-1 ESC and
+the four motors. A separately fused 2 A branch feeds the board's X501 connector
+through a ferrite, a TVS diode and a 470 µF buffer. On the signal side, every
+sensor line off the peripherals header including the level shifting and the
+pull-ups. Click to open full size and zoom.*
 
 > **Target design, not yet built.** The sensor and Ethernet half is implemented and
 > hardware-validated; the propulsion half — LiPo, fusing, ESC, motors and the DShot
