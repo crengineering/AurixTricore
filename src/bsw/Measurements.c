@@ -246,15 +246,17 @@ void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)
     }
 }
 
-void measurementsSetFusion(boolean present, float32 elapsed)
+void measurementsSetFusion(FusionValues *fusion, boolean present, float32 elapsed)
 {
     if (present != FALSE)
     {
         g_xcpData.fusionElapsed = elapsed;
+        g_xcpData.a_D           = fusion->a_D;
     }
     else
     {
         g_xcpData.fusionElapsed = 0.0f;
+        g_xcpData.a_D           = 0.0f;
     }
 }
 

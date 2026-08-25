@@ -3,6 +3,7 @@
 
 #include "Ifx_Types.h"
 #include "GnssM9N.h"
+#include "fusion.h"
 
 /* Live measurement block read by XCP masters (pyXCP, AurixGUI) via
  * SHORT_UPLOAD. Pinned to a fixed address so clients do not need the map
@@ -166,6 +167,7 @@ typedef struct
     float32 gnssvAccM;
 
     float32 fusionElapsed;
+    float32 a_D;
 
 } Xcp_Data;
 
@@ -200,6 +202,6 @@ void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info);
 /*
  * Publish the fusion results
  */
-void measurementsSetFusion(boolean present, float32 elapsed);
+void measurementsSetFusion(FusionValues *fusion, boolean present, float32 elapsed);
 
 #endif /* MEASUREMENTS_H_ */

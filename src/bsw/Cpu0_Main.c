@@ -309,6 +309,8 @@ static void Task_Imu(void)
     Icm42688_Sample sample = { { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 0.0f };
     boolean         present;
     static uint32   last_ticks = 0u;
+    boolean         fusion_valid = TRUE;
+    FusionValues    fusion;
 
     /* Called unconditionally, like the other sensor tasks: Icm42688_read()
      * owns the presence state and uses these calls to probe for a reconnected
@@ -316,9 +318,14 @@ static void Task_Imu(void)
     present = Icm42688_read(&sample);
 
     /* update sensor fusion */
-    float32         elapsedTime = SysTime_getTimeElapsedS(&last_ticks);
-    Fusion_update(sample.acc, elapsedTime , present);
-    measurementsSetFusion(present, elapsedTime);
+    float32 elapsedTime = SysTime_getTimeElapsedS(&last_ticks);
+    if ( (elapsedTime < 0.001f) ||
+         (elapsedTime > 0.2f))
+    {
+        fusion_valid = FALSE;
+    }
+    Fusion_update(&fusion, sample.acc, elapsedTime, fusion_valid && present);
+    measurementsSetFusion(&fusion, present, elapsedTime);
 
     {
         /* Raw angular rate: there is no bias estimator in the tree, so the
