@@ -105,16 +105,11 @@ without it `IfxPort.c` takes the wrong `#else` branch and GPIO silently fails.
 
 ```bat
 build.bat            :: incremental, headless (works while ADS is open)
-build.bat clean      :: after any header change — see the gotcha below
+build.bat clean      :: full rebuild, after any header change
 ```
 
 Or in the IDE: `Project → Clean`, then `Ctrl+B`. Expected:
 `Build Finished. 0 errors, 0 warnings.`
-
-> ⚠️ **`amk` does not reliably rebuild on header changes.** A stale `.o` (or even
-> a stale `.src`) will happily link the old constant into the ELF. After editing
-> a `.h`, use `build.bat clean` — and verify the version string over XCP before
-> believing a release.
 
 ### Flash
 
@@ -215,7 +210,7 @@ Static IP `192.168.0.10/24`, set in `Cpu0_Main.c`.
 | ICM-42688-P IMU | QSPI0 | SLSO10 | 50 Hz | `docs/ICM42688P.md` |
 | BMP581 barometer | I2C0 | `0x47` | 50 Hz | `docs/BMP581.md` |
 | MMC5983MA magnetometer | I2C0 | `0x30` | 50 Hz | `docs/MMC5983MA.md` |
-| u-blox NEO-M9N GNSS | ASCLIN4 | UART 38 400 | 1 Hz | `docs/GNSS_UBX.md` |
+| u-blox NEO-M9N GNSS | ASCLIN4 | UART 38 400 | 10 Hz | `docs/GNSS_UBX.md` |
 
 `Bmp388.c` and `Mpu6050.c` remain in-tree as a validated driver pool — compiled,
 never called, held with justified MISRA 8.7 deviations.

@@ -282,8 +282,8 @@ pin 16 SCLK→P22.8, pin 18 SDIO→P22.10, pin 20 SDO→P22.9, pin 3 INT1→P22.
 | MMC5983MA (3×18‑bit) | ~10 | ~0.22 ms | 100 Hz | ~2.3 % |
 | **Total I2C0** | | | | **~3.3 %** |
 
-The GNSS was planned on I2C0 at 10 Hz (~2.4 % more) but ships on **ASCLIN4 UART at
-1 Hz** instead (§2.7), so it costs I2C0 nothing. Measured CPU0 load is ~9.4 %, of
+The GNSS was planned on I2C0 at 10 Hz (~2.4 % more) but ships on **ASCLIN4 UART**
+instead (§2.7), still at 10 Hz, so it costs I2C0 nothing. Measured CPU0 load is ~9.4 %, of
 which roughly 91 % is literal wire time at 100 kHz — the blocking driver means bus
 time *is* CPU time. Moving to 400 kHz would cut it to ~2.5 %.
 
