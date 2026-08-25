@@ -9,14 +9,20 @@
 #include "Ifx_Types.h"
 
 
-
+/* imu acc */
 #define SIGMA_A 0.3f /* m/s2 */
 #define GRAVITY 9.80665f
+
+/* bmp */
+#define SIGMA_BARO 0.0197 /* m */
+#define R_BARO SIGMA_BARO * SIGMA_BARO
 
 
 typedef struct
 {
     float a_D;
+    float a_d;
+    float a_v_d;
 } FusionValues;
 
 

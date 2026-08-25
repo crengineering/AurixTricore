@@ -252,6 +252,8 @@ void measurementsSetFusion(FusionValues *fusion, boolean present, float32 elapse
     {
         g_xcpData.fusionElapsed = elapsed;
         g_xcpData.a_D           = fusion->a_D;
+        g_xcpData.a_v_d         = fusion->a_v_d;
+        g_xcpData.a_d           = fusion->a_d;
     }
     else
     {

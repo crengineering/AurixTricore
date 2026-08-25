@@ -168,6 +168,8 @@ typedef struct
 
     float32 fusionElapsed;
     float32 a_D;
+    float32 a_v_d;
+    float32 a_d;
 
 } Xcp_Data;
 
