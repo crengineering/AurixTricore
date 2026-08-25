@@ -44,7 +44,7 @@ pull-ups. Click to open full size and zoom.*
 > **Target design, not yet built.** The sensor and Ethernet half is implemented and
 > hardware-validated; the propulsion half — LiPo, fusing, ESC, motors and the DShot
 > lines to them — is the planned architecture. DShot is an open item in
-> [Status](#status). Annotated in German.
+> [Status](#status).
 
 Source: [`docs/system-architecture.drawio`](docs/system-architecture.drawio), editable in
 [diagrams.net](https://app.diagrams.net/). The PNG is an editable export too, so
