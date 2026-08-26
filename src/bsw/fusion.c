@@ -1021,10 +1021,23 @@ void Fusion_setGnss(sint32 latDeg1e7, sint32 lonDeg1e7, float32 altM,
          * the one already fused. Without the time-of-week check those repeats
          * would be counted as fresh evidence and the covariance would shrink
          * for information that was never there. */
-        const boolean sane = (fusion_usable(altM, FUSION_ALT_MAX) != FALSE)
-                          && (fusion_usable(speedMps, FUSION_INPUT_MAX) != FALSE)
-                          && (fusion_usable(headingDeg, FUSION_INPUT_MAX) != FALSE)
-                          && (fusion_usable(hAccM, FUSION_ALT_MAX) != FALSE);
+        /* Assigned through an if rather than from the && chain directly: the
+         * chain has essential type int, and storing that in a boolean (an
+         * unsigned char here) is a narrowing across type categories that
+         * MISRA 10.3 rejects. Same idiom as the rest of this file. */
+        boolean sane = FALSE;
+
+        if ((fusion_usable(altM, FUSION_ALT_MAX) != FALSE)
+            && (fusion_usable(speedMps, FUSION_INPUT_MAX) != FALSE)
+            && (fusion_usable(headingDeg, FUSION_INPUT_MAX) != FALSE)
+            && (fusion_usable(hAccM, FUSION_ALT_MAX) != FALSE))
+        {
+            sane = TRUE;
+        }
+        else
+        {
+            /* at least one field is NaN, infinite or absurd */
+        }
 
         if (sane == FALSE)
         {
