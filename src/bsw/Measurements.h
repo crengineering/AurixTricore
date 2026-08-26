@@ -229,8 +229,10 @@ typedef struct
  *   0x9C  uint32  baroRejects, baroResets, gnssRejects, gnssUpdates
  *   0xAC  uint8   verticalOk, horizontalOk, originSet, reserved2
  *   0xB0  uint32  covResets    numerical health check trips — MUST be 0
+ *   0xB4  uint32  gnssITow     iTOW of the last fix fused [ms]
+ *   0xB8  uint32  gnssDupes    polls carrying an already-fused fix
  *
- * Total 0xB4 = 180 bytes, leaving 76 before the next slot at 0x70030600.
+ * Total 0xBC = 188 bytes, leaving 68 before the next slot at 0x70030600.
  * Exceeds XCP MAX_CTO (64), so clients read it in several SHORT_UPLOADs.
  * --------------------------------------------------------------------------- */
 #define XCP_FUSION_ADDR   0x70030500u
@@ -287,6 +289,8 @@ typedef struct
     uint8   reserved2;
 
     uint32  covResets;
+    uint32  gnssITow;
+    uint32  gnssDupes;
 } Xcp_Fusion;
 
 extern volatile Xcp_Fusion g_xcpFusion;

@@ -329,6 +329,8 @@ void measurementsSetFusion(const FusionValues *fusion, const Ahrs_Values *ahrs,
     g_xcpFusion.originSet    = fusion->originSet;
     g_xcpFusion.reserved2    = 0u;
     g_xcpFusion.covResets    = fusion->covResets;
+    g_xcpFusion.gnssITow     = fusion->gnssITow;
+    g_xcpFusion.gnssDupes    = fusion->gnssDupes;
 }
 
 void measurementsUpdate(void)

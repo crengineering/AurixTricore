@@ -308,9 +308,26 @@ Quick health read, in order of what to distrust first:
 ## 7. What is not validated yet
 
 - **The whole horizontal channel.** It never executes without a GNSS fix, and
-  there is no fix indoors. Needs an outdoor run: check `originSet` goes to 1,
-  `gnssUpdates` increments at 1 Hz (not 10 — that would mean the `iTOW` new-fix
-  check is broken), and `posN`/`posE` track a walked rectangle.
+  there is no fix indoors. Run `tools/nav_outdoor_check.py`: `originSet` must go
+  to 1, `gnssUpdates` must keep climbing with `gnssITow` advancing alongside it,
+  and `posN`/`posE` must track a walked rectangle that closes on itself.
+
+  ⚠️ **The receiver runs NAV-PVT at 10 Hz**, not 1 Hz — `CFG_RATE_MEAS` is
+  100 ms with one message per epoch (`GnssM9N.c`). That is the same rate
+  `Task_Measure100ms` polls at, on an independent clock, so the update RATE
+  cannot distinguish a working `iTOW` guard from a missing one; both give ~10/s.
+  What it does catch is `iTOW` failing to decode at all, which freezes
+  `gnssUpdates` after the first fix while the position silently goes stale.
+
+- **GNSS measurement correlation at 10 Hz.** Consecutive NAV-PVT solutions are
+  NOT independent: the receiver filters internally at the nav rate, so
+  successive fixes share most of their information. The channel filters treat
+  each as a fresh independent measurement, which overstates the evidence and
+  drives the covariance below the truth. The observable consequence is a gate
+  that tightens until good fixes start being rejected, so watch `gnssRejects`
+  on the outdoor run. The fix is to decimate to 1–2 Hz for fusion or to inflate
+  the GNSS R; which one is better is not yet decided, and the outdoor numbers
+  are what should decide it.
 - **GNSS altitude anchoring the barometer bias.** Same reason.
 - **Yaw accuracy against a known TRUE heading.** The transform and the
   calibration are both validated, but nothing has yet checked that yaw reads the

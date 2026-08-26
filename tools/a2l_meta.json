@@ -1086,6 +1086,19 @@
       "desc": "numerical health-check trips. MUST stay 0 - any other value is a bug, not a tuning problem",
       "lo": "0",
       "hi": "4294967295"
+    },
+    "gnssITow": {
+      "name": "GnssITow",
+      "desc": "GPS time of week of the last fix actually fused; frozen with gnssUpdates stalled means iTOW is not being decoded",
+      "unit": "ms",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "gnssDupes": {
+      "name": "GnssDupes",
+      "desc": "polls that carried an already-fused fix; small but non-zero is healthy, exactly zero or near the poll rate is a fault",
+      "lo": "0",
+      "hi": "4294967295"
     }
   }
 }

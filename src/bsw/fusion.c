@@ -560,6 +560,8 @@ void Fusion_init(void)
     s_navState.gnssRejects  = 0u;
     s_navState.gnssUpdates  = 0u;
     s_navState.covResets    = 0u;
+    s_navState.gnssITow     = 0u;
+    s_navState.gnssDupes    = 0u;
     s_navState.verticalOk   = 0u;
     s_navState.horizontalOk = 0u;
     s_navState.originSet    = 0u;
@@ -874,11 +876,12 @@ void Fusion_setGnss(sint32 latDeg1e7, sint32 lonDeg1e7, float32 altM,
 {
     if (valid != FALSE)
     {
-        /* NAV-PVT arrives at 1 Hz but this is polled at 10 Hz. Without the
-         * time-of-week check the same fix would be fused ten times over,
-         * collapsing the covariance as though ten independent measurements had
-         * arrived — and the filter would then reject the next genuine fix
-         * because it had become far too sure of itself. */
+        /* Solutions arrive at 10 Hz (CFG_RATE_MEAS = 100 ms, one NAV-PVT per
+         * epoch) and this is polled at 10 Hz on an independent clock, so the
+         * two beat against each other: most polls carry a new fix, some carry
+         * the one already fused. Without the time-of-week check those repeats
+         * would be counted as fresh evidence and the covariance would shrink
+         * for information that was never there. */
         if ((s_haveITow == FALSE) || (iTOW != s_lastITow))
         {
             s_lastITow    = iTOW;
@@ -890,10 +893,16 @@ void Fusion_setGnss(sint32 latDeg1e7, sint32 lonDeg1e7, float32 altM,
             s_gnssHeading = headingDeg;
             s_gnssHAcc    = hAccM;
             s_gnssNew     = TRUE;
+            s_navState.gnssITow = iTOW;
         }
         else
         {
-            /* same fix as last time — already fused */
+            /* Same fix as last time. Counted rather than ignored silently: a
+             * dupe count of exactly zero over a long run means iTOW is not
+             * changing at all, and a count near the poll rate means the fix is
+             * not being refreshed. Both are faults that leave the position
+             * looking entirely plausible. */
+            s_navState.gnssDupes++;
         }
     }
     else

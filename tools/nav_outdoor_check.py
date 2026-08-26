@@ -13,15 +13,21 @@ It does three things:
   3. records the state and, at the end, checks the ONE thing most likely to be
      silently wrong
 
-THE CHECK THAT MATTERS: gnssUpdates must increment at about 1 Hz.
+THE CHECK THAT MATTERS: gnssUpdates must keep incrementing, and gnssITow must
+keep advancing with it.
 
-UBX-NAV-PVT arrives at 1 Hz but Task_Measure100ms polls at 10 Hz. Fusion_setGnss
-is supposed to ignore a repeat of the same iTOW; if that guard is broken, the
-same fix is fused ten times over, the covariance collapses as though ten
-independent measurements had arrived, and the filter then rejects the next
-genuine fix. The failure is quiet -- the position still looks plausible -- so it
-has to be measured rather than eyeballed. A rate near 10/s means the guard is
-broken; near 1/s means it works.
+The receiver is configured for a 100 ms measurement rate with one NAV-PVT per
+epoch (CFG_RATE_MEAS / CFG_RATE_NAV in GnssM9N.c), so solutions arrive at 10 Hz
+-- the SAME rate Task_Measure100ms polls at, on an independent clock.
+
+That means the update RATE alone proves nothing: a working iTOW guard and a
+removed one both give about 10 updates/s. What the rate does catch is the real
+failure, which is iTOW not being decoded at all. Then the first fix is accepted,
+every later one looks like a duplicate, and gnssUpdates FREEZES while the
+position quietly goes stale. So: updates must keep climbing, gnssITow must keep
+advancing, and gnssDupes must be small but non-zero (exactly zero over a long
+run means iTOW is changing on every single poll, which at equal rates it should
+not).
 
 Usage
 -----
@@ -63,6 +69,8 @@ F_VAR_N = F + 0x8C
 F_GNSS_REJ, F_GNSS_UPD = F + 0xA4, F + 0xA8
 F_ORIGIN_SET = F + 0xAE
 F_COV_RESETS = F + 0xB0
+F_GNSS_ITOW = F + 0xB4
+F_GNSS_DUPES = F + 0xB8
 
 
 def u8(x, a):
@@ -145,6 +153,7 @@ def main():
                 baroBias=f32(x, F_BARO_BIAS),
                 upd=u32(x, F_GNSS_UPD), rej=u32(x, F_GNSS_REJ),
                 cov=u32(x, F_COV_RESETS),
+                itow=u32(x, F_GNSS_ITOW), dupes=u32(x, F_GNSS_DUPES),
             )
             rows.append(r)
             print(f"{t:6.1f} {r['posN']:+7.2f} {r['posE']:+7.2f} "
@@ -161,8 +170,14 @@ def main():
         rate = dupd / dt if dt > 0 else 0.0
         drej = rows[-1]["rej"] - rows[0]["rej"]
 
+        ditow = rows[-1]["itow"] - rows[0]["itow"]
+        ddup = rows[-1]["dupes"] - rows[0]["dupes"]
+
         print(f"duration          {dt:.0f} s")
-        print(f"GNSS fixes fused  {dupd}  ->  {rate:.2f} /s")
+        print(f"GNSS fixes fused  {dupd}  ->  {rate:.2f} /s   (10 Hz expected)")
+        print(f"iTOW advanced     {ditow} ms over {dt:.0f} s "
+              f"(should track wall clock)")
+        print(f"duplicate polls   {ddup}")
         print(f"GNSS rejected     {drej}")
         print(f"covResets         {rows[-1]['cov']}")
         print(f"final varN        {rows[-1]['varN']:.2f} m^2 "
@@ -171,18 +186,33 @@ def main():
               f"{rows[-1]['baroBias']:+.3f} m")
 
         ok = True
-        if rate > 3.0:
-            print(f"\n!! FAIL: {rate:.1f} fixes/s. NAV-PVT is 1 Hz, so the iTOW "
-                  "new-fix guard in Fusion_setGnss is not working and the same "
-                  "fix is being fused repeatedly.")
+        if rate < 1.0:
+            print(f"\n!! FAIL: only {rate:.2f} fixes/s against the 10 Hz "
+                  "expected. If iTOW is frozen too, it is not being decoded "
+                  "and every fix after the first is discarded as a duplicate "
+                  "-- the position then goes stale while still looking "
+                  "entirely plausible.")
             ok = False
-        elif rate < 0.5:
-            print(f"\n!! Only {rate:.2f} fixes/s -- fewer than the 1 Hz expected. "
-                  "Either the fix is dropping out or navOk is flapping.")
+        elif ditow < (dt * 500.0):
+            print(f"\n!! FAIL: iTOW advanced only {ditow} ms in {dt:.0f} s. It "
+                  "should track the wall clock; a stalled iTOW means the field "
+                  "is not being decoded even though fixes are arriving.")
             ok = False
         else:
-            print(f"\nOK: fix rate {rate:.2f}/s is the expected 1 Hz -- the iTOW "
-                  "guard works.")
+            print(f"\nOK: {rate:.2f} fixes/s with iTOW tracking the clock -- "
+                  "real fixes are reaching the filter.")
+
+        # Correlation warning. Deliberately NOT pass/fail: it is a tuning
+        # judgement that these numbers can inform but not settle.
+        if drej > (0.05 * max(dupd, 1)):
+            print(f"\n!! {drej} of {dupd} fixes rejected "
+                  f"({100 * drej / max(dupd, 1):.0f}%). At 10 Hz consecutive "
+                  "NAV-PVT solutions are NOT independent -- the receiver "
+                  "filters internally at the nav rate, so successive fixes "
+                  "share most of their information. Fusing every one at face "
+                  "value shrinks the covariance below the truth, which "
+                  "tightens the gate and starts rejecting good fixes. Fix by "
+                  "decimating to 1-2 Hz for fusion, or by inflating the GNSS R.")
 
         if rows[-1]["cov"] != 0:
             print("!! FAIL: covResets is non-zero. That is a numerical bug, "

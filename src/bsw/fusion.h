@@ -84,6 +84,14 @@ typedef struct
     uint32  covResets;    /**< covariance re-initialisations forced by the
                            *   numerical health check. MUST stay zero — any
                            *   other value is a bug, not a tuning problem      */
+    uint32  gnssITow;     /**< iTOW of the last fix actually fused [ms]. The
+                           *   direct check on the new-fix guard: if this is
+                           *   frozen while gnssUpdates also stops, iTOW is not
+                           *   being decoded and every later fix is discarded
+                           *   as a duplicate                                  */
+    uint32  gnssDupes;    /**< polls that carried a fix already fused. Expected
+                           *   to be small but NON-ZERO: the 10 Hz poll and the
+                           *   10 Hz solution are on independent clocks         */
     uint8   verticalOk;   /**< 1 once the barometer has anchored the channel  */
     uint8   horizontalOk; /**< 1 once the tangent-plane origin is set         */
     uint8   originSet;    /**< 1 once a usable fix defined the origin         */
@@ -110,10 +118,18 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, bo
 void Fusion_setBaroAlt(float32 altM, boolean valid);
 
 /** Latch a GNSS fix for the next Fusion_update() to consume. Ignored unless
- *  \p iTOW differs from the previous call: NAV-PVT arrives at 1 Hz but this is
- *  polled at 10 Hz, and injecting the same fix ten times would collapse the
- *  covariance as though ten independent measurements had arrived — after
- *  which the filter rejects the next genuine one.
+ *  \p iTOW differs from the previous call.
+ *
+ *  The receiver is configured for a 100 ms measurement rate and one NAV-PVT per
+ *  epoch (CFG_RATE_MEAS / CFG_RATE_NAV in GnssM9N.c), so solutions arrive at
+ *  10 Hz — the same rate this is polled at, but on an independent clock. The
+ *  guard therefore skips the occasional duplicate rather than nine out of ten
+ *  of them, and gnssDupes counts those.
+ *
+ *  ⚠️ Successive 10 Hz solutions are NOT independent measurements: the
+ *  receiver runs its own filter at the nav rate, so consecutive fixes share
+ *  most of their information. Fusing every one at face value overstates the
+ *  evidence and drives the covariance below the truth. See docs/FUSION.md.
  *  \param latDeg1e7  latitude  [1e-7 deg], the receiver's native integer
  *  \param lonDeg1e7  longitude [1e-7 deg] — integers on purpose, float32
  *                    degrees only resolve to about 0.4 m at this latitude
