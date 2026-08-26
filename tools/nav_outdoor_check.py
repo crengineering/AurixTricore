@@ -85,6 +85,46 @@ def f32(x, a):
     return struct.unpack("<f", bytes(x.shortUpload(4, a, 0))[:4])[0]
 
 
+UNITS = {
+    "posN": "m", "posE": "m", "posD": "m",
+    "velN": "m/s", "velE": "m/s", "velD": "m/s",
+    "innovN": "m", "innovE": "m",
+    "varN": "m^2", "baroBias": "m",
+    "upd": "", "rej": "", "cov": "", "itow": "ms", "dupes": "",
+}
+
+
+def write_mf4(path, rows):
+    """Export the record as ASAM MDF4.
+
+    Deliberately done at the END, from rows that are already safely on disk in
+    the CSV. Writing MDF incrementally would put a heavier dependency in the
+    sampling loop, and a failure there would cost the walk -- which is the one
+    thing that cannot be repeated cheaply.
+    """
+    try:
+        import numpy as np
+        from asammdf import MDF, Signal
+    except ImportError:
+        print("asammdf/numpy not installed -- skipping MF4 "
+              "(pip install asammdf); the CSV is unaffected.", file=sys.stderr)
+        return False
+
+    t = np.array([r["t"] for r in rows], dtype=float)
+    sigs = []
+    for name in rows[0]:
+        if name == "t":
+            continue
+        sigs.append(Signal(
+            samples=np.array([r[name] for r in rows], dtype=float),
+            timestamps=t, name=name, unit=UNITS.get(name, "")))
+
+    with MDF(version="4.10") as mdf:
+        mdf.append(sigs, comment="AurixTricore navigation filter, outdoor run")
+        mdf.save(path, overwrite=True)
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -93,7 +133,12 @@ def main():
     ap.add_argument("--wait", type=float, default=300.0,
                     help="how long to wait for a usable fix")
     ap.add_argument("--rate", type=float, default=0.2, help="sample interval [s]")
-    ap.add_argument("--csv", default=None, help="also write the record here")
+    ap.add_argument("--csv", default="nav_walk.csv",
+                    help="record destination; written INCREMENTALLY (always on)")
+    ap.add_argument("--mf4", default=None,
+                    help="also write an ASAM MDF4 file, for tools/mf4_stats.py "
+                         "and any MDF viewer. Written at the END from the rows "
+                         "already on disk, so it can never cost the walk.")
     args = ap.parse_args()
 
     conf = create_application_from_config({
@@ -134,9 +179,20 @@ def main():
         print("tangent-plane origin latched.\n")
 
         # --- 3. record ---------------------------------------------------
+        # The CSV is opened here and flushed every row, not written at the end.
+        # A walk is physical effort that cannot be replayed, so a crash in the
+        # verdict arithmetic must not cost the data that was already gathered --
+        # the same lesson tools/mag_cal.py learned by throwing away two
+        # rotations.
         rows = []
         t0 = time.time()
         upd0 = u32(x, F_GNSS_UPD)
+        fields = ["t", "posN", "posE", "velN", "velE", "innovN", "innovE",
+                  "varN", "posD", "velD", "baroBias", "upd", "rej", "cov",
+                  "itow", "dupes"]
+        fh = open(args.csv, "w", newline="", encoding="utf-8")
+        writer = csv.DictWriter(fh, fieldnames=fields)
+        writer.writeheader()
         print(f"recording {args.seconds:.0f} s "
               f"-- stand still first, then walk a closed loop\n")
         print("    t   posN    posE    velN    velE   innovN  innovE  "
@@ -156,6 +212,8 @@ def main():
                 itow=u32(x, F_GNSS_ITOW), dupes=u32(x, F_GNSS_DUPES),
             )
             rows.append(r)
+            writer.writerow(r)
+            fh.flush()
             print(f"{t:6.1f} {r['posN']:+7.2f} {r['posE']:+7.2f} "
                   f"{r['velN']:+7.2f} {r['velE']:+7.2f} "
                   f"{r['innovN']:+7.2f} {r['innovE']:+7.2f} "
@@ -228,6 +286,18 @@ def main():
                 w.writeheader()
                 w.writerows(rows)
             print(f"\nwrote {args.csv} ({len(rows)} rows)")
+
+        if args.mf4:
+            try:
+                if write_mf4(args.mf4, rows):
+                    print(f"\nwrote {args.mf4} ({len(rows)} samples, "
+                          f"{len(rows[0]) - 1} signals)")
+                    print(f"  python tools/mf4_stats.py {args.mf4}")
+            except Exception as exc:                # noqa: BLE001
+                # Never let an export problem look like a failed run: the
+                # measurement is already safe in the CSV.
+                print(f"\nMF4 export failed ({exc}); the CSV is intact.",
+                      file=sys.stderr)
 
         x.disconnect()
         sys.exit(0 if ok else 1)

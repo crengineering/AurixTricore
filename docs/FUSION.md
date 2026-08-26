@@ -305,7 +305,65 @@ Quick health read, in order of what to distrust first:
 
 ---
 
-## 7. What is not validated yet
+## 7. Outdoor validation, 2026-08-26 (v1.19.5)
+
+240 s record, 13 satellites, hAcc 2.4 m, walked loop of roughly 15 x 9 m.
+Raw data: `tools/nav_outdoor_check.py --mf4`.
+
+| check | result |
+|---|---|
+| fixes fused | 2398 in 240 s = **10.00 /s** |
+| iTOW advance | 239 800 ms over 240 s — tracks the clock to 99.9 % |
+| duplicate polls | 0 |
+| GNSS rejected / `covResets` | **0 / 0** |
+| velocity while standing still | 0.065 and 0.099 m/s |
+| loop closure | **2.59 m** (dN −1.23, dE +2.28) |
+| `varN` | 0.09 m² |
+| `baroBias` | **+1.92 → +0.01 m** |
+
+The `baroBias` line is the one that matters: that state had never executed
+before, because it is only observable with barometer AND GNSS altitude both
+present. It converged from 1.9 m to zero, which is the barometer's weather
+offset being separated from true altitude exactly as designed.
+
+Closure of 2.59 m against hAcc 2.4 m means the loop closed as well as GNSS
+permits. Be honest about what that proves: it is *consistent* with a correct
+filter, but at this noise level it cannot distinguish "perfect" from "2.5 m of
+accumulated drift".
+
+### ⚠️ The filter is roughly 8x overconfident
+
+`varN` settles at 0.09 m², claiming sigma = 0.3 m, while the actual closure
+error was 2.59 m. The mechanism is visible in the innovations: they came in at
+1.12 m (N) and 0.96 m (E) RMS, against the sqrt(P+R) ~ 2.4 m the filter
+expected. Innovations *half* the predicted size is the signature of measurements
+that are not independent — the filter counts ten correlated NAV-PVT solutions
+per second as ten independent draws, so P collapses below the true error.
+
+The position itself is fine. What is not trustworthy is `varN` **as a quality
+signal**, so nothing downstream should gate a decision on it yet.
+
+Decimating to 1 Hz is the obvious fix and is the wrong one, for a reason worth
+recording: GNSS POSITION error is dominated by slowly-varying bias
+(ionosphere, multipath) so the extra samples carry little, but GNSS VELOCITY is
+Doppler-derived — about 0.05 m/s on an M9N, far less correlated, and genuinely
+fresh at 10 Hz. It is also the measurement that stabilises a position loop on an
+aircraft. So: keep 10 Hz, inflate the POSITION R only, and raise the trust in
+velocity (`FUSION_SIGMA_GNSS_VEL` is 0.3 m/s against a receiver an order of
+magnitude better than that).
+
+### ⚠️ Measurement latency is unmodelled
+
+NAV-PVT is already ~100–180 ms old when it is fused (receiver processing, plus
+100 bytes at 38400 baud ~ 26 ms, plus up to 100 ms of poll phase) and is applied
+as though current. At walking pace that is ~0.2 m and invisible in this record.
+At 15 m/s it is 1.5–2.7 m, always lagging the direction of travel — a systematic
+error a position controller would fight. `gnssITow` is published so the fix can
+be timestamped when this is addressed.
+
+---
+
+## 8. What is not validated yet
 
 - **The whole horizontal channel.** It never executes without a GNSS fix, and
   there is no fix indoors. Run `tools/nav_outdoor_check.py`: `originSet` must go
