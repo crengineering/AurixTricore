@@ -71,8 +71,18 @@ __pycache__/
 # Runtime measurement logs from AurixGUI
 *.mf4
 
-# Vendor datasheets/manuals - large binaries, fetch from Infineon instead
-docs/*.pdf
+# Vendor datasheets/manuals - copyrighted, must not be redistributed.
+# Keep them locally, fetch from Infineon instead. Blanket rule on purpose:
+# docs/*.pdf alone would miss a PDF dropped anywhere else in the tree.
+*.pdf
 
 # test builds
 test/build*/
+# draw.io autosave backups
+.$*.bkp
+*.drawio.bkp
+*.drawio.dtmp
+
+# Local Claude Code state (machine-specific permissions).
+# .claude/skills/ is intentionally NOT ignored - those are project tooling.
+.claude/settings.local.json

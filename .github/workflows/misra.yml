@@ -24,17 +24,23 @@ on:
 env:
   CPPCHECK_VERSION: 2.21.0
 
+# Least privilege: every job here only reads the checkout. Declared
+# explicitly so the token stays read-only regardless of the repository
+# default, which matters once anyone can open a pull request.
+permissions:
+  contents: read
+
 jobs:
   misra:
     name: MISRA C (cppcheck misra addon)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache cppcheck
         id: cache-cppcheck
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/cppcheck-install
           key: cppcheck-${{ env.CPPCHECK_VERSION }}-${{ runner.os }}

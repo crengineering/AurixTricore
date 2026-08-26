@@ -274,6 +274,19 @@ pin 16 SCLK→P22.8, pin 18 SDIO→P22.10, pin 20 SDO→P22.9, pin 3 INT1→P22.
 **IMU INT relocation:** P20.9 was the first choice but is **ERAY‑B ERRN (R344, board‑fixed,
 §4)** → moved to **P22.7** (free, same PERIPHERALS header). Read via TTL pad like MISO.
 
+**I2C0 bus budget** (carried over from the retired SENSORS.md §4):
+
+| Sensor | Bytes/read | Time/read | Rate | Bus load |
+|---|---|---|---|---|
+| BMP581 (P+T) | ~9 | ~0.20 ms | 50 Hz | ~1.0 % |
+| MMC5983MA (3×18‑bit) | ~10 | ~0.22 ms | 100 Hz | ~2.3 % |
+| **Total I2C0** | | | | **~3.3 %** |
+
+The GNSS was planned on I2C0 at 10 Hz (~2.4 % more) but ships on **ASCLIN4 UART**
+instead (§2.7), still at 10 Hz, so it costs I2C0 nothing. Measured CPU0 load is ~9.4 %, of
+which roughly 91 % is literal wire time at 100 kHz — the blocking driver means bus
+time *is* CPU time. Moving to 400 kHz would cut it to ~2.5 %.
+
 ### 2.6 DShot driver & verification (folded in from the retired DSHOT_PINS.md)
 
 **Single‑pin bidirectional scheme.** Per motor one pad does both: TX = GTM **ATOM0**

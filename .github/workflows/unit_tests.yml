@@ -10,13 +10,19 @@ concurrency:  # if commits getting staged and pipeline is not finished, it stops
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege: every job here only reads the checkout. Declared
+# explicitly so the token stays read-only regardless of the repository
+# default, which matters once anyone can open a pull request.
+permissions:
+  contents: read
+
 jobs:
   unittests:
     name: C Unit tests
     runs-on: ubuntu-latest            # already includes ninja, therefore no installation needed
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run Unit tests
         run: python3 tools/utest.py
       - name: Tests into summary
@@ -27,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run Sanitize checks
         run: python3 tools/utest.py --variant sanitize
   coverage:
@@ -35,7 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install gcovr
         run: pip install gcovr
       - name: Run coverage checks
@@ -44,7 +50,7 @@ jobs:
         if: always()
         run: cat test/build_cov/coverage/summary.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: test/build_cov/coverage/
@@ -57,6 +63,6 @@ jobs:
       matrix: 
         opt: [-Og, -Os]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run WError
         run: python3 tools/utest.py --werror --build-only --opt=${{ matrix.opt }}
