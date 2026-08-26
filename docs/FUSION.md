@@ -430,10 +430,55 @@ dominated by real slow pressure drift, which on sub-600 s timescales is genuinel
 indistinguishable from altitude change. That is what the GNSS-anchored
 `baroBias` state resolves, and it did (1.92 -> 0.01 m outdoors).
 
+### ⚠️ The barometer measures AIR, not height — verified 2026-08-26
+
+Reported as "random spikes" in the GUI on `NavPosDown` and `NavInnovDown`. They
+are neither random nor a fault, and the distinction took two recordings to
+establish.
+
+**Abrupt handling**, 46 Hz record of the raw barometer:
+
+```
+t=31.5  632.24   baseline
+t=31.9  634.32   +2.3 m peak
+t=32.1  631.41   -0.6 m undershoot
+t=32.6  632.03   back to baseline, exactly
+```
+
+**A smooth 30 cm lift, held 20 s**, same board and firmware:
+
+| | |
+|---|---|
+| barometer step | +0.27 m, **sustained** for the whole hold |
+| `posD` step | −0.27 m (positive is down, so up) |
+| innovation throughout | **±0.02 m**, no spike anywhere |
+| barometer peak excursion | +0.34 m — no overshoot |
+
+Same displacement, opposite results. The difference is entirely *how* the board
+was moved: an abrupt lift shoves air across the pressure port and produces a
+transient **seven times** the real displacement, which then rings and decays to
+baseline. A smooth one tracks the true height to a centimetre.
+
+**The tell is the sustained step.** A real altitude change holds; an
+aerodynamic artefact returns to baseline within about a second. Twenty seconds
+of holding makes them impossible to confuse — always hold, never just tap.
+
+**Do not "fix" this by tuning.** Raising `FusSigmaBaro` blunts the spikes and
+blunts the genuine 0.27 m step equally: a worse filter, bought to suppress a
+symptom the sensor is right about. The accelerometer is the arbiter, because
+moving air cannot push on it — during the artefact it stayed flat, during the
+real lift it dipped to 0.913 g and peaked at 1.124 g.
+
+This also revises §8: innovation transients during the earlier lift tests were
+partly this, not only sensor lag.
+
 ### Still untestable on the bench
 
-- **Prop wash.** The barometer is a pressure sensor sitting in a downwash. Needs
-  foam over the port or a static port; no amount of filtering substitutes.
+- **Prop wash.** The barometer is a pressure sensor sitting in a downwash, and
+  the finding above is a preview of it — a rotor does continuously what a hand
+  did once. Needs foam over the port or a static port; no amount of filtering
+  substitutes, because the sensor genuinely is measuring the pressure it is
+  exposed to.
 - **Motor vibration** on the accelerometer will force `FUSION_SIGMA_A_D` up from
   0.3 and may need the ICM-42688-P's own anti-alias filtering revisited.
 

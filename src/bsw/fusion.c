@@ -27,7 +27,6 @@
  * confirmed it at 0.0181 m. R is a VARIANCE, so it is that value squared — the
  * covariance algebra only adds up in squared units. */
 #define FUSION_SIGMA_BARO       (0.0197f)
-#define FUSION_R_BARO           (FUSION_SIGMA_BARO * FUSION_SIGMA_BARO)
 
 /* Barometer bias random walk [m per sqrt(s)]. This is the WEATHER, not the
  * sensor: the board sat still on the desk and the reported altitude walked
@@ -95,7 +94,6 @@
  * The gate is there to catch a CORRUPT reading, which is wrong by tens of
  * metres, not to police dynamics. A floor of 2 m separates the two cleanly. */
 #define FUSION_GATE_MIN_M       (2.0f)
-#define FUSION_GATE_MIN_SQ      (FUSION_GATE_MIN_M * FUSION_GATE_MIN_M)
 
 /* Same idea for GNSS, in units of the receiver-reported accuracy. */
 #define FUSION_GNSS_GATE_K      (5.0f)
@@ -171,6 +169,11 @@ typedef struct
     volatile const float32 *sigmaA;       /* process noise on acceleration    */
     volatile const float32 *sigmaMeasRw;  /* NULL when the channel has no
                                            * relative sensor (north/east)     */
+    float32 sigmaADefault;      /* fallback if the calibration value is bad.
+                                 * Per channel: the horizontal channels carry
+                                 * more process noise than the vertical one,
+                                 * so falling back to the vertical default
+                                 * would quietly mistune them.               */
     float32 pMeasBInit;         /* initial variance of the measBias state  */
     uint32  rejectRun;
     boolean anchored;           /* an absolute or relative fix has arrived */
@@ -276,6 +279,7 @@ static void fusion_chanClampCov(Fusion_Chan *ch)
 }
 
 static void fusion_chanInit(Fusion_Chan *ch, volatile const float32 *sigmaA,
+                            float32 sigmaADefault,
                             volatile const float32 *sigmaMeasRw, float32 pMeasB)
 {
     uint8 i;
@@ -285,8 +289,9 @@ static void fusion_chanInit(Fusion_Chan *ch, volatile const float32 *sigmaA,
         ch->x[i] = 0.0f;
     }
 
-    ch->sigmaA      = sigmaA;
-    ch->sigmaMeasRw = sigmaMeasRw;
+    ch->sigmaA        = sigmaA;
+    ch->sigmaADefault = sigmaADefault;
+    ch->sigmaMeasRw   = sigmaMeasRw;
     ch->pMeasBInit  = pMeasB;
     ch->rejectRun   = 0u;
     ch->anchored    = FALSE;
@@ -307,7 +312,7 @@ static void fusion_chanPredict(Fusion_Chan *ch, float32 a, float32 dt)
     const float32 dt2  = dt * dt;
     /* Process noise is read from the calibration block every tick. ch->sigmaA
      * selects WHICH parameter this channel uses; the value itself is live. */
-    const float32 sa   = FusionCal_positive(*ch->sigmaA, 0.0f, FUSION_SIGMA_A_D);
+    const float32 sa   = FusionCal_positive(*ch->sigmaA, 0.0f, ch->sigmaADefault);
     const float32 sm   = (ch->sigmaMeasRw != NULL_PTR)
                        ? FusionCal_positive(*ch->sigmaMeasRw, 0.0f,
                                             FUSION_SIGMA_BARO_RW)
@@ -518,10 +523,12 @@ void Fusion_init(void)
      * alongside an absolute one, so it is the only channel whose measurement
      * bias is observable. North and east get zero initial variance and zero
      * random walk, which pins that state at exactly zero for good. */
-    fusion_chanInit(&s_chD, &g_fusionCal.sigmaAccD, &g_fusionCal.sigmaBaroRw,
-                    FUSION_P_MEASB_INIT);
-    fusion_chanInit(&s_chN, &g_fusionCal.sigmaAccH, NULL_PTR, 0.0f);
-    fusion_chanInit(&s_chE, &g_fusionCal.sigmaAccH, NULL_PTR, 0.0f);
+    fusion_chanInit(&s_chD, &g_fusionCal.sigmaAccD, FUSION_SIGMA_A_D,
+                    &g_fusionCal.sigmaBaroRw, FUSION_P_MEASB_INIT);
+    fusion_chanInit(&s_chN, &g_fusionCal.sigmaAccH, FUSION_SIGMA_A_H,
+                    NULL_PTR, 0.0f);
+    fusion_chanInit(&s_chE, &g_fusionCal.sigmaAccH, FUSION_SIGMA_A_H,
+                    NULL_PTR, 0.0f);
 
     s_baroAlt   = 0.0f;
     s_baroNew   = FALSE;
