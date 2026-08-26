@@ -44,8 +44,17 @@
  * previous limit of 4, so the next signal group would have had no room. Eight
  * costs 512 bytes of entry table instead of 256 and leaves headroom for the
  * magnetometer, GNSS and ESC telemetry blocks. The transmit loop and the PID
- * (= absolute ODT number, one byte) are generic, so nothing else caps this. */
-#define XCP_DAQ_MAX_ODTS            8u
+ * (= absolute ODT number, one byte) are generic, so nothing else caps this.
+ *
+ * ⚠️ Raised 8 -> 16 on 2026-08-26, BEFORE it became a problem rather than
+ * after. Once the navigation state got its own block, the master needs two
+ * measurement blocks streamed: Xcp_Data (248 B) and Xcp_Fusion (240 B) is
+ * 488 bytes, and at 63 bytes per ODT that is 4 + 4 = exactly 8. The budget was
+ * full to the byte, and the next measurement added to EITHER block would have
+ * overflowed it — with the failure landing in the GUI, as a signal that
+ * silently stops updating, rather than anywhere near the change that caused it.
+ * Sixteen costs another 512 bytes of entry table and buys real headroom. */
+#define XCP_DAQ_MAX_ODTS            16u
 #define XCP_DAQ_MAX_ENTRIES         8u
 #define XCP_DAQ_MAX_ODT_DATA        63u     /* MAX_DTO - PID byte            */
 

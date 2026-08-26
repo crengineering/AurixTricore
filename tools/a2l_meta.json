@@ -827,275 +827,275 @@
       "skip": true
     },
     "tickMs": {
-      "name": "FusTickMs",
+      "name": "NavTickMs",
       "desc": "uptime when the navigation block was last written",
       "unit": "ms",
       "lo": "0",
       "hi": "4294967295"
     },
     "rollDeg": {
-      "name": "Roll",
+      "name": "AttRoll",
       "desc": "roll angle, positive right side down",
       "unit": "deg",
       "lo": "-180",
       "hi": "180"
     },
     "pitchDeg": {
-      "name": "Pitch",
+      "name": "AttPitch",
       "desc": "pitch angle, positive nose up; clamped at +/-90",
       "unit": "deg",
       "lo": "-90",
       "hi": "90"
     },
     "yawDeg": {
-      "name": "Yaw",
+      "name": "AttYaw",
       "desc": "heading, true north when the NVM declination is set",
       "unit": "deg",
       "lo": "0",
       "hi": "360"
     },
     "q": {
-      "name": "Quat{i}",
+      "name": "AttQuat{i}",
       "desc": "body-to-NED quaternion component {i} (w,x,y,z order)",
       "lo": "-1",
       "hi": "1"
     },
     "rateDps": {
-      "name": "BodyRate{i}",
+      "name": "AttRate{i}",
       "desc": "bias-corrected body rate about axis {i} (p,q,r)",
       "unit": "deg/s",
       "lo": "-2000",
       "hi": "2000"
     },
     "gyroBias": {
-      "name": "GyroBias{i}",
+      "name": "AttGyroBias{i}",
       "desc": "estimated gyro bias on axis {i}; boot calibration plus tracked drift",
       "unit": "deg/s",
       "lo": "-50",
       "hi": "50"
     },
     "accNed": {
-      "name": "AccNed{i}",
+      "name": "AttAccNed{i}",
       "desc": "acceleration along NED axis {i} with gravity removed",
       "unit": "m/s^2",
       "lo": "-100",
       "hi": "100"
     },
     "accMagG": {
-      "name": "AccMagnitude",
+      "name": "AttAccMagnitude",
       "desc": "|a|, the orientation-independent health check; 1.0 at rest",
       "unit": "g",
       "lo": "0",
       "hi": "16"
     },
     "magFieldG": {
-      "name": "MagFieldCorrected",
+      "name": "AttMagFieldCorrected",
       "desc": "|B| after hard-iron correction; must not change as the board rotates",
       "unit": "gauss",
       "lo": "0",
       "hi": "4"
     },
     "ahrsState": {
-      "name": "AhrsState",
+      "name": "AttState",
       "desc": "0=calibrating gyro bias, 1=aligning, 2=running, 3=no sensor",
       "lo": "0",
       "hi": "3"
     },
     "accTrusted": {
-      "name": "AhrsAccTrusted",
+      "name": "AttAccTrusted",
       "desc": "1 while |a| is close enough to 1 g for gravity to dominate",
       "lo": "0",
       "hi": "1"
     },
     "magTrusted": {
-      "name": "AhrsMagTrusted",
+      "name": "AttMagTrusted",
       "desc": "1 while |B| is plausible and is correcting yaw",
       "lo": "0",
       "hi": "1"
     },
     "posD": {
-      "name": "PosDown",
+      "name": "NavPosDown",
       "desc": "position along NED down, relative to the origin; POSITIVE IS DOWN",
       "unit": "m",
       "lo": "-10000",
       "hi": "10000"
     },
     "velD": {
-      "name": "VelDown",
+      "name": "NavVelDown",
       "desc": "velocity along NED down; positive is descending",
       "unit": "m/s",
       "lo": "-100",
       "hi": "100"
     },
     "accBiasD": {
-      "name": "AccBiasDown",
+      "name": "NavAccBiasDown",
       "desc": "estimated accelerometer bias on the down axis; ~0.01..0.02 on this board",
       "unit": "m/s^2",
       "lo": "-5",
       "hi": "5"
     },
     "baroBias": {
-      "name": "BaroBias",
+      "name": "NavBaroBias",
       "desc": "barometer offset against GNSS altitude - the weather drift, not the sensor",
       "unit": "m",
       "lo": "-100",
       "hi": "100"
     },
     "innovD": {
-      "name": "InnovDown",
+      "name": "NavInnovDown",
       "desc": "barometer innovation: what the baro said minus what the filter expected",
       "unit": "m",
       "lo": "-100",
       "hi": "100"
     },
     "varD": {
-      "name": "VarDown",
+      "name": "NavVarDown",
       "desc": "variance of PosDown; sqrt of this is the altitude uncertainty",
       "unit": "m^2",
       "lo": "0",
       "hi": "1000000"
     },
     "posN": {
-      "name": "PosNorth",
+      "name": "NavPosNorth",
       "desc": "metres north of the tangent-plane origin (first usable GNSS fix)",
       "unit": "m",
       "lo": "-100000",
       "hi": "100000"
     },
     "posE": {
-      "name": "PosEast",
+      "name": "NavPosEast",
       "desc": "metres east of the tangent-plane origin",
       "unit": "m",
       "lo": "-100000",
       "hi": "100000"
     },
     "velN": {
-      "name": "VelNorth",
+      "name": "NavVelNorth",
       "desc": "velocity north",
       "unit": "m/s",
       "lo": "-200",
       "hi": "200"
     },
     "velE": {
-      "name": "VelEast",
+      "name": "NavVelEast",
       "desc": "velocity east",
       "unit": "m/s",
       "lo": "-200",
       "hi": "200"
     },
     "accBiasN": {
-      "name": "AccBiasNorth",
+      "name": "NavAccBiasNorth",
       "desc": "estimated accelerometer bias north; mostly absorbs attitude error",
       "unit": "m/s^2",
       "lo": "-5",
       "hi": "5"
     },
     "accBiasE": {
-      "name": "AccBiasEast",
+      "name": "NavAccBiasEast",
       "desc": "estimated accelerometer bias east",
       "unit": "m/s^2",
       "lo": "-5",
       "hi": "5"
     },
     "innovN": {
-      "name": "InnovNorth",
+      "name": "NavInnovNorth",
       "desc": "GNSS north innovation",
       "unit": "m",
       "lo": "-1000",
       "hi": "1000"
     },
     "innovE": {
-      "name": "InnovEast",
+      "name": "NavInnovEast",
       "desc": "GNSS east innovation",
       "unit": "m",
       "lo": "-1000",
       "hi": "1000"
     },
     "varN": {
-      "name": "VarNorth",
+      "name": "NavVarNorth",
       "desc": "variance of PosNorth; grows without bound until a GNSS fix arrives",
       "unit": "m^2",
       "lo": "0",
       "hi": "1000000"
     },
     "originLatDeg": {
-      "name": "OriginLat",
+      "name": "NavOriginLat",
       "desc": "latitude of the tangent-plane origin",
       "unit": "deg",
       "lo": "-90",
       "hi": "90"
     },
     "originLonDeg": {
-      "name": "OriginLon",
+      "name": "NavOriginLon",
       "desc": "longitude of the tangent-plane origin",
       "unit": "deg",
       "lo": "-180",
       "hi": "180"
     },
     "originAltM": {
-      "name": "OriginAlt",
+      "name": "NavOriginAlt",
       "desc": "GNSS altitude at the origin fix, above mean sea level",
       "unit": "m",
       "lo": "-1000",
       "hi": "10000"
     },
     "baroRejects": {
-      "name": "BaroRejects",
+      "name": "NavBaroRejects",
       "desc": "barometer samples rejected by the outlier gate; a rising count is a sensor fault, not a tuning knob",
       "lo": "0",
       "hi": "4294967295"
     },
     "baroResets": {
-      "name": "BaroResets",
+      "name": "NavBaroResets",
       "desc": "vertical re-acquisitions after a run of rejections; non-zero means the filter diverged and recovered",
       "lo": "0",
       "hi": "4294967295"
     },
     "gnssRejects": {
-      "name": "GnssRejects",
+      "name": "NavGnssRejects",
       "desc": "GNSS fixes rejected by the outlier gate",
       "lo": "0",
       "hi": "4294967295"
     },
     "gnssUpdates": {
-      "name": "GnssUpdates",
+      "name": "NavGnssUpdates",
       "desc": "GNSS fixes actually fused; increments once per new iTOW, i.e. 1 Hz with a fix",
       "lo": "0",
       "hi": "4294967295"
     },
     "verticalOk": {
-      "name": "VerticalOk",
+      "name": "NavVerticalOk",
       "desc": "1 once the barometer has anchored the vertical channel",
       "lo": "0",
       "hi": "1"
     },
     "horizontalOk": {
-      "name": "HorizontalOk",
+      "name": "NavHorizontalOk",
       "desc": "1 once GNSS has anchored the horizontal channels",
       "lo": "0",
       "hi": "1"
     },
     "originSet": {
-      "name": "OriginSet",
+      "name": "NavOriginSet",
       "desc": "1 once a usable fix defined the tangent-plane origin",
       "lo": "0",
       "hi": "1"
     },
     "covResets": {
-      "name": "CovResets",
+      "name": "NavCovResets",
       "desc": "numerical health-check trips. MUST stay 0 - any other value is a bug, not a tuning problem",
       "lo": "0",
       "hi": "4294967295"
     },
     "gnssITow": {
-      "name": "GnssITow",
+      "name": "NavGnssITow",
       "desc": "GPS time of week of the last fix actually fused; frozen with gnssUpdates stalled means iTOW is not being decoded",
       "unit": "ms",
       "lo": "0",
       "hi": "4294967295"
     },
     "gnssDupes": {
-      "name": "GnssDupes",
+      "name": "NavGnssDupes",
       "desc": "polls that carried an already-fused fix; small but non-zero is healthy, exactly zero or near the poll rate is a fault",
       "lo": "0",
       "hi": "4294967295"
@@ -1104,7 +1104,7 @@
       "skip": true
     },
     "ahrsBiasDegraded": {
-      "name": "AhrsBiasDegraded",
+      "name": "AttBiasDegraded",
       "desc": "1 = the boot gyro-bias calibration hit its 10 s deadline instead of completing a still window, i.e. the board was moving at power-on. The estimate still runs, it is just less good",
       "lo": "0",
       "hi": "1"
