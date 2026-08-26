@@ -439,7 +439,71 @@ indistinguishable from altitude change. That is what the GNSS-anchored
 
 ---
 
-## 9. What is not validated yet
+## 9. Tuning live, and the controller feedback
+
+### `Xcp_FusionCal` @ `0x70030600` — every tuning constant, XCP-writable
+
+RAM only, like `Xcp_Cal`, and deliberately: a tuning experiment must never be
+able to leave the vehicle in a state a power cycle cannot recover. The compiled
+defaults in `FusionCal_init()` are the measured values in §2. When a value earns
+its place, change the default in code — do not rely on the block.
+
+Read every tick, not latched, so a write takes effect on the next filter update.
+That also means a nonsense value takes effect just as fast, so every consumer
+goes through `FusionCal_positive()`, which is written as *"is it above the
+floor"* rather than *"is it below"* — the comparison is FALSE for NaN either
+way, so a NaN arriving over XCP takes the compiled default instead of poisoning
+a covariance.
+
+The A2L descriptions carry the reasoning for each knob, so the GUI shows *why* a
+parameter exists, not just its name. `FusSigmaAccDown` is the one to reach for
+first once motors are turning: 0.3 was measured on a desk and vibration is not
+in it.
+
+**`gnssPosRScale` defaults to 8.0**, not 1.0 — see §7. It is a stopgap with an
+honest justification, not a derived constant: the correct fix is a GNSS
+position-bias state, exactly as the barometer has.
+
+### Controller feedback — `Xcp_Fusion` @ `0xC0`..`0xF0`
+
+Everything else in the block is published for humans: degrees, NED.
+`src/asw/flight_ctrl.h` wants neither.
+
+| controller input | wants | published at |
+|---|---|---|
+| `phi_ist[3]` | roll/pitch/yaw, **rad** | `0xC0` |
+| `om_ist[3]` | p/q/r, **rad/s** | `0xCC` |
+| `p_ned_ist[3]` | N/E/D, m | `0xD8` |
+| `v_b_ist[3]` | u/v/w, **BODY frame** | `0xE4` |
+
+The frame difference is the one that bites. `v_b_ist` is a damping term, so it
+has to be in the same frame as the rates; feeding it NED velocity would make the
+damping wrong by the heading angle. The rotation happens once here, using the
+same quaternion and the same code the filter runs on (`Ahrs_nedToBody`), so
+there is exactly one definition of "the state the controller sees" and it cannot
+drift away from the estimate that produced it.
+
+### The AHRS no longer blocks forever on gyro calibration
+
+`ahrs_calibrate()` restarts its window whenever the gyro spread exceeds 3 °/s.
+With no bound that never completes on a board powered on while moving — in a
+vehicle, on a vibrating bench, in a hand — and `Task_Imu` gates the entire
+navigation filter on `AHRS_RUNNING`: no attitude, no position, no velocity,
+indefinitely, with nothing saying why.
+
+There is now a 500-sample (10 s) deadline. A bias averaged over a moving window
+is worse than one averaged over a still window, and enormously better than no
+estimate at all; the Mahony integral converges the remainder within seconds once
+the accelerometer and magnetometer start correcting. The degraded result is
+flagged, not hidden: `ahrsBiasDegraded` (`0xBC`) says the calibration was taken
+while the board was moving. It also divides by the samples actually accumulated
+rather than the nominal 100, because at the deadline the window is usually
+partial and dividing by 100 regardless would scale the bias toward zero and make
+it look deceptively good.
+
+---
+
+## 10. What is not validated yet
 
 - **The whole horizontal channel.** It never executes without a GNSS fix, and
   there is no fix indoors. Run `tools/nav_outdoor_check.py`: `originSet` must go

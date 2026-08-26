@@ -4,6 +4,7 @@
  *********************************************************************************************************************/
 #include "Ahrs.h"
 #include "Nvm.h"
+#include "FusionCal.h"
 #include <math.h>
 
 /* --- tuning -------------------------------------------------------------- */
@@ -52,6 +53,23 @@
  * finish. Motion restarts the window, because a biased bias is worse than none. */
 #define AHRS_CAL_SAMPLES      (100u)
 #define AHRS_CAL_SPREAD_DPS   (3.0f)
+
+/* ...but give up after this many samples and go anyway (10 s at 50 Hz).
+ *
+ * Without a bound this never finishes on a board that is powered on while
+ * moving -- in a vehicle, on a vibrating bench, in someone's hand. Every
+ * window that exceeds the spread gate restarts, so the estimator would sit in
+ * AHRS_CALIBRATING forever, and Task_Imu gates the whole navigation filter on
+ * AHRS_RUNNING: no attitude, no position, no velocity, indefinitely, with
+ * nothing in the output saying why.
+ *
+ * A bias averaged over a moving window is worse than one averaged over a still
+ * one, but it is enormously better than no estimate at all -- and the Mahony
+ * integral term converges the remainder within seconds once the accelerometer
+ * and magnetometer start correcting. The degraded result is flagged rather than
+ * hidden: Ahrs_Values.biasDegraded says the boot calibration was taken while
+ * the board was moving. */
+#define AHRS_CAL_MAX_SAMPLES  (500u)
 
 /* Sanity bounds on dt [s]. The IMU task runs at 50 Hz; the upper bound matters
  * at boot, where the first measured interval is whatever the STM counter held. */
@@ -142,6 +160,8 @@ static float32 s_calSum[3];
 static float32 s_calMin[3];
 static float32 s_calMax[3];
 static uint16  s_calCount;
+static uint16  s_calTotal;      /* samples since calibration started */
+static boolean s_biasDegraded;  /* deadline hit before a clean window */
 
 /* Named s_ahrsState rather than the obvious s_state: MISRA 5.9 wants
  * internal-linkage identifiers unique across the whole program, and
@@ -241,7 +261,9 @@ void Ahrs_init(void)
         s_magB[i]   = 0.0f;
     }
 
-    s_calCount = 0u;
+    s_calCount     = 0u;
+    s_calTotal     = 0u;
+    s_biasDegraded = FALSE;
     s_ahrsState    = AHRS_CALIBRATING;
     s_magNorm  = 0.0f;
 }
@@ -295,7 +317,9 @@ static boolean ahrs_calibrate(const float32 gyroBody[3])
 
     s_calCount++;
 
-    if (moving != FALSE)
+    s_calTotal++;
+
+    if ((moving != FALSE) && (s_calTotal < AHRS_CAL_MAX_SAMPLES))
     {
         /* Throw the window away rather than bake the motion into the bias. */
         for (i = 0u; i < 3u; i++)
@@ -304,12 +328,30 @@ static boolean ahrs_calibrate(const float32 gyroBody[3])
         }
         s_calCount = 0u;
     }
-    else if (s_calCount >= AHRS_CAL_SAMPLES)
+    else if ((s_calCount >= AHRS_CAL_SAMPLES)
+             || (s_calTotal >= AHRS_CAL_MAX_SAMPLES))
     {
+        /* Either a clean window completed, or the deadline expired and this is
+         * the best that is going to be available. Divide by what was actually
+         * accumulated, not by the nominal count -- at the deadline the window
+         * is usually partial, and dividing by 100 regardless would scale the
+         * bias down toward zero and look deceptively small. */
+        const uint16 n = (s_calCount > 0u) ? s_calCount : 1u;
+
+        if (s_calCount < AHRS_CAL_SAMPLES)
+        {
+            s_biasDegraded = TRUE;
+        }
+        else
+        {
+            s_biasDegraded = FALSE;
+        }
+
         for (i = 0u; i < 3u; i++)
         {
-            s_bias[i] = s_calSum[i] / (float32)AHRS_CAL_SAMPLES;
+            s_bias[i] = s_calSum[i] / (float32)n;
         }
+
         done = TRUE;
     }
     else
@@ -406,9 +448,12 @@ static void ahrs_errorVector(const float32 accBody[3], float32 accNorm,
 
         ahrs_nedToBody(down, v);
 
-        e[0] += AHRS_TWO_KP_ACC * ((ay * v[2]) - (az * v[1]));
-        e[1] += AHRS_TWO_KP_ACC * ((az * v[0]) - (ax * v[2]));
-        e[2] += AHRS_TWO_KP_ACC * ((ax * v[1]) - (ay * v[0]));
+        const float32 kp = FusionCal_positive(g_fusionCal.twoKpAcc, 0.0f,
+                                             AHRS_TWO_KP_ACC);
+
+        e[0] += kp * ((ay * v[2]) - (az * v[1]));
+        e[1] += kp * ((az * v[0]) - (ax * v[2]));
+        e[2] += kp * ((ax * v[1]) - (ay * v[0]));
 
         *accUsed = TRUE;
     }
@@ -441,9 +486,12 @@ static void ahrs_errorVector(const float32 accBody[3], float32 accNorm,
 
         ahrs_nedToBody(ref, w);
 
-        e[0] += AHRS_TWO_KP_MAG * ((my * w[2]) - (mz * w[1]));
-        e[1] += AHRS_TWO_KP_MAG * ((mz * w[0]) - (mx * w[2]));
-        e[2] += AHRS_TWO_KP_MAG * ((mx * w[1]) - (my * w[0]));
+        const float32 kp = FusionCal_positive(g_fusionCal.twoKpMag, 0.0f,
+                                             AHRS_TWO_KP_MAG);
+
+        e[0] += kp * ((my * w[2]) - (mz * w[1]));
+        e[1] += kp * ((mz * w[0]) - (mx * w[2]));
+        e[2] += kp * ((mx * w[1]) - (my * w[0]));
 
         *magUsed = TRUE;
     }
@@ -556,12 +604,19 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
 
             ahrs_errorVector(accBody, accNorm, e, &accUsed, &magUsed);
 
+            /* Gains are read every tick from the calibration block, so a tuning
+             * write takes effect on the next update rather than the next flash. */
+            {
+                const float32 ki = FusionCal_positive(g_fusionCal.twoKi,
+                                                      0.0f, AHRS_TWO_KI);
+                for (i = 0u; i < 3u; i++)
+                {
+                    s_fbI[i] += ki * e[i] * dt;
+                }
+            }
+
             /* The integral term IS the gyro-bias estimate: a rotation error
              * that keeps pointing the same way can only be a rate offset. */
-            for (i = 0u; i < 3u; i++)
-            {
-                s_fbI[i] += AHRS_TWO_KI * e[i] * dt;
-            }
 
             wx = ((gyroBody[0] - s_bias[0]) * AHRS_DEG_TO_RAD) + e[0] + s_fbI[0];
             wy = ((gyroBody[1] - s_bias[1]) * AHRS_DEG_TO_RAD) + e[1] + s_fbI[1];
@@ -695,12 +750,18 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
             out->gyroBias[i] = s_bias[i] - (s_fbI[i] * AHRS_RAD_TO_DEG);
         }
 
+        out->biasDegraded = (s_biasDegraded != FALSE) ? 1u : 0u;
         out->magFieldG  = s_magNorm;
         out->state      = (uint8)s_ahrsState;
         out->accTrusted = (accUsed != FALSE) ? 1u : 0u;
         out->magTrusted = (magUsed != FALSE) ? 1u : 0u;
-        out->reserved   = 0u;
+
     }
+}
+
+void Ahrs_nedToBody(const float32 vNed[3], float32 vBody[3])
+{
+    ahrs_nedToBody(vNed, vBody);
 }
 
 void Ahrs_setMag(const float32 mag[3], boolean valid)

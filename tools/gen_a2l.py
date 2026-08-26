@@ -66,6 +66,7 @@ BLOCKS = {
     "Xcp_Nvm":  ("Nvm.h",          "XCP_NVM_ADDR"),
     "Xcp_Gpio": ("gpio.h",         "XCP_GPIO_ADDR"),
     "Xcp_Fusion": ("Measurements.h", "XCP_FUSION_ADDR"),
+    "Xcp_FusionCal": ("FusionCal.h", "XCP_FUSIONCAL_ADDR"),
 }
 
 
@@ -332,6 +333,7 @@ PREAMBLE = """\
  *   Xcp_Nvm   (persistent, DFLASH)    0x70030200, {nvm_size} bytes, Nvm.h
  *   Xcp_Gpio  (GPIO control, RAM only) 0x70030300, {gpio_size} bytes, gpio.h
  *   Xcp_Fusion (navigation state)     0x70030500, {fusion_size} bytes, Measurements.h
+ *   Xcp_FusionCal (estimator tuning)  0x70030600, {fcal_size} bytes, FusionCal.h
  * Transport: XCP on UDP/IP, port 5555, station 192.168.0.10.
  * DAQ: dynamic, 1 list, event channel 0 = 100 ms task.
  */
@@ -421,6 +423,7 @@ def generate() -> tuple[str, list[str]]:
     nvm_objs, nvm_size = block_objects("Xcp_Nvm", meta, warn, "char")
     gpio_objs, gpio_size = block_objects("Xcp_Gpio", meta, warn, "char")
     fusion_objs, fusion_size = block_objects("Xcp_Fusion", meta, warn, "meas")
+    fcal_objs, fcal_size = block_objects("Xcp_FusionCal", meta, warn, "char")
 
     diag_base = read_define(BSW / "Measurements.h", "XCP_DATA_ADDR")
     diag_fields, _ = parse_struct(BSW / "Measurements.h", "Xcp_Data")
@@ -440,7 +443,7 @@ def generate() -> tuple[str, list[str]]:
     parts = [PREAMBLE.format(version=parse_version(BSW / "Version.h"),
                              data_size=data_size, cal_size=cal_size,
                              nvm_size=nvm_size, gpio_size=gpio_size,
-                             fusion_size=fusion_size)]
+                             fusion_size=fusion_size, fcal_size=fcal_size)]
     parts.append("\n    /* ------------------------------------------------------------------ */"
                  "\n    /* Measurements: Xcp_Data @ 0x70030000 (see Measurements.h)           */"
                  "\n    /* ------------------------------------------------------------------ */\n")
@@ -455,6 +458,8 @@ def generate() -> tuple[str, list[str]]:
     parts.append("\n\n".join(gpio_objs))
     parts.append("\n\n    /* Navigation state: Xcp_Fusion @ 0x70030500 (see Measurements.h) */\n")
     parts.append("\n\n".join(fusion_objs))
+    parts.append("\n\n    /* Estimator tuning: Xcp_FusionCal @ 0x70030600, RAM only (FusionCal.h) */\n")
+    parts.append("\n\n".join(fcal_objs))
     parts.append("\n\n  /end MODULE\n/end PROJECT\n")
     return "".join(parts), warn
 

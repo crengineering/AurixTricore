@@ -331,6 +331,44 @@ void measurementsSetFusion(const FusionValues *fusion, const Ahrs_Values *ahrs,
     g_xcpFusion.covResets    = fusion->covResets;
     g_xcpFusion.gnssITow     = fusion->gnssITow;
     g_xcpFusion.gnssDupes    = fusion->gnssDupes;
+
+    g_xcpFusion.ahrsBiasDegraded = ahrs->biasDegraded;
+    g_xcpFusion.reserved3[0] = 0u;
+    g_xcpFusion.reserved3[1] = 0u;
+    g_xcpFusion.reserved3[2] = 0u;
+
+    /* --- flight-controller feedback ---------------------------------------
+     * The controller's units and frames, not the display ones. Converting here
+     * rather than in each consumer means there is exactly one definition of
+     * "the attitude the controller sees", and it cannot drift away from the
+     * estimate that produced it. */
+    for (i = 0u; i < 3u; i++)
+    {
+        g_xcpFusion.phi_ist[i] = 0.0f;
+        g_xcpFusion.om_ist[i]  = ahrs->rate[i];    /* already rad/s */
+    }
+
+    g_xcpFusion.phi_ist[0] = ahrs->rollRad;
+    g_xcpFusion.phi_ist[1] = ahrs->pitchRad;
+    g_xcpFusion.phi_ist[2] = ahrs->yawRad;
+
+    g_xcpFusion.p_ned_ist[0] = fusion->posN;
+    g_xcpFusion.p_ned_ist[1] = fusion->posE;
+    g_xcpFusion.p_ned_ist[2] = fusion->a_d;
+
+    {
+        /* NED velocity rotated into body axes. flight_ctrl.h uses v_b_ist as a
+         * damping term, so it must be in the frame the rates are in — feeding
+         * it NED velocity would make the damping wrong by the heading angle. */
+        const float32 vNed[3] = { fusion->velN, fusion->velE, fusion->a_v_d };
+        float32 vBody[3];
+
+        Ahrs_nedToBody(vNed, vBody);
+
+        g_xcpFusion.v_b_ist[0] = vBody[0];
+        g_xcpFusion.v_b_ist[1] = vBody[1];
+        g_xcpFusion.v_b_ist[2] = vBody[2];
+    }
 }
 
 void measurementsUpdate(void)

@@ -1,0 +1,98 @@
+/**********************************************************************************************************************
+ * \file FusionCal.h
+ * \brief Live-tunable parameters for the attitude and navigation filters.
+ *
+ * Every constant the estimator is tuned by, in one XCP-writable block, so a
+ * tuning pass does not need a rebuild and a reflash.
+ *
+ * WHY THIS EXISTS. The filters are tuned against measured sensor behaviour, and
+ * the measurements that matter most cannot be taken on a bench: `sigmaAccD` was
+ * set from a board sitting on a desk, and motors turning will change it by more
+ * than any other single factor. Re-flashing between every attempt makes that a
+ * bad afternoon; a calibration block makes it a slider. The same already
+ * applies to the diagnostics thresholds in `Xcp_Cal` — this is that pattern,
+ * applied to the estimator.
+ *
+ * ⚠️ **RAM ONLY.** Like `Xcp_Cal`, and deliberately: a tuning experiment must
+ * never be able to leave the vehicle in a state it cannot be reset out of.
+ * Power-cycle and you are back to the compiled defaults in `FusionCal_init()`,
+ * which are the values documented in `docs/FUSION.md` §2. When a value has
+ * earned its place, change the default in code — do not rely on the block.
+ *
+ * ⚠️ **Read every tick, not latched.** Writes take effect on the next filter
+ * update, which is the point. It also means a nonsense value takes effect just
+ * as fast, so the consumers clamp what would break the arithmetic (a variance
+ * must stay positive) rather than trusting the master.
+ *
+ * A separate block rather than more of `Xcp_Cal` because ownership follows the
+ * code: `Diagnostics.c` owns its thresholds, the estimator owns these. Mixing
+ * them would mean two modules writing defaults into one struct.
+ *********************************************************************************************************************/
+#ifndef FUSIONCAL_H
+#define FUSIONCAL_H
+
+#include "Ifx_Types.h"
+
+/* Next free 256-byte slot after Xcp_Fusion (0x70030500). */
+#define XCP_FUSIONCAL_ADDR   0x70030600u
+#define XCP_FUSIONCAL_MAGIC  0x4C414346u        /* "FCAL" */
+#define XCP_FUSIONCAL_SIZE   64u
+
+/* Layout (little-endian, all 4-byte aligned; verify against
+ * FusionCal.src after any edit — TASKING aligns uint32 to 2 bytes):
+ *
+ *   0x00  uint32  magic         0x4C414346, firmware-written, not writable
+ *   --- attitude (Ahrs.c) ---
+ *   0x04  float32 twoKpAcc      accelerometer correction gain [1/s]
+ *   0x08  float32 twoKpMag      magnetometer correction gain [1/s]
+ *   0x0C  float32 twoKi         gyro-bias integral gain [1/s^2]
+ *   --- vertical channel (fusion.c) ---
+ *   0x10  float32 sigmaAccD     accel process noise, down [m/s^2]
+ *   0x14  float32 sigmaBaro     barometer noise [m] (R is this SQUARED)
+ *   0x18  float32 sigmaBaroRw   barometer bias random walk [m/sqrt(s)]
+ *   0x1C  float32 tauBaroBias   barometer bias mean-reversion [s]
+ *   --- horizontal channels (fusion.c) ---
+ *   0x20  float32 sigmaAccH     accel process noise, horizontal [m/s^2]
+ *   0x24  float32 sigmaGnssVel  GNSS velocity noise [m/s]
+ *   0x28  float32 gnssPosRScale multiplies the GNSS position R. >1 tells the
+ *                               filter its position fixes are less independent
+ *                               than hAcc implies — see docs/FUSION.md section 7
+ *   --- gates (both) ---
+ *   0x2C  float32 gateSigmaSq   outlier gate, in sigma squared
+ *   0x30  float32 gateMinM      absolute floor on the barometer gate [m]
+ *   0x34  float32 reserved[3]
+ */
+typedef struct
+{
+    uint32  magic;
+
+    float32 twoKpAcc;
+    float32 twoKpMag;
+    float32 twoKi;
+
+    float32 sigmaAccD;
+    float32 sigmaBaro;
+    float32 sigmaBaroRw;
+    float32 tauBaroBias;
+
+    float32 sigmaAccH;
+    float32 sigmaGnssVel;
+    float32 gnssPosRScale;
+
+    float32 gateSigmaSq;
+    float32 gateMinM;
+
+    float32 reserved[3];
+} Xcp_FusionCal;
+
+extern volatile Xcp_FusionCal g_fusionCal;
+
+/** Load the compiled defaults. Call once at start-up, before Fusion_init(). */
+void FusionCal_init(void);
+
+/** \return a positive value: \p v if it is finite and above \p lo, else \p def.
+ *  Used by the filters on every read, because a variance of zero or a NaN
+ *  arriving over XCP would otherwise divide the estimator by nothing. */
+float32 FusionCal_positive(float32 v, float32 lo, float32 def);
+
+#endif /* FUSIONCAL_H */

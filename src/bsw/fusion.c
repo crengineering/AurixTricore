@@ -3,6 +3,7 @@
  * \brief Navigation filter — see fusion.h.
  *********************************************************************************************************************/
 #include "fusion.h"
+#include "FusionCal.h"
 #include <math.h>
 
 /* --- tuning: vertical channel -------------------------------------------- */
@@ -165,11 +166,12 @@ typedef struct
 {
     float32 x[FS_N];            /* pos [m], vel [m/s], accBias, measBias   */
     float32 p[FS_N][FS_N];      /* covariance, kept symmetric              */
-    float32 sigmaA;             /* process noise on acceleration           */
-    float32 sigmaMeasRw;        /* random walk of the measurement bias     */
+    /* Pointers INTO the calibration block, not copies: the filter must see a
+     * tuning write on the next tick, and a copy taken at init never would. */
+    volatile const float32 *sigmaA;       /* process noise on acceleration    */
+    volatile const float32 *sigmaMeasRw;  /* NULL when the channel has no
+                                           * relative sensor (north/east)     */
     float32 pMeasBInit;         /* initial variance of the measBias state  */
-    float32 measBTau;           /* mean-reversion time constant [s]; 0 = a
-                                 * pure random walk with no reversion      */
     uint32  rejectRun;
     boolean anchored;           /* an absolute or relative fix has arrived */
 } Fusion_Chan;
@@ -273,8 +275,8 @@ static void fusion_chanClampCov(Fusion_Chan *ch)
     }
 }
 
-static void fusion_chanInit(Fusion_Chan *ch, float32 sigmaA, float32 sigmaMeasRw,
-                            float32 pMeasB, float32 measBTau)
+static void fusion_chanInit(Fusion_Chan *ch, volatile const float32 *sigmaA,
+                            volatile const float32 *sigmaMeasRw, float32 pMeasB)
 {
     uint8 i;
 
@@ -286,7 +288,6 @@ static void fusion_chanInit(Fusion_Chan *ch, float32 sigmaA, float32 sigmaMeasRw
     ch->sigmaA      = sigmaA;
     ch->sigmaMeasRw = sigmaMeasRw;
     ch->pMeasBInit  = pMeasB;
-    ch->measBTau    = measBTau;
     ch->rejectRun   = 0u;
     ch->anchored    = FALSE;
 
@@ -304,12 +305,23 @@ static void fusion_chanInit(Fusion_Chan *ch, float32 sigmaA, float32 sigmaMeasRw
 static void fusion_chanPredict(Fusion_Chan *ch, float32 a, float32 dt)
 {
     const float32 dt2  = dt * dt;
-    const float32 qa   = ch->sigmaA * ch->sigmaA;
-    const float32 qm   = ch->sigmaMeasRw * ch->sigmaMeasRw;
+    /* Process noise is read from the calibration block every tick. ch->sigmaA
+     * selects WHICH parameter this channel uses; the value itself is live. */
+    const float32 sa   = FusionCal_positive(*ch->sigmaA, 0.0f, FUSION_SIGMA_A_D);
+    const float32 sm   = (ch->sigmaMeasRw != NULL_PTR)
+                       ? FusionCal_positive(*ch->sigmaMeasRw, 0.0f,
+                                            FUSION_SIGMA_BARO_RW)
+                       : 0.0f;
+    const float32 qa   = sa * sa;
+    const float32 qm   = sm * sm;
     const float32 f01  = dt;
     const float32 f02  = -0.5f * dt2;
     const float32 f12  = -dt;
-    const float32 f33  = (ch->measBTau > 0.0f) ? (1.0f - (dt / ch->measBTau)) : 1.0f;
+    const float32 tau  = (ch->sigmaMeasRw != NULL_PTR)
+                       ? FusionCal_positive(g_fusionCal.tauBaroBias, 1.0f,
+                                            FUSION_TAU_BARO_BIAS_S)
+                       : 0.0f;
+    const float32 f33  = (tau > 0.0f) ? (1.0f - (dt / tau)) : 1.0f;
     const float32 aEff = a - ch->x[FS_ACCB];
     float32 t[FS_N][FS_N];
     uint8   i;
@@ -506,10 +518,10 @@ void Fusion_init(void)
      * alongside an absolute one, so it is the only channel whose measurement
      * bias is observable. North and east get zero initial variance and zero
      * random walk, which pins that state at exactly zero for good. */
-    fusion_chanInit(&s_chD, FUSION_SIGMA_A_D, FUSION_SIGMA_BARO_RW,
-                    FUSION_P_MEASB_INIT, FUSION_TAU_BARO_BIAS_S);
-    fusion_chanInit(&s_chN, FUSION_SIGMA_A_H, 0.0f, 0.0f, 0.0f);
-    fusion_chanInit(&s_chE, FUSION_SIGMA_A_H, 0.0f, 0.0f, 0.0f);
+    fusion_chanInit(&s_chD, &g_fusionCal.sigmaAccD, &g_fusionCal.sigmaBaroRw,
+                    FUSION_P_MEASB_INIT);
+    fusion_chanInit(&s_chN, &g_fusionCal.sigmaAccH, NULL_PTR, 0.0f);
+    fusion_chanInit(&s_chE, &g_fusionCal.sigmaAccH, NULL_PTR, 0.0f);
 
     s_baroAlt   = 0.0f;
     s_baroNew   = FALSE;
@@ -597,10 +609,15 @@ static void fusion_correctBaro(void)
      * state. h therefore has a 1 in both slots. */
     static const float32 h[FS_N] = { 1.0f, 0.0f, 0.0f, 1.0f };
     const float32 z = -(s_baroAlt - s_baroRef);   /* NED: baro counts UP */
+    const float32 sb = FusionCal_positive(g_fusionCal.sigmaBaro, 0.0f,
+                                          FUSION_SIGMA_BARO);
+    const float32 gm = FusionCal_positive(g_fusionCal.gateMinM, 0.0f,
+                                          FUSION_GATE_MIN_M);
+    const float32 gs = FusionCal_positive(g_fusionCal.gateSigmaSq, 0.0f,
+                                          FUSION_GATE_SIGMA_SQ);
     float32 y = 0.0f;
 
-    if (fusion_chanUpdate(&s_chD, h, z, FUSION_R_BARO, FUSION_GATE_SIGMA_SQ,
-                          FUSION_GATE_MIN_SQ, &y) != FALSE)
+    if (fusion_chanUpdate(&s_chD, h, z, sb * sb, gs, gm * gm, &y) != FALSE)
     {
         s_navState.innov = y;
     }
@@ -652,7 +669,12 @@ static void fusion_correctGnss(void)
         /* the receiver is already being suitably modest */
     }
 
-    rPos      = hAcc * hAcc;
+    /* Inflate the position R. The receiver's hAcc describes a single fix; it
+     * does NOT describe ten per second, because consecutive NAV-PVT solutions
+     * share most of their information. Counting them as independent is what
+     * drove varN to claim 0.3 m against a measured 2.59 m. See FusionCal.h. */
+    rPos      = hAcc * hAcc
+              * FusionCal_positive(g_fusionCal.gnssPosRScale, 0.0f, 1.0f);
     gateMinSq = FUSION_GNSS_GATE_MIN_M * FUSION_GNSS_GATE_MIN_M;
 
     if (s_originOk == FALSE)
@@ -747,7 +769,9 @@ static void fusion_correctGnss(void)
     headRad = s_gnssHeading * FUSION_DEG_TO_RAD;
 
     {
-        const float32 rVel = FUSION_SIGMA_GNSS_VEL * FUSION_SIGMA_GNSS_VEL;
+        const float32 sv   = FusionCal_positive(g_fusionCal.sigmaGnssVel, 0.0f,
+                                               FUSION_SIGMA_GNSS_VEL);
+        const float32 rVel = sv * sv;
         const float32 vN   = s_gnssSpeed * cosf(headRad);
         const float32 vE   = s_gnssSpeed * sinf(headRad);
         const float32 gateMinVelSq = 25.0f;   /* 5 m/s: a corrupt fix, not a manoeuvre */

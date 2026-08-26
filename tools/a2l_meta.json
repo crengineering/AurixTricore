@@ -1099,6 +1099,133 @@
       "desc": "polls that carried an already-fused fix; small but non-zero is healthy, exactly zero or near the poll rate is a fault",
       "lo": "0",
       "hi": "4294967295"
+    },
+    "reserved3": {
+      "skip": true
+    },
+    "ahrsBiasDegraded": {
+      "name": "AhrsBiasDegraded",
+      "desc": "1 = the boot gyro-bias calibration hit its 10 s deadline instead of completing a still window, i.e. the board was moving at power-on. The estimate still runs, it is just less good",
+      "lo": "0",
+      "hi": "1"
+    },
+    "phi_ist": {
+      "name": "CtrlPhiIst{i}",
+      "desc": "FLIGHT CONTROL FEEDBACK: attitude for att_ctrl_step, element {i} of [roll, pitch, yaw]. RADIANS, not degrees - this is the controller's own unit",
+      "unit": "rad",
+      "lo": "-6.3",
+      "hi": "6.3"
+    },
+    "om_ist": {
+      "name": "CtrlOmIst{i}",
+      "desc": "FLIGHT CONTROL FEEDBACK: body rate for rate_ctrl_step, element {i} of [p, q, r]. RAD/S",
+      "unit": "rad/s",
+      "lo": "-35",
+      "hi": "35"
+    },
+    "p_ned_ist": {
+      "name": "CtrlPNedIst{i}",
+      "desc": "FLIGHT CONTROL FEEDBACK: position for pos_ctrl_step, element {i} of [north, east, down]",
+      "unit": "m",
+      "lo": "-100000",
+      "hi": "100000"
+    },
+    "v_b_ist": {
+      "name": "CtrlVBIst{i}",
+      "desc": "FLIGHT CONTROL FEEDBACK: velocity for pos_ctrl_step, element {i} of [u, v, w]. BODY frame, rotated out of NED by the current attitude - feeding it NED velocity would make the damping term wrong by the heading angle",
+      "unit": "m/s",
+      "lo": "-200",
+      "hi": "200"
+    }
+  },
+  "Xcp_FusionCal": {
+    "magic": {
+      "skip": true
+    },
+    "reserved": {
+      "skip": true
+    },
+    "twoKpAcc": {
+      "name": "FusKpAccel",
+      "desc": "TUNING - attitude: how hard the accelerometer pulls the gyro integral back toward gravity. Higher = tracks gravity faster but inherits vibration; lower = smoother but gyro drift shows. Fixes ROLL and PITCH only",
+      "unit": "1/s",
+      "lo": "0",
+      "hi": "20"
+    },
+    "twoKpMag": {
+      "name": "FusKpMag",
+      "desc": "TUNING - attitude: same, for the magnetometer, which fixes YAW only. Deliberately half the accelerometer gain: indoors the magnetic field is the less trustworthy of the two",
+      "unit": "1/s",
+      "lo": "0",
+      "hi": "20"
+    },
+    "twoKi": {
+      "name": "FusKiGyroBias",
+      "desc": "TUNING - attitude: integral gain that tracks slow gyro-bias drift. Small, because the boot calibration already removed the bulk of it",
+      "unit": "1/s^2",
+      "lo": "0",
+      "hi": "1"
+    },
+    "sigmaAccD": {
+      "name": "FusSigmaAccDown",
+      "desc": "TUNING - vertical: how much the filter distrusts the accelerometer when predicting altitude. THE knob to raise once motors are running, because vibration is not in the 0.3 measured on a desk",
+      "unit": "m/s^2",
+      "lo": "0.001",
+      "hi": "20"
+    },
+    "sigmaBaro": {
+      "name": "FusSigmaBaro",
+      "desc": "TUNING - vertical: barometer noise. MEASURED (0.0197 m); R is this value SQUARED. Changing the BMP581 IIR setting invalidates it - re-measure, do not guess",
+      "unit": "m",
+      "lo": "0.001",
+      "hi": "10"
+    },
+    "sigmaBaroRw": {
+      "name": "FusSigmaBaroDrift",
+      "desc": "TUNING - vertical: how fast the barometer's zero wanders with weather. Measured 0.19 m/min on a still desk. This is the WEATHER, not the sensor",
+      "unit": "m/sqrt(s)",
+      "lo": "0",
+      "hi": "1"
+    },
+    "tauBaroBias": {
+      "name": "FusTauBaroDrift",
+      "desc": "TUNING - vertical: time constant over which that barometer drift reverts toward zero. Without mean reversion the altitude variance grows without bound, because a barometer alone can only ever observe (altitude + drift), never either one",
+      "unit": "s",
+      "lo": "1",
+      "hi": "10000"
+    },
+    "sigmaAccH": {
+      "name": "FusSigmaAccHoriz",
+      "desc": "TUNING - horizontal: accelerometer distrust for north/east. Larger than the vertical one because horizontal acceleration is contaminated by ATTITUDE error - one degree of tilt error tips 0.17 m/s^2 of gravity into the horizontal plane",
+      "unit": "m/s^2",
+      "lo": "0.001",
+      "hi": "20"
+    },
+    "sigmaGnssVel": {
+      "name": "FusSigmaGnssVel",
+      "desc": "TUNING - horizontal: GNSS velocity noise. Currently pessimistic at 0.3 against a receiver good to about 0.05 - this is Doppler-derived and is the best measurement available for a position loop",
+      "unit": "m/s",
+      "lo": "0.001",
+      "hi": "20"
+    },
+    "gnssPosRScale": {
+      "name": "FusGnssPosRScale",
+      "desc": "TUNING - horizontal: multiplies the GNSS position R. 1.0 trusts hAcc as a single independent fix, which is WRONG at 10 Hz because consecutive solutions share most of their information. Set to 8.0 after the outdoor run showed varN claiming 0.3 m against a real 2.59 m",
+      "lo": "0.1",
+      "hi": "1000"
+    },
+    "gateSigmaSq": {
+      "name": "FusGateSigmaSq",
+      "desc": "TUNING - outlier gate, in sigma SQUARED (25 = 5 sigma). Rejects a measurement this far from what the filter expected",
+      "lo": "1",
+      "hi": "10000"
+    },
+    "gateMinM": {
+      "name": "FusGateMinMetres",
+      "desc": "TUNING - absolute floor on the barometer gate. Without it the gate converges to +/-0.1 m and starts rejecting real motion: a 30 cm hand lift already reached 62 percent of it. The gate is for CORRUPT readings, not for manoeuvres",
+      "unit": "m",
+      "lo": "0.01",
+      "hi": "1000"
     }
   }
 }

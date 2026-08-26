@@ -231,8 +231,21 @@ typedef struct
  *   0xB0  uint32  covResets    numerical health check trips — MUST be 0
  *   0xB4  uint32  gnssITow     iTOW of the last fix fused [ms]
  *   0xB8  uint32  gnssDupes    polls carrying an already-fused fix
+ *   0xBC  uint8   ahrsBiasDegraded  1 = gyro bias taken while moving
+ *   0xBD  uint8   reserved3[3]
  *
- * Total 0xBC = 188 bytes, leaving 68 before the next slot at 0x70030600.
+ *   --- flight-controller feedback, in the CONTROLLER's units and frames ---
+ *   Everything above is published for humans: degrees, NED. src/asw/flight_ctrl.h
+ *   wants radians, and VELOCITY IN BODY AXES. Rather than leave each consumer to
+ *   convert (and disagree), the conversion happens once, here, next to the
+ *   estimate it comes from. These four vectors are exactly the arguments
+ *   att_ctrl_step / rate_ctrl_step / pos_ctrl_step take.
+ *   0xC0  float32 phi_ist[3]   roll, pitch, yaw [rad]
+ *   0xCC  float32 om_ist[3]    body rates p, q, r [rad/s]
+ *   0xD8  float32 p_ned_ist[3] position N, E, D [m]
+ *   0xE4  float32 v_b_ist[3]   velocity u, v, w [m/s] — BODY frame
+ *
+ * Total 0xF0 = 240 bytes, leaving 16 before the next slot at 0x70030600.
  * Exceeds XCP MAX_CTO (64), so clients read it in several SHORT_UPLOADs.
  * --------------------------------------------------------------------------- */
 #define XCP_FUSION_ADDR   0x70030500u
@@ -291,6 +304,15 @@ typedef struct
     uint32  covResets;
     uint32  gnssITow;
     uint32  gnssDupes;
+
+    uint8   ahrsBiasDegraded;
+    uint8   reserved3[3];
+
+    /* flight-controller feedback — see the block comment above */
+    float32 phi_ist[3];
+    float32 om_ist[3];
+    float32 p_ned_ist[3];
+    float32 v_b_ist[3];
 } Xcp_Fusion;
 
 extern volatile Xcp_Fusion g_xcpFusion;

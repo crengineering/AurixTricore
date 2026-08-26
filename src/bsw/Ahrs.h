@@ -69,7 +69,10 @@ typedef struct
     uint8   state;         /**< Ahrs_State                                    */
     uint8   accTrusted;    /**< 1 while |a| is close enough to 1 g to use     */
     uint8   magTrusted;    /**< 1 while |B| is plausible and being used       */
-    uint8   reserved;
+    uint8   biasDegraded;  /**< 1 if the boot gyro-bias calibration hit its
+                            *   deadline instead of completing a still window,
+                            *   i.e. the board was moving at power-on. The
+                            *   estimate still runs; it is just less good      */
 } Ahrs_Values;
 
 /** Reset the estimator and start a fresh gyro-bias calibration. */
@@ -84,6 +87,18 @@ void Ahrs_init(void);
  *                rather than integrating a stale sample */
 void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
                  float32 dt, boolean valid);
+
+/** Rotate a vector from NED into the BODY frame using the current attitude.
+ *
+ *  Exposed because the flight controller wants VELOCITY IN BODY AXES
+ *  (`v_b_ist` in src/asw/flight_ctrl.h) while the navigation filter estimates
+ *  it in NED. Somebody has to do that rotation, and doing it here reuses the
+ *  same quaternion and the same tested code the filter runs on, rather than a
+ *  second copy that can drift out of agreement with it.
+ *
+ *  \param vNed   input vector in NED
+ *  \param vBody  receives the same vector in body axes (may not alias vNed) */
+void Ahrs_nedToBody(const float32 vNed[3], float32 vBody[3]);
 
 /** Latch a magnetometer sample for the next Ahrs_update() to consume.
  *  Hard-iron correction and the mounting transform happen here.

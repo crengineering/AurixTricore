@@ -2,6 +2,7 @@
 #include "Version.h"
 #include "Diagnostics.h"
 #include "Nvm.h"
+#include "FusionCal.h"
 #include "gpio.h"
 #include "Ifx_Types.h"
 #include "lwip/udp.h"
@@ -71,6 +72,14 @@ static boolean xcpWriteAllowed(uint32 addr, uint32 len)
     }
     else if ((addr >= (XCP_NVM_ADDR + 4u)) && ((addr + len) <= (XCP_NVM_ADDR + XCP_NVM_SIZE)))
     {
+        allowed = TRUE;
+    }
+    else if ((addr >= (XCP_FUSIONCAL_ADDR + 4u))
+             && ((addr + len) <= (XCP_FUSIONCAL_ADDR + XCP_FUSIONCAL_SIZE)))
+    {
+        /* Estimator tuning. RAM only, so the worst a bad write can do is spoil
+         * the estimate until the next power cycle. The magic word at offset 0
+         * stays firmware-owned, hence the +4. */
         allowed = TRUE;
     }
     else if ((addr >= (XCP_GPIO_ADDR + XCP_GPIO_STATE_OFFSET))

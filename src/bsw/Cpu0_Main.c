@@ -26,6 +26,7 @@
 #include "GnssM9N.h"
 #include "fusion.h"
 #include "Ahrs.h"
+#include "FusionCal.h"
 #include "SysTime.h"
 #include "Nvm.h"
 #include <math.h>
@@ -559,6 +560,7 @@ int core0_main(void)
         Uart_println("");
     }
     icm42688DebugDump();
+    FusionCal_init();       /* estimator tuning defaults, BEFORE the filters */
     Ahrs_init();            /* start the gyro-bias calibration; hold still  */
     Fusion_init();          /* zero every channel state and covariance      */
 
