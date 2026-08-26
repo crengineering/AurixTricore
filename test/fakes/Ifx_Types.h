@@ -17,6 +17,11 @@ typedef unsigned char boolean;
 #define TRUE  (1u)
 #define FALSE (0u)
 
+/* iLLD spells the null pointer this way (Ifx_Types.h on target). */
+#ifndef NULL_PTR
+#define NULL_PTR ((void *)0)
+#endif
+
 /* On target this comes from Compilers.h (via Platform_Types.h): it decorates
  * the following function as an interrupt handler and plants the vector-table
  * entry. On the host there is no vector table, so it degrades to a plain

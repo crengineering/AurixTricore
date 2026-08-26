@@ -76,16 +76,19 @@ float32 FusionCal_positive(float32 v, float32 lo, float32 def)
 {
     float32 r = def;
 
-    /* Written as "is it above the floor" rather than "is it below" on purpose:
-     * the comparison is FALSE for NaN either way, so NaN takes the default
-     * instead of propagating into a covariance and poisoning the filter. */
-    if (v > lo)
+    /* Written as a POSITIVE test -- "is it inside the admissible band" --
+     * rather than as a list of rejections. Both comparisons are FALSE for NaN,
+     * so NaN takes the default; and the upper bound is what stops +INFINITY,
+     * which an earlier version accepted because inf > lo is true. Bounding
+     * both sides is the difference between rejecting the bad values you
+     * thought of and accepting only the good ones. */
+    if ((v > lo) && (v < FUSIONCAL_MAX))
     {
         r = v;
     }
     else
     {
-        /* zero, negative or NaN — keep the compiled default */
+        /* zero, negative, NaN, or either infinity — keep the compiled default */
     }
 
     return r;

@@ -122,6 +122,26 @@
  * corrupted SPI transfer, at roughly 10 g. */
 #define FUSION_ACC_MAX          (100.0f)
 
+/* Admissible bands for values arriving from outside, used by fusion_usable().
+ * Deliberately generous -- these reject garbage, they do not police physics.
+ * FUSION_ALT_MAX is well above any altitude this airframe reaches and well
+ * below the point where float32 loses metre resolution. */
+/* Bound on the relative sensor's offset [m]. METEOROLOGICAL, not numerical:
+ * a barometer's zero drifts with the weather, and the weather does not move
+ * the apparent altitude by more than a few tens of metres over a flight.
+ *
+ * This is the safety net for the one direction the filter cannot see. Only the
+ * SUM (position + measBias) is observable from a barometer, so corrupt input
+ * can drive the two apart without the innovation noticing -- measured at 438 m
+ * after a 30 s corrupt burst, with the sum still correct to 0.2 mm and the
+ * filter therefore looking perfectly healthy. Re-acquisition alone does not
+ * fix it, because the split is driven again after the last reset, and mean
+ * reversion at 600 s is far too slow to matter inside a flight. */
+#define FUSION_MEASB_MAX        (50.0f)
+
+#define FUSION_INPUT_MAX        (1.0e6f)
+#define FUSION_ALT_MAX          (1.0e6f)
+
 /* Sanity bounds on dt [s]. The IMU task runs at 50 Hz. The lower bound keeps a
  * double call from dividing by nothing; the upper bound matters at boot, where
  * the first measured interval is whatever the STM counter happened to hold. */
@@ -500,6 +520,31 @@ static boolean fusion_chanUpdate(Fusion_Chan *ch, const float32 h[FS_N],
     return accepted;
 }
 
+/* Hold the unobservable split inside physical bounds.
+ *
+ * The excess is moved INTO the position rather than discarded, so the
+ * observable sum is untouched -- this constrains only the direction the
+ * measurement cannot see, and never contradicts the measurement itself. */
+static void fusion_boundMeasBias(Fusion_Chan *ch)
+{
+    if (ch->x[FS_MEASB] > FUSION_MEASB_MAX)
+    {
+        const float32 excess = ch->x[FS_MEASB] - FUSION_MEASB_MAX;
+        ch->x[FS_MEASB] = FUSION_MEASB_MAX;
+        ch->x[FS_POS]  += excess;
+    }
+    else if (ch->x[FS_MEASB] < -FUSION_MEASB_MAX)
+    {
+        const float32 excess = ch->x[FS_MEASB] + FUSION_MEASB_MAX;
+        ch->x[FS_MEASB] = -FUSION_MEASB_MAX;
+        ch->x[FS_POS]  += excess;
+    }
+    else
+    {
+        /* inside the physical range */
+    }
+}
+
 /* Widen the covariance after a rejection so the gate reopens on its own. */
 static void fusion_chanInflate(Fusion_Chan *ch)
 {
@@ -581,10 +626,31 @@ void Fusion_init(void)
     s_navState.covResets    = 0u;
     s_navState.gnssITow     = 0u;
     s_navState.gnssDupes    = 0u;
+    s_navState.dropped      = 0u;
     s_navState.verticalOk   = 0u;
     s_navState.horizontalOk = 0u;
     s_navState.originSet    = 0u;
     s_navState.reserved     = 0u;
+}
+
+/* Is this a number the filter can safely use?
+ *
+ * TRUE only for a finite value inside a physically sensible band. Written as a
+ * positive test on both sides on purpose: every comparison against NaN is
+ * FALSE, so NaN fails it, and the bounds reject both infinities.
+ *
+ * This exists because a NaN measurement is invisible to every other guard.
+ * The outlier gate cannot catch it -- "is this innovation too large" is false
+ * for NaN, so it is not an outlier. The covariance health check does not catch
+ * it either, because P stays perfectly finite while the STATE goes NaN.
+ * Measured: 2000 NaN barometer samples left every state NaN with zero
+ * rejections, zero resets and zero health-check trips. Nothing noticed.
+ *
+ * So bad measurements have to be stopped at the door, before they reach any
+ * arithmetic. */
+static boolean fusion_usable(float32 v, float32 limit)
+{
+    return ((v > -limit) && (v < limit)) ? TRUE : FALSE;
 }
 
 /* Clamp an acceleration input to the physically possible. */
@@ -637,9 +703,30 @@ static void fusion_correctBaro(void)
         {
             /* Half a second of unbroken disagreement. The barometer is not the
              * one that is wrong: re-acquire from it and start over. */
-            s_chD.x[FS_POS]  = z - s_chD.x[FS_MEASB];
-            s_chD.x[FS_VEL]  = 0.0f;
-            s_chD.x[FS_ACCB] = 0.0f;
+            /* Reset the WHOLE state, not part of it.
+             *
+             * fusion_chanResetCov() puts every variance back to its prior,
+             * measBias included. Keeping the measBias MEAN while resetting its
+             * VARIANCE leaves the state incoherent: the covariance says "I
+             * know only the prior" while the mean still carries an accumulated
+             * estimate. A Kalman state is (mean, covariance) together.
+             *
+             * Measured cost of getting this wrong: a corrupt burst drove the
+             * barometer offset to +2125 m, and because every re-acquisition
+             * faithfully preserved it, d settled at -2125 m against a true 0.
+             * The observable SUM (d + measBias) stayed correct to a
+             * millimetre, so the filter looked perfectly healthy while the
+             * value everything actually reads was 2 km wrong.
+             *
+             * The cost of doing it this way is real but recoverable: measBias
+             * is estimated from the barometer AND GNSS altitude, so this
+             * discards GNSS-derived knowledge because the barometer
+             * misbehaved. GNSS re-anchors it. An unbounded split does not
+             * recover on its own. */
+            s_chD.x[FS_POS]   = z;
+            s_chD.x[FS_VEL]   = 0.0f;
+            s_chD.x[FS_ACCB]  = 0.0f;
+            s_chD.x[FS_MEASB] = 0.0f;
             fusion_chanResetCov(&s_chD);
             s_chD.rejectRun  = 0u;
             s_navState.resets++;
@@ -753,10 +840,17 @@ static void fusion_correctGnss(void)
         {
             /* A run of rejected fixes means the horizontal state is wrong, not
              * the receiver. Re-acquire, exactly as the vertical channel does. */
-            s_chN.x[FS_POS] = zN;
-            s_chE.x[FS_POS] = zE;
-            s_chN.x[FS_VEL] = 0.0f;
-            s_chE.x[FS_VEL] = 0.0f;
+            /* Same rule as the vertical channel: the covariance is going back
+             * to its prior, so the mean must too -- all of it. These were
+             * leaving accBias untouched. */
+            s_chN.x[FS_POS]   = zN;
+            s_chE.x[FS_POS]   = zE;
+            s_chN.x[FS_VEL]   = 0.0f;
+            s_chE.x[FS_VEL]   = 0.0f;
+            s_chN.x[FS_ACCB]  = 0.0f;
+            s_chE.x[FS_ACCB]  = 0.0f;
+            s_chN.x[FS_MEASB] = 0.0f;
+            s_chE.x[FS_MEASB] = 0.0f;
             fusion_chanResetCov(&s_chN);
             fusion_chanResetCov(&s_chE);
             s_chN.rejectRun = 0u;
@@ -812,7 +906,10 @@ static void fusion_correctGnss(void)
 
 void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, boolean valid)
 {
-    if ((valid != FALSE) && (dt > FUSION_DT_MIN) && (dt < FUSION_DT_MAX))
+    if ((valid != FALSE) && (dt > FUSION_DT_MIN) && (dt < FUSION_DT_MAX)
+        && (fusion_usable(accNed[0], FUSION_INPUT_MAX) != FALSE)
+        && (fusion_usable(accNed[1], FUSION_INPUT_MAX) != FALSE)
+        && (fusion_usable(accNed[2], FUSION_INPUT_MAX) != FALSE))
     {
         const float32 aN = fusion_clampAcc(accNed[0]);
         const float32 aE = fusion_clampAcc(accNed[1]);
@@ -829,6 +926,7 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, bo
         if (s_baroNew != FALSE)
         {
             fusion_correctBaro();
+            fusion_boundMeasBias(&s_chD);
             s_baroNew = FALSE;
         }
         else
@@ -876,7 +974,17 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, bo
 
 void Fusion_setBaroAlt(float32 altM, boolean valid)
 {
-    if (valid != FALSE)
+    /* A NaN or infinite altitude is dropped here rather than fused. It cannot
+     * be caught later: see fusion_usable(). The barometric formula upstream is
+     * a powf() of a pressure ratio, so a corrupt pressure of the wrong sign is
+     * all it takes to produce one. */
+    if ((valid != FALSE) && (fusion_usable(altM, FUSION_ALT_MAX) == FALSE))
+    {
+        /* Counted, not just dropped: a silently discarded sample makes a
+         * failing sensor indistinguishable from a healthy one. */
+        s_navState.dropped++;
+    }
+    else if (valid != FALSE)
     {
         s_baroAlt = altM;
         s_baroNew = TRUE;
@@ -913,7 +1021,16 @@ void Fusion_setGnss(sint32 latDeg1e7, sint32 lonDeg1e7, float32 altM,
          * the one already fused. Without the time-of-week check those repeats
          * would be counted as fresh evidence and the covariance would shrink
          * for information that was never there. */
-        if ((s_haveITow == FALSE) || (iTOW != s_lastITow))
+        const boolean sane = (fusion_usable(altM, FUSION_ALT_MAX) != FALSE)
+                          && (fusion_usable(speedMps, FUSION_INPUT_MAX) != FALSE)
+                          && (fusion_usable(headingDeg, FUSION_INPUT_MAX) != FALSE)
+                          && (fusion_usable(hAccM, FUSION_ALT_MAX) != FALSE);
+
+        if (sane == FALSE)
+        {
+            s_navState.dropped++;
+        }
+        else if ((s_haveITow == FALSE) || (iTOW != s_lastITow))
         {
             s_lastITow    = iTOW;
             s_haveITow    = TRUE;

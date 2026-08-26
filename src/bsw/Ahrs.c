@@ -81,6 +81,11 @@
 #define AHRS_GRAVITY          (9.80665f)
 #define AHRS_TWO_PI           (6.2831853f)
 
+/* Admissible band for a raw sensor sample. Generous: this rejects garbage and
+ * non-finite values, it does not police physics. The ICM-42688-P is configured
+ * for +/-16 g and +/-2000 deg/s, so anything past this is a corrupt transfer. */
+#define AHRS_INPUT_MAX        (1.0e6f)
+
 /* --- mounting transforms -------------------------------------------------
  * Sensor axes to BODY axes (x forward, y right, z DOWN).
  *
@@ -528,6 +533,19 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
             /* Only the interval was unusable — keep the last projection so a
              * single scheduler hiccup does not blank the channel filters. */
         }
+    }
+    else if (!((acc[0] > -AHRS_INPUT_MAX) && (acc[0] < AHRS_INPUT_MAX)
+            && (acc[1] > -AHRS_INPUT_MAX) && (acc[1] < AHRS_INPUT_MAX)
+            && (acc[2] > -AHRS_INPUT_MAX) && (acc[2] < AHRS_INPUT_MAX)
+            && (gyro[0] > -AHRS_INPUT_MAX) && (gyro[0] < AHRS_INPUT_MAX)
+            && (gyro[1] > -AHRS_INPUT_MAX) && (gyro[1] < AHRS_INPUT_MAX)
+            && (gyro[2] > -AHRS_INPUT_MAX) && (gyro[2] < AHRS_INPUT_MAX)))
+    {
+        /* A NaN or infinite sample is dropped exactly like a failed read. The
+         * positive form matters: every comparison against NaN is false, so
+         * negating a positive test is what rejects it. Without this, an
+         * absurd acceleration propagates into accNed and out to the channel
+         * filters as +/-inf. */
     }
     else
     {

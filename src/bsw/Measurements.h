@@ -233,6 +233,9 @@ typedef struct
  *   0xB8  uint32  gnssDupes    polls carrying an already-fused fix
  *   0xBC  uint8   ahrsBiasDegraded  1 = gyro bias taken while moving
  *   0xBD  uint8   reserved3[3]
+ *   0xF0  uint32  navDropped   measurements refused at the input as NaN,
+ *                              infinite or absurd. MUST be 0 with healthy
+ *                              sensors -- a rising count IS the sensor fault
  *
  *   --- flight-controller feedback, in the CONTROLLER's units and frames ---
  *   Everything above is published for humans: degrees, NED. src/asw/flight_ctrl.h
@@ -245,7 +248,7 @@ typedef struct
  *   0xD8  float32 p_ned_ist[3] position N, E, D [m]
  *   0xE4  float32 v_b_ist[3]   velocity u, v, w [m/s] — BODY frame
  *
- * Total 0xF0 = 240 bytes, leaving 16 before the next slot at 0x70030600.
+ * Total 0xF4 = 244 bytes, leaving 12 before the next slot at 0x70030600.
  * Exceeds XCP MAX_CTO (64), so clients read it in several SHORT_UPLOADs.
  * --------------------------------------------------------------------------- */
 #define XCP_FUSION_ADDR   0x70030500u
@@ -313,6 +316,8 @@ typedef struct
     float32 om_ist[3];
     float32 p_ned_ist[3];
     float32 v_b_ist[3];
+
+    uint32  navDropped;
 } Xcp_Fusion;
 
 extern volatile Xcp_Fusion g_xcpFusion;

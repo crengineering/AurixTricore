@@ -51,8 +51,13 @@ typedef struct
     float32 a_d;        /**< position down, relative to the origin [m]       */
     float32 a_v_d;      /**< velocity down [m/s]                             */
     float32 accBiasD;   /**< estimated accelerometer bias, down [m/s^2]      */
-    float32 baroBias;   /**< barometer offset vs GNSS altitude [m]; stays 0
-                         *   until a GNSS fix makes it observable            */
+    float32 baroBias;   /**< barometer offset vs GNSS altitude [m].
+                         *   ⚠️ NOT zero without GNSS: it carries process
+                         *   noise, so it random-walks (measured: 3 mm in
+                         *   10 min). Only (a_d + baroBias) is observable from
+                         *   a barometer alone; a GNSS fix is what pins the
+                         *   split, not what starts the state moving.
+                         *   Bounded to +/-FUSION_MEASB_MAX               */
     float32 innov;      /**< last barometer innovation [m] — the tuning signal */
     float32 p00;        /**< variance of a_d [m^2]; watch it converge        */
 
@@ -82,13 +87,23 @@ typedef struct
     uint32  gnssRejects;  /**< GNSS fixes rejected by the outlier gate        */
     uint32  gnssUpdates;  /**< GNSS fixes actually fused                      */
     uint32  covResets;    /**< covariance re-initialisations forced by the
-                           *   numerical health check. MUST stay zero — any
-                           *   other value is a bug, not a tuning problem      */
+                           *   numerical health check. Zero in normal
+                           *   operation; a non-zero value with healthy
+                           *   sensors is a bug, not a tuning problem.
+                           *   ⚠️ NOT guaranteed zero under corrupt input —
+                           *   measured 35 over 30 s of deliberately corrupt
+                           *   barometer, which is the guard doing its job    */
     uint32  gnssITow;     /**< iTOW of the last fix actually fused [ms]. The
                            *   direct check on the new-fix guard: if this is
                            *   frozen while gnssUpdates also stops, iTOW is not
                            *   being decoded and every later fix is discarded
                            *   as a duplicate                                  */
+    uint32  dropped;      /**< measurements refused at the input because they
+                           *   were NaN, infinite or absurd. MUST stay 0 with
+                           *   healthy sensors -- a rising count is a failing
+                           *   sensor, and without it such a sample is dropped
+                           *   silently and a dead barometer looks like a
+                           *   healthy one                                     */
     uint32  gnssDupes;    /**< polls that carried a fix already fused. Expected
                            *   to be small but NON-ZERO: the 10 Hz poll and the
                            *   10 Hz solution are on independent clocks         */

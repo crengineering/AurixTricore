@@ -1136,6 +1136,12 @@
       "unit": "m/s",
       "lo": "-200",
       "hi": "200"
+    },
+    "navDropped": {
+      "name": "NavDropped",
+      "desc": "measurements refused at the filter input as NaN, infinite or absurd. MUST be 0 with healthy sensors - a rising count IS a failing sensor. Exists because a bad sample cannot be caught later: the outlier gate cannot see a NaN (every comparison against NaN is false, so it is not an outlier) and the covariance check does not fire either, because P stays finite while the state goes NaN",
+      "lo": "0",
+      "hi": "4294967295"
     }
   },
   "Xcp_FusionCal": {

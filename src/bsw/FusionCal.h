@@ -90,9 +90,25 @@ extern volatile Xcp_FusionCal g_fusionCal;
 /** Load the compiled defaults. Call once at start-up, before Fusion_init(). */
 void FusionCal_init(void);
 
-/** \return a positive value: \p v if it is finite and above \p lo, else \p def.
- *  Used by the filters on every read, because a variance of zero or a NaN
- *  arriving over XCP would otherwise divide the estimator by nothing. */
+/** Upper bound on any accepted tuning value.
+ *
+ *  Exists because "reject the bad values" is not the same as "accept only the
+ *  good ones". An earlier version tested only the lower side and +INFINITY
+ *  sailed straight through, because inf > lo is perfectly true — a master can
+ *  write that from the GUI, and it reached the estimator and turned a
+ *  covariance into NaN.
+ *
+ *  The bound only has to exclude infinity and the absurd -- it is not a
+ *  plausibility check on the tuning, which is the operator's business. Every
+ *  real value here is under 1e3, so 1e9 rejects what it must without
+ *  second-guessing a deliberate experiment. */
+#define FUSIONCAL_MAX   (1.0e9f)
+
+/** \return \p v when it is a usable tuning value, else \p def.
+ *
+ *  Usable means strictly above \p lo AND below FUSIONCAL_MAX, which rejects
+ *  zero, negatives, NaN and both infinities. Called on every read, because
+ *  these values arrive from an XCP master and can be anything at all. */
 float32 FusionCal_positive(float32 v, float32 lo, float32 def);
 
 #endif /* FUSIONCAL_H */
