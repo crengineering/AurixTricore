@@ -8,7 +8,7 @@
  *
  * All objects live at fixed addresses (TASKING __at), so this file does not
  * depend on the link run:
- *   Xcp_Data  (measurements)          0x70030000, 232 bytes, Measurements.h
+ *   Xcp_Data  (measurements)          0x70030000, 248 bytes, Measurements.h
  *   Xcp_Cal   (calibration, RAM only) 0x70030100, 64 bytes, Diagnostics.h
  *   Xcp_Nvm   (persistent, DFLASH)    0x70030200, 16 bytes, Nvm.h
  *   Xcp_Gpio  (GPIO control, RAM only) 0x70030300, 52 bytes, gpio.h
@@ -508,24 +508,52 @@ ASAP2_VERSION 1 61
       PHYS_UNIT "m"
     /end MEASUREMENT
 
-    /begin MEASUREMENT fusionElapsed "fusionElapsed (no description in a2l_meta.json)"
+    /begin MEASUREMENT FusionDt "measured interval between IMU task runs, the dt the filter integrates with. Nominal 0.020 s; measured rather than assumed so scheduler jitter cannot bias the integral"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -1e12 1e12
       ECU_ADDRESS 0x700300D8
+      PHYS_UNIT "s"
     /end MEASUREMENT
 
-    /begin MEASUREMENT a_D "a_D (no description in a2l_meta.json)"
+    /begin MEASUREMENT FusionAccelDown "acceleration along NED down with gravity removed, the filter's input. Zero at rest and level; NEGATIVE while accelerating upward. LEVEL-SCAFFOLD ONLY until an attitude estimate exists"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -1e12 1e12
       ECU_ADDRESS 0x700300DC
+      PHYS_UNIT "m/s^2"
     /end MEASUREMENT
 
-    /begin MEASUREMENT a_v_d "a_v_d (no description in a2l_meta.json)"
+    /begin MEASUREMENT FusionVelocityDown "estimated velocity along NED down. POSITIVE IS DOWN: sinking is positive, climbing negative"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -1e12 1e12
       ECU_ADDRESS 0x700300E0
+      PHYS_UNIT "m/s"
     /end MEASUREMENT
 
-    /begin MEASUREMENT a_d "a_d (no description in a2l_meta.json)"
+    /begin MEASUREMENT FusionAltitudeDown "estimated position along NED down, relative to the first valid barometer sample. POSITIVE IS DOWN, so climbing makes this go negative"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -1e12 1e12
       ECU_ADDRESS 0x700300E4
+      PHYS_UNIT "m"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT FusionInnovation "barometer innovation: measured altitude minus the filter's prediction. Zero-mean noise means the filter is consistent; a constant offset means the model is missing a term (in stage 3 that offset IS the un-modelled accelerometer bias)"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -1e12 1e12
+      ECU_ADDRESS 0x700300E8
+      PHYS_UNIT "m"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT FusionVarAltitude "filter variance of a_d [m^2]. Grows on every predict, shrinks on every barometer correction; it should settle rather than run away"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -1e12 1e12
+      ECU_ADDRESS 0x700300EC
+      PHYS_UNIT "m^2"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT FusionBaroRejects "barometer samples rejected by the 5-sigma outlier gate. A rising count is a sensor fault, not a tuning knob"
+      ULONG NO_COMPU_METHOD 0 0 0 4294967295
+      ECU_ADDRESS 0x700300F0
+      PHYS_UNIT "-"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT FusionResets "filter re-acquisitions: the barometer was rejected for 0.5 s straight, so the state was reloaded from it. Non-zero means the filter diverged and recovered -- investigate what threw it off"
+      ULONG NO_COMPU_METHOD 0 0 0 4294967295
+      ECU_ADDRESS 0x700300F4
+      PHYS_UNIT "-"
     /end MEASUREMENT
 
     /* individual diagnostics bits (BIT_MASK views on DiagStatus) */

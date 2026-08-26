@@ -26,6 +26,8 @@
 #include "GnssM9N.h"
 #include "fusion.h"
 #include "SysTime.h"
+#include "Nvm.h"
+#include <math.h>
 
 /* Temporary bring-up switch: 1 = drive P22.8/P22.7 as GPIO instead of starting
  * the QSPI, to prove whether those pads can drive at all. Set back to 0. */
@@ -35,6 +37,12 @@
 #include "CtrlReplay.h"     /* ASW replay harness; single BSW->ASW init
                              * callout — documented deviation, see
                              * docs/CTRL_REPLAY.md                      */
+#define MEAS_SEA_LEVEL_PA   (101325.0f)
+#define MEAS_SEA_LEVEL_MIN  (80000.0f)       /* ~2 km above sea level QNH floor  */
+#define MEAS_SEA_LEVEL_MAX  (120000.0f)      /* well above any real QNH          */
+#define MEAS_ALT_SCALE      (44330.0f)       /* [m] */
+#define MEAS_ALT_EXPONENT   (0.190294957f)   /* 1 / 5.25588 (barometric formula) */
+
 
 IFX_ALIGN(4) IfxCpu_syncEvent cpuSyncEvent = 0;
 
@@ -245,14 +253,28 @@ static void Task_Baro(void)
     float32 pressPa = 0.0f;
     float32 tempC   = 0.0f;
     boolean present;
+    float32 baroAlt = 0.0f;
 
     /* Called unconditionally: Bmp581_read() owns the presence state and uses
      * these calls to probe for a reconnected sensor. Gating on a presence flag
      * here would make that recovery unreachable — which is exactly why a
      * replugged barometer never came back, and why no such accessor exists. */
     present = Bmp581_read(&pressPa, &tempC);
-    measurementsSetBaro(present, pressPa, tempC);
 
+
+    /* alt calculation */
+    float32 p0 = (float32)g_xcpNvm.seaLevelPa;
+
+    if ((p0 < MEAS_SEA_LEVEL_MIN) || (p0 > MEAS_SEA_LEVEL_MAX))
+    {
+        p0 = MEAS_SEA_LEVEL_PA;         /* guard against a bad/zero NVM value */
+    }
+
+    /* International barometric formula: h = 44330 * (1 - (P/P0)^0.190295). */
+    baroAlt    = MEAS_ALT_SCALE * (1.0f - powf(pressPa / p0, MEAS_ALT_EXPONENT));
+    Fusion_setBaroAlt(baroAlt, present);
+
+    measurementsSetBaro(present, pressPa, tempC, baroAlt);
     /* Plausibility bands are the sensor's physical envelope, not tuning:
      * 300..1200 hPa spans sea level to well above any altitude this airframe
      * reaches, and the BMP581 is specified from -40 to +85 degC. The liveness
@@ -308,7 +330,9 @@ static void Task_Imu(void)
 {
     Icm42688_Sample sample = { { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 0.0f };
     boolean         present;
-    static uint32   last_ticks = 0u;
+    /* uint32_t, not uint32: SysTime.h is deliberately iLLD-free and takes the
+     * stdint type, and on TASKING the two are distinct types of equal width. */
+    static uint32_t last_ticks = 0u;
     boolean         fusion_valid = TRUE;
     FusionValues    fusion;
 
@@ -502,6 +526,7 @@ int core0_main(void)
         Uart_println("");
     }
     icm42688DebugDump();
+    Fusion_init();          /* zero the vertical-channel state and covariance */
 
     /* init of the GNSS*/
     if (GnssM9N_init() != FALSE)

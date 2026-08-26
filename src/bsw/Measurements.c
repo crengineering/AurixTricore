@@ -10,16 +10,6 @@
 #include "Ifx_Lwip.h"
 #include <math.h>
 
-/* Pressure-altitude reference: the sea-level reference pressure (QNH) is a
- * persistent NVM parameter (g_xcpNvm.seaLevelPa, DFLASH). Set it to local QNH
- * for true elevation; the default is the ISA standard atmosphere. Values
- * outside a sane band fall back to the standard so a bad write can't blow up
- * the altitude. */
-#define MEAS_SEA_LEVEL_PA   (101325.0f)
-#define MEAS_SEA_LEVEL_MIN  (80000.0f)       /* ~2 km above sea level QNH floor  */
-#define MEAS_SEA_LEVEL_MAX  (120000.0f)      /* well above any real QNH          */
-#define MEAS_ALT_EXPONENT   (0.190294957f)   /* 1 / 5.25588 (barometric formula) */
-#define MEAS_ALT_SCALE      (44330.0f)       /* [m] */
 
 /* The full-scale voltages of the 8-bit PMS monitor ADCs live in the
  * XCP-calibratable block (g_xcpCal.fsVdd/fsVddp3/fsVext); defaults were
@@ -112,23 +102,15 @@ void measurementsSetSystemLoad(void)
     g_xcpData.ethLinkMbits   = EthStats_getLinkMbits();
 }
 
-void measurementsSetBaro(boolean present, float32 pressurePa, float32 temperatureC)
+void measurementsSetBaro(boolean present, float32 pressurePa, float32 temperatureC, float32 altM)
 {
-    if ((present != FALSE) && (pressurePa > 0.0f))
+    if (present != FALSE)
     {
-        float32 p0 = (float32)g_xcpNvm.seaLevelPa;
-
-        if ((p0 < MEAS_SEA_LEVEL_MIN) || (p0 > MEAS_SEA_LEVEL_MAX))
-        {
-            p0 = MEAS_SEA_LEVEL_PA;         /* guard against a bad/zero NVM value */
-        }
 
         g_xcpData.baroPresent = 1u;
         g_xcpData.baroPressPa = pressurePa;
         g_xcpData.baroTempC   = temperatureC;
-        /* International barometric formula: h = 44330 * (1 - (P/P0)^0.190295). */
-        g_xcpData.baroAltM    = MEAS_ALT_SCALE *
-            (1.0f - powf(pressurePa / p0, MEAS_ALT_EXPONENT));
+        g_xcpData.baroAltM    = altM;
     }
     else
     {
@@ -254,6 +236,10 @@ void measurementsSetFusion(FusionValues *fusion, boolean present, float32 elapse
         g_xcpData.a_D           = fusion->a_D;
         g_xcpData.a_v_d         = fusion->a_v_d;
         g_xcpData.a_d           = fusion->a_d;
+        g_xcpData.fusionInnov   = fusion->innov;
+        g_xcpData.fusionP00     = fusion->p00;
+        g_xcpData.fusionRejects = fusion->rejects;
+        g_xcpData.fusionResets  = fusion->resets;
     }
     else
     {

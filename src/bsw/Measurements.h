@@ -170,6 +170,10 @@ typedef struct
     float32 a_D;
     float32 a_v_d;
     float32 a_d;
+    float32 fusionInnov;      /* barometer innovation [m] -- the tuning signal */
+    float32 fusionP00;        /* variance of a_d [m^2]                         */
+    uint32  fusionRejects;    /* barometer samples rejected by the gate        */
+    uint32  fusionResets;     /* filter re-acquisitions after a reject run     */
 
 } Xcp_Data;
 
@@ -178,7 +182,7 @@ void measurementsUpdate(void);  /* call cyclically, e.g. every 100 ms    */
 
 /* Publish the latest barometer sample into the XCP block. Called by the baro
  * task; pass present = FALSE to show "no sensor" (pressure/temp forced to 0). */
-void measurementsSetBaro(boolean present, float32 pressurePa, float32 temperatureC);
+void measurementsSetBaro(boolean present, float32 pressurePa, float32 temperatureC, float32 altM);
 
 /* Publish the latest magnetometer sample into the XCP block. Called by the mag
  * task; pass present = FALSE to show "no sensor" (all fields forced to 0).
