@@ -1,26 +1,42 @@
 /**********************************************************************************************************************
  * \file fusion.h
- * \brief Vertical-channel Kalman filter — altitude and vertical speed.
+ * \brief Navigation filter — position, velocity and sensor biases in NED.
  *
- * Estimates how high the vehicle is and how fast it is climbing or sinking, by
- * combining two sensors that fail in opposite ways:
+ * Combines five sensors that fail in different ways:
  *
- *   the accelerometer is fast but drifts — integrate it twice and a 0.039 m/s²
- *     offset becomes 15 m of imaginary descent in 30 s (measured on this board)
- *   the barometer never drifts but is noisy — 0.0197 m of scatter, measured
+ *   accelerometer  fast, but integrate it twice and a 0.018 m/s^2 offset
+ *                  (measured on this board) becomes 32 m in 60 s
+ *   barometer      never drifts fast, but WANDERS: 0.19 m/min measured while
+ *                  the board sat still on the desk, and 0.020 m of scatter
+ *   magnetometer   absolute heading, but only where the iron is not
+ *   GNSS           absolute position, but 1 Hz, metres of noise, and gone
+ *                  the moment there is a roof overhead
+ *   gyro           smooth attitude, but drifts without the other two
  *
- * Frame is NED, so **d is POSITIVE DOWNWARD** and so is v_d. Barometric
- * altitude counts upward; the sign flip happens once, in Fusion_setBaroAlt().
+ * Attitude lives in Ahrs.h. This file takes its NED acceleration output and
+ * runs three structurally identical Kalman channels — DOWN, NORTH, EAST.
  *
- * STAGE 3 OF 4. Two states, [d, v_d]. The accelerometer offset is NOT yet
- * estimated, so the innovation still carries a constant offset — that is
- * expected here and is what stage 4 (adding an accelerometer-bias state) fixes.
+ * EACH CHANNEL HAS FOUR STATES: [position, velocity, accelBias, measBias].
  *
- * ⚠️ LEVEL-DESK SCAFFOLD, KNOWN EXPIRY. a_D is computed assuming the board is
- * level, because there is no attitude estimator in the tree yet. At 20 degrees
- * of tilt the error is already 0.6 m/s². The moment roll and pitch exist, a_D
- * must come from the full projection (docs: sensor-fusion course, section 10)
- * and this comment must go.
+ *   accelBias  the accelerometer offset in that NED direction. Without it the
+ *              filter fights the offset forever with the position correction
+ *              and the velocity carries the error instead — which is exactly
+ *              what the 2-state version did (+0.005 m/s at rest, creeping).
+ *   measBias   the offset of the RELATIVE position sensor against the ABSOLUTE
+ *              one. Only the DOWN channel uses it: the barometer measures
+ *              (d + measBias) and GNSS altitude measures d, so the pair makes
+ *              the barometer's weather drift observable and it stops leaking
+ *              into altitude. On NORTH and EAST there is no relative sensor,
+ *              so the state gets no process noise, is never updated, and
+ *              stays exactly zero.
+ *
+ * Frame is NED throughout, so **d is POSITIVE DOWNWARD** and so is v_d.
+ * Barometric and GNSS altitude both count upward; the sign flip happens once,
+ * where each enters (Fusion_setBaroAlt, Fusion_setGnss).
+ *
+ * The horizontal origin is the first usable GNSS fix. Everything horizontal is
+ * metres from there on a flat tangent plane, which is good to well under a
+ * metre out to several km — far past anything this airframe will do.
  *********************************************************************************************************************/
 #ifndef FUSION_H
 #define FUSION_H
@@ -30,31 +46,85 @@
 /** Filter outputs, copied out on every Fusion_update() for publishing. */
 typedef struct
 {
-    float32 a_D;      /**< accel along NED down, gravity removed [m/s^2]      */
-    float32 a_d;      /**< position down, relative to the first baro fix [m]  */
-    float32 a_v_d;    /**< velocity down [m/s]                               */
-    float32 innov;    /**< last barometer innovation [m] — THE tuning signal  */
-    float32 p00;      /**< variance of a_d [m^2]; watch it converge           */
-    uint32  rejects;  /**< barometer samples rejected by the outlier gate     */
-    uint32  resets;   /**< re-acquisitions after a run of rejections. Any
-                       *   non-zero value means the filter diverged and
-                       *   recovered -- worth knowing about                   */
+    /* --- vertical channel --------------------------------------------- */
+    float32 a_D;        /**< accel along NED down, gravity removed [m/s^2]   */
+    float32 a_d;        /**< position down, relative to the origin [m]       */
+    float32 a_v_d;      /**< velocity down [m/s]                             */
+    float32 accBiasD;   /**< estimated accelerometer bias, down [m/s^2]      */
+    float32 baroBias;   /**< barometer offset vs GNSS altitude [m]; stays 0
+                         *   until a GNSS fix makes it observable            */
+    float32 innov;      /**< last barometer innovation [m] — the tuning signal */
+    float32 p00;        /**< variance of a_d [m^2]; watch it converge        */
+
+    /* --- horizontal channels ------------------------------------------ */
+    float32 a_N;        /**< accel along NED north [m/s^2]                   */
+    float32 a_E;        /**< accel along NED east  [m/s^2]                   */
+    float32 posN;       /**< metres north of the tangent-plane origin        */
+    float32 posE;       /**< metres east                                     */
+    float32 velN;       /**< velocity north [m/s]                            */
+    float32 velE;       /**< velocity east  [m/s]                            */
+    float32 accBiasN;   /**< estimated accelerometer bias, north [m/s^2]     */
+    float32 accBiasE;   /**< estimated accelerometer bias, east  [m/s^2]     */
+    float32 innovN;     /**< last GNSS north innovation [m]                  */
+    float32 innovE;     /**< last GNSS east innovation [m]                   */
+    float32 pNN;        /**< variance of posN [m^2]                          */
+
+    /* --- tangent-plane origin ----------------------------------------- */
+    float32 originLatDeg;
+    float32 originLonDeg;
+    float32 originAltM;
+
+    /* --- counters and status ------------------------------------------ */
+    uint32  rejects;      /**< barometer samples rejected by the outlier gate */
+    uint32  resets;       /**< vertical re-acquisitions after a reject run.
+                           *   Any non-zero value means the filter diverged
+                           *   and recovered — worth knowing about            */
+    uint32  gnssRejects;  /**< GNSS fixes rejected by the outlier gate        */
+    uint32  gnssUpdates;  /**< GNSS fixes actually fused                      */
+    uint32  covResets;    /**< covariance re-initialisations forced by the
+                           *   numerical health check. MUST stay zero — any
+                           *   other value is a bug, not a tuning problem      */
+    uint8   verticalOk;   /**< 1 once the barometer has anchored the channel  */
+    uint8   horizontalOk; /**< 1 once the tangent-plane origin is set         */
+    uint8   originSet;    /**< 1 once a usable fix defined the origin         */
+    uint8   reserved;
 } FusionValues;
 
-/** Reset the state, the covariance and the barometric reference. */
+/** Reset every channel, the covariances, and both position references. */
 void Fusion_init(void);
 
-/** Run one predict step, then a correction if a new barometer sample arrived.
+/** Run one predict step on all three channels, then any corrections whose
+ *  samples have arrived.
  *  \param fusion  receives the current estimate (never NULL)
- *  \param acc     acceleration [g], SENSOR frame, X/Y/Z
+ *  \param accNed  acceleration in NED with gravity removed [m/s^2], from
+ *                 Ahrs_Values.accNed
  *  \param dt      measured time since the previous call [s]
- *  \param valid   FALSE when the IMU read failed — the estimate is frozen
- *                 rather than integrating a stale sample */
-void Fusion_update(FusionValues *fusion, const float32 acc[3], float32 dt, boolean valid);
+ *  \param valid   FALSE when the IMU read failed or the attitude is not yet
+ *                 usable — the estimate is frozen rather than integrating a
+ *                 stale sample */
+void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, boolean valid);
 
 /** Latch a barometric altitude for the next Fusion_update() to consume.
  *  \param altM   altitude above the NVM sea-level reference [m], positive UP
  *  \param valid  FALSE when the barometer read failed (sample ignored) */
 void Fusion_setBaroAlt(float32 altM, boolean valid);
+
+/** Latch a GNSS fix for the next Fusion_update() to consume. Ignored unless
+ *  \p iTOW differs from the previous call: NAV-PVT arrives at 1 Hz but this is
+ *  polled at 10 Hz, and injecting the same fix ten times would collapse the
+ *  covariance as though ten independent measurements had arrived — after
+ *  which the filter rejects the next genuine one.
+ *  \param latDeg1e7  latitude  [1e-7 deg], the receiver's native integer
+ *  \param lonDeg1e7  longitude [1e-7 deg] — integers on purpose, float32
+ *                    degrees only resolve to about 0.4 m at this latitude
+ *  \param altM       height above mean sea level [m], positive UP
+ *  \param speedMps   2-D ground speed [m/s]
+ *  \param headingDeg heading of motion [deg]
+ *  \param hAccM      horizontal accuracy estimate [m]
+ *  \param iTOW       GPS time of week [ms] — the new-fix marker
+ *  \param valid      FALSE unless the receiver says the solution is usable */
+void Fusion_setGnss(sint32 latDeg1e7, sint32 lonDeg1e7, float32 altM,
+                    float32 speedMps, float32 headingDeg, float32 hAccM,
+                    uint32 iTOW, boolean valid);
 
 #endif /* FUSION_H */

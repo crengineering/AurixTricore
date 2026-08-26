@@ -4,6 +4,7 @@
 #include "Ifx_Types.h"
 #include "GnssM9N.h"
 #include "fusion.h"
+#include "Ahrs.h"
 
 /* Live measurement block read by XCP masters (pyXCP, AurixGUI) via
  * SHORT_UPLOAD. Pinned to a fixed address so clients do not need the map
@@ -177,6 +178,119 @@ typedef struct
 
 } Xcp_Data;
 
+/* ---------------------------------------------------------------------------
+ * Xcp_Fusion — the full navigation state, in its own block.
+ *
+ * SEPARATE BLOCK ON PURPOSE. Xcp_Data ends at 0xF8, leaving 8 bytes before
+ * Xcp_Cal at 0x70030100; the attitude and horizontal outputs do not come close
+ * to fitting. Rather than move Xcp_Cal — which would invalidate every A2L
+ * entry, the GUI, and the DAQ lists — this takes the next free 256-byte slot
+ * after the I2C debug block. Nothing above it moves at all.
+ *
+ * The seven fusion fields already in Xcp_Data are deliberately LEFT THERE and
+ * still written, so the existing A2L, GUI plots and tools/xcp_read.py
+ * addresses keep working across this change.
+ *
+ * Block map (little-endian, all multi-byte fields 4-byte aligned — the uint8
+ * groups are padded to four so TASKING's 2-byte uint32 alignment cannot shift
+ * anything; verify against Measurements.src after any edit here):
+ *
+ *   0x00  uint32  magic        0x4E535546 ("FUSN")
+ *   0x04  uint32  tickMs       uptime when this block was written
+ *   --- attitude, from Ahrs.c ---
+ *   0x08  float32 rollDeg      + right side down
+ *   0x0C  float32 pitchDeg     + nose up
+ *   0x10  float32 yawDeg       0..360, true north when declination is set
+ *   0x14  float32 q[4]         body->NED quaternion, w/x/y/z
+ *   0x24  float32 rateDps[3]   bias-corrected body rates p/q/r [deg/s]
+ *   0x30  float32 gyroBias[3]  estimated gyro bias [deg/s]
+ *   0x3C  float32 accNed[3]    acceleration N/E/D, gravity removed [m/s^2]
+ *   0x48  float32 accMagG      |a| [g] — 1.0 at rest, the health check
+ *   0x4C  float32 magFieldG    |B| after hard-iron correction [gauss]
+ *   0x50  uint8   ahrsState    Ahrs_State
+ *   0x51  uint8   accTrusted
+ *   0x52  uint8   magTrusted
+ *   0x53  uint8   reserved
+ *   --- vertical channel ---
+ *   0x54  float32 posD         [m], positive DOWN, vs the origin
+ *   0x58  float32 velD         [m/s]
+ *   0x5C  float32 accBiasD     [m/s^2]
+ *   0x60  float32 baroBias     [m] barometer offset vs GNSS altitude
+ *   0x64  float32 innovD       [m] barometer innovation
+ *   0x68  float32 varD         [m^2]
+ *   --- horizontal channels ---
+ *   0x6C  float32 posN, posE   [m] from the tangent-plane origin
+ *   0x74  float32 velN, velE   [m/s]
+ *   0x7C  float32 accBiasN, accBiasE  [m/s^2]
+ *   0x84  float32 innovN, innovE      [m]
+ *   0x8C  float32 varN         [m^2]
+ *   --- origin and counters ---
+ *   0x90  float32 originLatDeg, originLonDeg, originAltM
+ *   0x9C  uint32  baroRejects, baroResets, gnssRejects, gnssUpdates
+ *   0xAC  uint8   verticalOk, horizontalOk, originSet, reserved2
+ *   0xB0  uint32  covResets    numerical health check trips — MUST be 0
+ *
+ * Total 0xB4 = 180 bytes, leaving 76 before the next slot at 0x70030600.
+ * Exceeds XCP MAX_CTO (64), so clients read it in several SHORT_UPLOADs.
+ * --------------------------------------------------------------------------- */
+#define XCP_FUSION_ADDR   0x70030500u
+#define XCP_FUSION_MAGIC  0x4E535546u
+
+typedef struct
+{
+    uint32  magic;
+    uint32  tickMs;
+
+    float32 rollDeg;
+    float32 pitchDeg;
+    float32 yawDeg;
+    float32 q[4];
+    float32 rateDps[3];
+    float32 gyroBias[3];
+    float32 accNed[3];
+    float32 accMagG;
+    float32 magFieldG;
+    uint8   ahrsState;
+    uint8   accTrusted;
+    uint8   magTrusted;
+    uint8   reserved;
+
+    float32 posD;
+    float32 velD;
+    float32 accBiasD;
+    float32 baroBias;
+    float32 innovD;
+    float32 varD;
+
+    float32 posN;
+    float32 posE;
+    float32 velN;
+    float32 velE;
+    float32 accBiasN;
+    float32 accBiasE;
+    float32 innovN;
+    float32 innovE;
+    float32 varN;
+
+    float32 originLatDeg;
+    float32 originLonDeg;
+    float32 originAltM;
+
+    uint32  baroRejects;
+    uint32  baroResets;
+    uint32  gnssRejects;
+    uint32  gnssUpdates;
+
+    uint8   verticalOk;
+    uint8   horizontalOk;
+    uint8   originSet;
+    uint8   reserved2;
+
+    uint32  covResets;
+} Xcp_Fusion;
+
+extern volatile Xcp_Fusion g_xcpFusion;
+
 void measurementsInit(void);    /* DTS + DTSC + EVR monitor init (CPU0)  */
 void measurementsUpdate(void);  /* call cyclically, e.g. every 100 ms    */
 
@@ -206,8 +320,10 @@ void measurementsSetSystemLoad(void);
 void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info);
 
 /*
- * Publish the fusion results
+ * Publish the navigation state: the seven legacy fields in Xcp_Data (kept so
+ * the existing A2L and GUI keep working) plus the whole of Xcp_Fusion.
  */
-void measurementsSetFusion(FusionValues *fusion, boolean present, float32 elapsed);
+void measurementsSetFusion(const FusionValues *fusion, const Ahrs_Values *ahrs,
+                           boolean present, float32 elapsed);
 
 #endif /* MEASUREMENTS_H_ */

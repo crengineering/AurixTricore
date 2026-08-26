@@ -608,6 +608,52 @@
       "maxdiff": "108500",
       "lo": "87000",
       "hi": "108500"
+    },
+    "magOffX": {
+      "name": "NvmMagOffX",
+      "desc": "hard-iron offset X, sensor frame; subtract before use",
+      "unit": "gauss",
+      "lo": "-4",
+      "hi": "4"
+    },
+    "magOffY": {
+      "name": "NvmMagOffY",
+      "desc": "hard-iron offset Y, sensor frame",
+      "unit": "gauss",
+      "lo": "-4",
+      "hi": "4"
+    },
+    "magOffZ": {
+      "name": "NvmMagOffZ",
+      "desc": "hard-iron offset Z, sensor frame",
+      "unit": "gauss",
+      "lo": "-4",
+      "hi": "4"
+    },
+    "magScaleX": {
+      "name": "NvmMagScaleX",
+      "desc": "soft-iron scale X; 1.0 is no correction",
+      "lo": "0.1",
+      "hi": "10"
+    },
+    "magScaleY": {
+      "name": "NvmMagScaleY",
+      "desc": "soft-iron scale Y",
+      "lo": "0.1",
+      "hi": "10"
+    },
+    "magScaleZ": {
+      "name": "NvmMagScaleZ",
+      "desc": "soft-iron scale Z",
+      "lo": "0.1",
+      "hi": "10"
+    },
+    "magDeclDeg": {
+      "name": "NvmMagDeclination",
+      "desc": "magnetic declination, east positive; +3.9 in Munich. Turns magnetic north into true north",
+      "unit": "deg",
+      "lo": "-180",
+      "hi": "180"
     }
   },
   "Xcp_Gpio": {
@@ -768,6 +814,278 @@
     "DIAG_CAL_INVALID": {
       "name": "Diag_CalInvalid",
       "desc": "calibration block magic broken, defaults reloaded"
+    }
+  },
+  "Xcp_Fusion": {
+    "magic": {
+      "skip": true
+    },
+    "reserved": {
+      "skip": true
+    },
+    "reserved2": {
+      "skip": true
+    },
+    "tickMs": {
+      "name": "FusTickMs",
+      "desc": "uptime when the navigation block was last written",
+      "unit": "ms",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "rollDeg": {
+      "name": "Roll",
+      "desc": "roll angle, positive right side down",
+      "unit": "deg",
+      "lo": "-180",
+      "hi": "180"
+    },
+    "pitchDeg": {
+      "name": "Pitch",
+      "desc": "pitch angle, positive nose up; clamped at +/-90",
+      "unit": "deg",
+      "lo": "-90",
+      "hi": "90"
+    },
+    "yawDeg": {
+      "name": "Yaw",
+      "desc": "heading, true north when the NVM declination is set",
+      "unit": "deg",
+      "lo": "0",
+      "hi": "360"
+    },
+    "q": {
+      "name": "Quat{i}",
+      "desc": "body-to-NED quaternion component {i} (w,x,y,z order)",
+      "lo": "-1",
+      "hi": "1"
+    },
+    "rateDps": {
+      "name": "BodyRate{i}",
+      "desc": "bias-corrected body rate about axis {i} (p,q,r)",
+      "unit": "deg/s",
+      "lo": "-2000",
+      "hi": "2000"
+    },
+    "gyroBias": {
+      "name": "GyroBias{i}",
+      "desc": "estimated gyro bias on axis {i}; boot calibration plus tracked drift",
+      "unit": "deg/s",
+      "lo": "-50",
+      "hi": "50"
+    },
+    "accNed": {
+      "name": "AccNed{i}",
+      "desc": "acceleration along NED axis {i} with gravity removed",
+      "unit": "m/s^2",
+      "lo": "-100",
+      "hi": "100"
+    },
+    "accMagG": {
+      "name": "AccMagnitude",
+      "desc": "|a|, the orientation-independent health check; 1.0 at rest",
+      "unit": "g",
+      "lo": "0",
+      "hi": "16"
+    },
+    "magFieldG": {
+      "name": "MagFieldCorrected",
+      "desc": "|B| after hard-iron correction; must not change as the board rotates",
+      "unit": "gauss",
+      "lo": "0",
+      "hi": "4"
+    },
+    "ahrsState": {
+      "name": "AhrsState",
+      "desc": "0=calibrating gyro bias, 1=aligning, 2=running, 3=no sensor",
+      "lo": "0",
+      "hi": "3"
+    },
+    "accTrusted": {
+      "name": "AhrsAccTrusted",
+      "desc": "1 while |a| is close enough to 1 g for gravity to dominate",
+      "lo": "0",
+      "hi": "1"
+    },
+    "magTrusted": {
+      "name": "AhrsMagTrusted",
+      "desc": "1 while |B| is plausible and is correcting yaw",
+      "lo": "0",
+      "hi": "1"
+    },
+    "posD": {
+      "name": "PosDown",
+      "desc": "position along NED down, relative to the origin; POSITIVE IS DOWN",
+      "unit": "m",
+      "lo": "-10000",
+      "hi": "10000"
+    },
+    "velD": {
+      "name": "VelDown",
+      "desc": "velocity along NED down; positive is descending",
+      "unit": "m/s",
+      "lo": "-100",
+      "hi": "100"
+    },
+    "accBiasD": {
+      "name": "AccBiasDown",
+      "desc": "estimated accelerometer bias on the down axis; ~0.01..0.02 on this board",
+      "unit": "m/s^2",
+      "lo": "-5",
+      "hi": "5"
+    },
+    "baroBias": {
+      "name": "BaroBias",
+      "desc": "barometer offset against GNSS altitude - the weather drift, not the sensor",
+      "unit": "m",
+      "lo": "-100",
+      "hi": "100"
+    },
+    "innovD": {
+      "name": "InnovDown",
+      "desc": "barometer innovation: what the baro said minus what the filter expected",
+      "unit": "m",
+      "lo": "-100",
+      "hi": "100"
+    },
+    "varD": {
+      "name": "VarDown",
+      "desc": "variance of PosDown; sqrt of this is the altitude uncertainty",
+      "unit": "m^2",
+      "lo": "0",
+      "hi": "1000000"
+    },
+    "posN": {
+      "name": "PosNorth",
+      "desc": "metres north of the tangent-plane origin (first usable GNSS fix)",
+      "unit": "m",
+      "lo": "-100000",
+      "hi": "100000"
+    },
+    "posE": {
+      "name": "PosEast",
+      "desc": "metres east of the tangent-plane origin",
+      "unit": "m",
+      "lo": "-100000",
+      "hi": "100000"
+    },
+    "velN": {
+      "name": "VelNorth",
+      "desc": "velocity north",
+      "unit": "m/s",
+      "lo": "-200",
+      "hi": "200"
+    },
+    "velE": {
+      "name": "VelEast",
+      "desc": "velocity east",
+      "unit": "m/s",
+      "lo": "-200",
+      "hi": "200"
+    },
+    "accBiasN": {
+      "name": "AccBiasNorth",
+      "desc": "estimated accelerometer bias north; mostly absorbs attitude error",
+      "unit": "m/s^2",
+      "lo": "-5",
+      "hi": "5"
+    },
+    "accBiasE": {
+      "name": "AccBiasEast",
+      "desc": "estimated accelerometer bias east",
+      "unit": "m/s^2",
+      "lo": "-5",
+      "hi": "5"
+    },
+    "innovN": {
+      "name": "InnovNorth",
+      "desc": "GNSS north innovation",
+      "unit": "m",
+      "lo": "-1000",
+      "hi": "1000"
+    },
+    "innovE": {
+      "name": "InnovEast",
+      "desc": "GNSS east innovation",
+      "unit": "m",
+      "lo": "-1000",
+      "hi": "1000"
+    },
+    "varN": {
+      "name": "VarNorth",
+      "desc": "variance of PosNorth; grows without bound until a GNSS fix arrives",
+      "unit": "m^2",
+      "lo": "0",
+      "hi": "1000000"
+    },
+    "originLatDeg": {
+      "name": "OriginLat",
+      "desc": "latitude of the tangent-plane origin",
+      "unit": "deg",
+      "lo": "-90",
+      "hi": "90"
+    },
+    "originLonDeg": {
+      "name": "OriginLon",
+      "desc": "longitude of the tangent-plane origin",
+      "unit": "deg",
+      "lo": "-180",
+      "hi": "180"
+    },
+    "originAltM": {
+      "name": "OriginAlt",
+      "desc": "GNSS altitude at the origin fix, above mean sea level",
+      "unit": "m",
+      "lo": "-1000",
+      "hi": "10000"
+    },
+    "baroRejects": {
+      "name": "BaroRejects",
+      "desc": "barometer samples rejected by the outlier gate; a rising count is a sensor fault, not a tuning knob",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "baroResets": {
+      "name": "BaroResets",
+      "desc": "vertical re-acquisitions after a run of rejections; non-zero means the filter diverged and recovered",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "gnssRejects": {
+      "name": "GnssRejects",
+      "desc": "GNSS fixes rejected by the outlier gate",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "gnssUpdates": {
+      "name": "GnssUpdates",
+      "desc": "GNSS fixes actually fused; increments once per new iTOW, i.e. 1 Hz with a fix",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "verticalOk": {
+      "name": "VerticalOk",
+      "desc": "1 once the barometer has anchored the vertical channel",
+      "lo": "0",
+      "hi": "1"
+    },
+    "horizontalOk": {
+      "name": "HorizontalOk",
+      "desc": "1 once GNSS has anchored the horizontal channels",
+      "lo": "0",
+      "hi": "1"
+    },
+    "originSet": {
+      "name": "OriginSet",
+      "desc": "1 once a usable fix defined the tangent-plane origin",
+      "lo": "0",
+      "hi": "1"
+    },
+    "covResets": {
+      "name": "CovResets",
+      "desc": "numerical health-check trips. MUST stay 0 - any other value is a bug, not a tuning problem",
+      "lo": "0",
+      "hi": "4294967295"
     }
   }
 }

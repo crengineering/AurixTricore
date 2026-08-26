@@ -24,7 +24,7 @@ volatile Xcp_Nvm g_xcpNvm __at(XCP_NVM_ADDR);
 #define NVM_SECTOR_ADDR(i)  (NVM_DFLASH_START + ((i) * NVM_SECTOR_SIZE))
 
 #define NVM_REC_MAGIC       0x4C41434Eu     /* "NCAL" (ASCII, little-endian) */
-#define NVM_LAYOUT_VERSION  3u              /* bump on Xcp_Nvm layout change */
+#define NVM_LAYOUT_VERSION  4u              /* bump on Xcp_Nvm layout change */
 
 typedef struct
 {
@@ -159,6 +159,19 @@ static void nvm_loadDefaults(void)
 {
     g_xcpNvm.userValue  = 0u;
     g_xcpNvm.seaLevelPa = NVM_SEA_LEVEL_PA_DEFAULT;
+
+    /* Magnetometer calibration defaults to a no-op: zero hard iron, unit
+     * scale. That is deliberately the SAME behaviour as before this block
+     * existed, so a board with no stored record behaves exactly as it used
+     * to rather than applying a plausible-looking wrong correction. */
+    g_xcpNvm.magOffX    = 0.0f;
+    g_xcpNvm.magOffY    = 0.0f;
+    g_xcpNvm.magOffZ    = 0.0f;
+    g_xcpNvm.magScaleX  = 1.0f;
+    g_xcpNvm.magScaleY  = 1.0f;
+    g_xcpNvm.magScaleZ  = 1.0f;
+    g_xcpNvm.magDeclDeg = NVM_MAG_DECL_DEG_DEFAULT;
+
     g_xcpNvm.command    = NVM_CMD_NONE;
     g_xcpNvm.magic      = XCP_NVM_MAGIC;
 }

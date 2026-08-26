@@ -1,219 +1,806 @@
 /**********************************************************************************************************************
  * \file fusion.c
- * \brief Vertical-channel Kalman filter — see fusion.h.
+ * \brief Navigation filter — see fusion.h.
  *********************************************************************************************************************/
 #include "fusion.h"
+#include <math.h>
 
-/* --- tuning -------------------------------------------------------------- */
+/* --- tuning: vertical channel -------------------------------------------- */
 
-/* Accelerometer uncertainty driving the prediction [m/s^2]. Deliberately ~30x
- * the measured noise floor (0.0094 m/s^2, from a 30 s bench record): the
- * dominant error is NOT the sensor but the level-desk scaffold in fusion.h,
- * which is worth 0.6 m/s^2 at 20 degrees of tilt. Raise this if the estimate
- * lags, lower it if the output is as noisy as the raw barometer. */
-#define FUSION_SIGMA_A      (0.3f)
+/* Accelerometer uncertainty driving the DOWN prediction [m/s^2]. Well above
+ * the measured noise floor (0.0144 m/s^2 over a 30 s bench record) because the
+ * dominant error is not the sensor: it is attitude error feeding into the
+ * projection, plus whatever the airframe does that a constant-acceleration
+ * model does not describe. Raise it if the estimate lags, lower it if the
+ * output is as noisy as the raw barometer. */
+#define FUSION_SIGMA_A_D        (0.3f)
+
+/* Accelerometer bias random walk [m/s^2 per sqrt(s)]. Measured: the down-axis
+ * bias moved 0.0003 m/s^2 across 60 s at constant temperature, i.e. about
+ * 4e-5. Set higher so the state can also follow thermal drift, which the bench
+ * record was too short and too isothermal to show. */
+#define FUSION_SIGMA_ACC_RW     (1.0e-4f)
 
 /* Barometer noise [m], MEASURED on this board: 30 s at rest gave a standard
- * deviation of 0.0197 m. R is a VARIANCE, so it is that value squared — the
- * covariance algebra only adds up in squared units. Note this is short-term
- * noise only; barometric drift with weather is far larger but is not white, so
- * inflating R is the wrong way to handle it (a baro-bias state is the right
- * one, if it ever matters). */
-#define FUSION_SIGMA_BARO   (0.0197f)
-#define FUSION_R_BARO       (FUSION_SIGMA_BARO * FUSION_SIGMA_BARO)
+ * deviation of 0.0197 m, and the innovation of the running filter later
+ * confirmed it at 0.0181 m. R is a VARIANCE, so it is that value squared — the
+ * covariance algebra only adds up in squared units. */
+#define FUSION_SIGMA_BARO       (0.0197f)
+#define FUSION_R_BARO           (FUSION_SIGMA_BARO * FUSION_SIGMA_BARO)
 
-/* Outlier gate: reject a barometer sample further than 5 sigma from what the
- * filter expected, i.e. y^2 > 25 * S. One corrupt reading otherwise yanks the
- * estimate AND shrinks P as though it were good information, after which the
- * filter rejects the next genuine sample. */
-#define FUSION_GATE_SIGMA_SQ (25.0f)
+/* Barometer bias random walk [m per sqrt(s)]. This is the WEATHER, not the
+ * sensor: the board sat still on the desk and the reported altitude walked
+ * 0.19 m in 60 s. sqrt(60) * 0.025 reproduces that, so 0.025 it is.
+ *
+ * This is the reason the barometer gets a bias state at all. Its short-term
+ * noise is 2 cm and its long-term wander is metres, and no single R describes
+ * both — inflating R to cover the drift would throw away the 2 cm precision
+ * that makes the barometer worth having. */
+#define FUSION_SIGMA_BARO_RW    (0.025f)
 
-/* ESCAPE HATCH for the gate above, and it is not optional.
+/* ...and the time constant it reverts over [s].
+ *
+ * The barometer bias is NOT a free random walk, and modelling it as one has a
+ * sting in the tail. Only the SUM (d + bias) is observable from a barometer;
+ * split individually the two are free to wander in opposite directions
+ * forever, so var(d) grows without bound even though the filter is tracking
+ * altitude perfectly. Measured on the bench: var(d) reached 0.51 m^2 in 25 s
+ * and was still climbing, which would eventually have hit FUSION_P_MAX and
+ * tripped the health check for no real reason.
+ *
+ * Weather pressure does not actually wander to infinity, so the honest model
+ * is mean-reverting: the bias decays toward zero over this time constant,
+ * which gives var(bias) a steady state of sigma^2*tau/2 (about 0.43 m of
+ * standard deviation here) and bounds var(d) with it. 600 s is the order of
+ * time over which barometric pressure genuinely moves. */
+#define FUSION_TAU_BARO_BIAS_S  (600.0f)
+
+/* --- tuning: horizontal channels ----------------------------------------- */
+
+/* Accelerometer uncertainty driving the NORTH/EAST prediction [m/s^2]. Larger
+ * than the vertical because the error source is different: horizontal
+ * acceleration is contaminated by ATTITUDE error, and one degree of roll or
+ * pitch error tips 0.17 m/s^2 of gravity straight into the horizontal plane.
+ * This number is really a statement about how well the AHRS is doing. */
+#define FUSION_SIGMA_A_H        (0.5f)
+
+/* GNSS velocity noise [m/s]. UBX-NAV-PVT carries an sAcc field that this
+ * driver does not decode; until it does, a fixed value covers a NEO-M9N with a
+ * clear view. Pessimistic on purpose — velocity is the measurement that makes
+ * the horizontal accelerometer bias observable, and over-trusting it would let
+ * GNSS noise be absorbed as bias. */
+#define FUSION_SIGMA_GNSS_VEL   (0.3f)
+
+/* Floor on the reported horizontal accuracy [m]. The receiver is optimistic
+ * about hAcc under a clear sky, and a too-small R makes the filter chase
+ * multipath. */
+#define FUSION_GNSS_HACC_MIN    (1.0f)
+
+/* --- outlier gates -------------------------------------------------------- */
+
+/* Reject a sample further than this many sigma from what the filter expected.
+ * One corrupt reading otherwise yanks the estimate AND shrinks P as though it
+ * were good information, after which the filter rejects the next genuine one. */
+#define FUSION_GATE_SIGMA_SQ    (25.0f)
+
+/* ...but never gate tighter than this, in metres.
+ *
+ * Measured 2026-08-26, and the reason this floor exists: with p00 converged to
+ * 4.06e-05 the 5-sigma gate was only +/-0.104 m, and an ordinary 30 cm hand
+ * lift already produced a 0.064 m innovation — 62 percent of the way to being
+ * rejected. A gate that fires on real motion is worse than no gate: it drops
+ * the barometer exactly when the filter needs it most.
+ *
+ * The gate is there to catch a CORRUPT reading, which is wrong by tens of
+ * metres, not to police dynamics. A floor of 2 m separates the two cleanly. */
+#define FUSION_GATE_MIN_M       (2.0f)
+#define FUSION_GATE_MIN_SQ      (FUSION_GATE_MIN_M * FUSION_GATE_MIN_M)
+
+/* Same idea for GNSS, in units of the receiver-reported accuracy. */
+#define FUSION_GNSS_GATE_K      (5.0f)
+#define FUSION_GNSS_GATE_MIN_M  (10.0f)
+
+/* ESCAPE HATCH for the barometer gate, and it is not optional.
  *
  * Rejecting a sample also skips the covariance update, so a filter whose state
- * has been thrown far off rejects every subsequent measurement -- and because
+ * has been thrown far off rejects every subsequent measurement — and because
  * the innovation grows with the diverging state faster than the gate threshold
- * grows with P, it never recovers. Observed on 2026-08-25: a knock against the
- * board (-8.2 g) left the estimate at 293 m and climbing, with 4282 consecutive
- * rejections at the full 50 Hz.
+ * grows with P, it never recovers on its own. Observed 2026-08-25: a knock
+ * against the board (-8.2 g) left the estimate at 293 m and climbing, with
+ * 4282 consecutive rejections at the full 50 Hz.
  *
  * Two layers. Every rejection INFLATES P, so an estimate the filter has reason
  * to doubt stops being defended and the gate reopens on its own. If that is
  * still not enough after FUSION_REJECT_MAX consecutive samples (0.5 s at
  * 50 Hz), the state is simply wrong: re-acquire from the barometer rather than
  * defend a fiction. */
-#define FUSION_REJECT_INFLATE (2.0f)
-#define FUSION_REJECT_MAX     (25u)
+#define FUSION_REJECT_INFLATE   (2.0f)
+#define FUSION_REJECT_MAX       (25u)
 
-/* Sanity bound on the input [m/s^2]. NOT a manoeuvre limit -- real flight
- * accelerations must pass through untouched, that is what the accelerometer is
- * for. This catches only physically impossible values, i.e. a corrupted SPI
- * transfer, at roughly 10 g. */
-#define FUSION_ACC_D_MAX      (100.0f)
+/* Sanity bound on the acceleration input [m/s^2]. NOT a manoeuvre limit — real
+ * flight accelerations must pass through untouched, that is what the
+ * accelerometer is for. This catches only physically impossible values, i.e. a
+ * corrupted SPI transfer, at roughly 10 g. */
+#define FUSION_ACC_MAX          (100.0f)
 
 /* Sanity bounds on dt [s]. The IMU task runs at 50 Hz. The lower bound keeps a
  * double call from dividing by nothing; the upper bound matters at boot, where
  * the first measured interval is whatever the STM counter happened to hold. */
-#define FUSION_DT_MIN       (0.0001f)
-#define FUSION_DT_MAX       (0.2f)
+#define FUSION_DT_MIN           (0.0001f)
+#define FUSION_DT_MAX           (0.2f)
 
-/* Initial covariance: position within ~1 m, velocity within ~1 m/s, no reason
- * yet to think those errors are correlated. */
-#define FUSION_P00_INIT     (1.0f)
-#define FUSION_P01_INIT     (0.0f)
-#define FUSION_P11_INIT     (1.0f)
+/* Initial covariance. Position and velocity within ~1 m and ~1 m/s; the
+ * accelerometer bias within 0.1 m/s^2 (the measured value was 0.018). The
+ * measurement-bias state starts at zero variance and gains it only when a
+ * relative sensor is actually attached to the channel — see Fusion_init. */
+#define FUSION_P_POS_INIT       (1.0f)
+#define FUSION_P_VEL_INIT       (1.0f)
+#define FUSION_P_ACCB_INIT      (0.01f)
+#define FUSION_P_MEASB_INIT     (1.0f)
 
-#define FUSION_GRAVITY      (9.80665f)
+/* Ceiling on a variance before it is treated as divergence rather than
+ * uncertainty. 1e6 m^2 is a kilometre of standard deviation — far past any
+ * honest doubt about where this board is. */
+#define FUSION_P_MAX            (1.0e6f)
 
-/* --- state --------------------------------------------------------------- */
+/* Tangent plane. Metres per degree of latitude, and the equatorial value for
+ * longitude which is then scaled by cos(lat). Good to a few parts in a
+ * thousand over the few km this ever has to cover — the error is a slow scale
+ * factor on the distance from the origin, not a position jump. */
+#define FUSION_M_PER_DEG_LAT    (111132.0f)
+#define FUSION_M_PER_DEG_LON    (111320.0f)
+#define FUSION_DEG_TO_RAD       (0.017453293f)
+#define FUSION_1E7_TO_DEG       (1.0e-7f)
+
+/* State indices, shared by all three channels. */
+#define FS_POS      (0u)
+#define FS_VEL      (1u)
+#define FS_ACCB     (2u)
+#define FS_MEASB    (3u)
+#define FS_N        (4u)
+
+/* --- one channel ---------------------------------------------------------- */
+
+typedef struct
+{
+    float32 x[FS_N];            /* pos [m], vel [m/s], accBias, measBias   */
+    float32 p[FS_N][FS_N];      /* covariance, kept symmetric              */
+    float32 sigmaA;             /* process noise on acceleration           */
+    float32 sigmaMeasRw;        /* random walk of the measurement bias     */
+    float32 pMeasBInit;         /* initial variance of the measBias state  */
+    float32 measBTau;           /* mean-reversion time constant [s]; 0 = a
+                                 * pure random walk with no reversion      */
+    uint32  rejectRun;
+    boolean anchored;           /* an absolute or relative fix has arrived */
+} Fusion_Chan;
+
+/* Covariance re-initialisations forced by the health check in
+ * fusion_chanPredict. Published: a non-zero value means the filter hit a
+ * numerical problem, which is something to investigate rather than tune. */
+static uint32 s_covResets;
+
+static Fusion_Chan s_chD;       /* down  */
+static Fusion_Chan s_chN;       /* north */
+static Fusion_Chan s_chE;       /* east  */
 
 static FusionValues s_state;
 
-/* Covariance. Symmetric, so p10 is p01 and three floats describe all four
- * entries: p00 = var(d) [m^2], p11 = var(v_d) [(m/s)^2], p01 = cov(d,v_d)
- * [m^2/s]. p01 is what lets a barometer, which measures only d, correct v_d. */
-static float32 s_p00;
-static float32 s_p01;
-static float32 s_p11;
-
-static uint32  s_rejectRun;    /* consecutive rejections           */
-
-static float32 s_baroAlt;      /* latched sample [m], positive UP  */
-static boolean s_baroNew;      /* a sample is waiting              */
-static float32 s_baroRef;      /* first valid sample = the origin  */
+/* latched barometer sample */
+static float32 s_baroAlt;
+static boolean s_baroNew;
+static float32 s_baroRef;
 static boolean s_baroRefOk;
+
+/* latched GNSS fix */
+static sint32  s_gnssLat;
+static sint32  s_gnssLon;
+static float32 s_gnssAlt;
+static float32 s_gnssSpeed;
+static float32 s_gnssHeading;
+static float32 s_gnssHAcc;
+static boolean s_gnssNew;
+
+/* tangent-plane origin */
+static sint32  s_originLat;
+static sint32  s_originLon;
+static float32 s_originAlt;
+static float32 s_originAltOffset;   /* d at the instant the origin was set */
+static float32 s_mPerDegLon;
+static boolean s_originOk;
+static uint32  s_lastITow;
+static boolean s_haveITow;
+
+/* Put the covariance back to its initial value, off-diagonals included.
+ *
+ * The off-diagonals matter as much as the diagonal here. An earlier version of
+ * the re-acquisition path reset only p00/p11/p22 and left the cross terms
+ * holding whatever they had diverged to; the very next predict step mixed them
+ * straight back into the diagonal and the filter was poisoned again inside one
+ * tick. If the covariance is being thrown away, throw all of it away. */
+static void fusion_chanResetCov(Fusion_Chan *ch)
+{
+    uint8 i;
+    uint8 j;
+
+    for (i = 0u; i < FS_N; i++)
+    {
+        for (j = 0u; j < FS_N; j++)
+        {
+            ch->p[i][j] = 0.0f;
+        }
+    }
+
+    ch->p[FS_POS][FS_POS]     = FUSION_P_POS_INIT;
+    ch->p[FS_VEL][FS_VEL]     = FUSION_P_VEL_INIT;
+    ch->p[FS_ACCB][FS_ACCB]   = FUSION_P_ACCB_INIT;
+    ch->p[FS_MEASB][FS_MEASB] = ch->pMeasBInit;
+}
+
+/* Hold the covariance at "maximally uncertain" without discarding it. Scaling
+ * the whole matrix by one positive factor keeps it a valid covariance and
+ * preserves every correlation the filter has learned. */
+static void fusion_chanClampCov(Fusion_Chan *ch)
+{
+    float32 worst = ch->p[FS_POS][FS_POS];
+    uint8   i;
+    uint8   j;
+
+    if (ch->p[FS_VEL][FS_VEL] > worst)
+    {
+        worst = ch->p[FS_VEL][FS_VEL];
+    }
+    else
+    {
+        /* position is the more uncertain of the two */
+    }
+
+    if (worst > FUSION_P_MAX)
+    {
+        const float32 scale = FUSION_P_MAX / worst;
+
+        for (i = 0u; i < FS_N; i++)
+        {
+            for (j = 0u; j < FS_N; j++)
+            {
+                ch->p[i][j] *= scale;
+            }
+        }
+    }
+    else
+    {
+        /* nothing to do */
+    }
+}
+
+static void fusion_chanInit(Fusion_Chan *ch, float32 sigmaA, float32 sigmaMeasRw,
+                            float32 pMeasB, float32 measBTau)
+{
+    uint8 i;
+
+    for (i = 0u; i < FS_N; i++)
+    {
+        ch->x[i] = 0.0f;
+    }
+
+    ch->sigmaA      = sigmaA;
+    ch->sigmaMeasRw = sigmaMeasRw;
+    ch->pMeasBInit  = pMeasB;
+    ch->measBTau    = measBTau;
+    ch->rejectRun   = 0u;
+    ch->anchored    = FALSE;
+
+    fusion_chanResetCov(ch);
+}
+
+/* Predict: move the state forward, then grow the covariance.
+ *
+ * The model is constant acceleration with an unknown constant offset:
+ *   pos' = pos + vel*dt + (a - accBias)*dt^2/2
+ *   vel' = vel        + (a - accBias)*dt
+ * so the state-transition matrix carries the bias into both, with a minus
+ * sign. That coupling is the whole point — it is what lets a position sensor
+ * that never sees acceleration nevertheless work out the accelerometer offset. */
+static void fusion_chanPredict(Fusion_Chan *ch, float32 a, float32 dt)
+{
+    const float32 dt2  = dt * dt;
+    const float32 qa   = ch->sigmaA * ch->sigmaA;
+    const float32 qm   = ch->sigmaMeasRw * ch->sigmaMeasRw;
+    const float32 f01  = dt;
+    const float32 f02  = -0.5f * dt2;
+    const float32 f12  = -dt;
+    const float32 f33  = (ch->measBTau > 0.0f) ? (1.0f - (dt / ch->measBTau)) : 1.0f;
+    const float32 aEff = a - ch->x[FS_ACCB];
+    float32 t[FS_N][FS_N];
+    uint8   i;
+    uint8   j;
+
+    ch->x[FS_POS] += (ch->x[FS_VEL] * dt) + (0.5f * aEff * dt2);
+    ch->x[FS_VEL] += aEff * dt;
+    ch->x[FS_MEASB] *= f33;
+    /* accBias is a constant plus random walk; measBias reverts to zero */
+
+    /* T = F * P. F is the identity plus three off-diagonal terms, so only the
+     * first two rows change. */
+    for (j = 0u; j < FS_N; j++)
+    {
+        t[FS_POS][j]   = ch->p[FS_POS][j] + (f01 * ch->p[FS_VEL][j])
+                       + (f02 * ch->p[FS_ACCB][j]);
+        t[FS_VEL][j]   = ch->p[FS_VEL][j] + (f12 * ch->p[FS_ACCB][j]);
+        t[FS_ACCB][j]  = ch->p[FS_ACCB][j];
+        t[FS_MEASB][j] = f33 * ch->p[FS_MEASB][j];
+    }
+
+    /* P = T * F'. Transposing F turns its ROWS into the combination applied to
+     * each output COLUMN, so column POS collects the whole of F row 0 and
+     * column VEL collects F row 1 — the same coefficients as above, but
+     * gathered differently. Getting this the wrong way round is not a subtle
+     * error: it drove p00 to -inf on the bench, after which S went negative,
+     * the gate stopped meaning anything and the estimate free-integrated to
+     * 166 m. */
+    for (i = 0u; i < FS_N; i++)
+    {
+        const float32 tPos  = t[i][FS_POS];
+        const float32 tVel  = t[i][FS_VEL];
+        const float32 tAccb = t[i][FS_ACCB];
+
+        ch->p[i][FS_POS]   = tPos + (f01 * tVel) + (f02 * tAccb);
+        ch->p[i][FS_VEL]   = tVel + (f12 * tAccb);
+        ch->p[i][FS_ACCB]  = tAccb;
+        ch->p[i][FS_MEASB] = f33 * t[i][FS_MEASB];
+    }
+
+    /* Q. One acceleration error feeds both position and velocity — sigma*dt
+     * into velocity and sigma*dt^2/2 into position — and the entries are the
+     * products of those two, hence dt^4/4, dt^3/2 and dt^2. The two bias
+     * states get random walks instead, which grow linearly in dt. */
+    ch->p[FS_POS][FS_POS]     += (qa * dt2 * dt2) / 4.0f;
+    ch->p[FS_POS][FS_VEL]     += (qa * dt2 * dt) / 2.0f;
+    ch->p[FS_VEL][FS_POS]      = ch->p[FS_POS][FS_VEL];
+    ch->p[FS_VEL][FS_VEL]     += qa * dt2;
+    ch->p[FS_ACCB][FS_ACCB]   += FUSION_SIGMA_ACC_RW * FUSION_SIGMA_ACC_RW * dt;
+    ch->p[FS_MEASB][FS_MEASB] += qm * dt;
+
+    /* Numerical health check, and it earns its keep: a variance that has gone
+     * negative, infinite or NaN is not a filter that is merely mistuned, it is
+     * one whose gate and gain have stopped meaning anything. Worse, NaN
+     * poisons the escape hatch too — every comparison against NaN is false, so
+     * the rejection counter never advances and the re-acquisition that would
+     * have saved the filter never fires. Catch it here, at the one place every
+     * channel passes through on every tick.
+     *
+     * The comparison is written as "not greater than zero" on purpose: that is
+     * TRUE for NaN, where "less than or equal" would be false. */
+    if (!((ch->p[FS_POS][FS_POS] > 0.0f) && (ch->p[FS_VEL][FS_VEL] > 0.0f)))
+    {
+        /* Negative or NaN. Not saturation — corruption. */
+        fusion_chanResetCov(ch);
+        ch->rejectRun = 0u;
+        s_covResets++;
+    }
+    else if ((ch->p[FS_POS][FS_POS] > FUSION_P_MAX)
+             || (ch->p[FS_VEL][FS_VEL] > FUSION_P_MAX))
+    {
+        /* Honest saturation, NOT a fault, so it deliberately does not count as
+         * a health-check trip. A channel with no absolute reference — north
+         * and east indoors, where GNSS never gets a fix — has a position
+         * variance that grows without bound, because that is the truth: after
+         * long enough the filter genuinely has no idea where it is. Clamping
+         * says "maximally uncertain" and keeps the arithmetic finite; resetting
+         * would falsely claim the estimate had improved. */
+        fusion_chanClampCov(ch);
+    }
+    else
+    {
+        /* covariance is finite and positive */
+    }
+}
+
+/* One scalar measurement update. h selects which linear combination of the
+ * state the sensor sees, so the same routine serves an absolute position fix
+ * (h = [1,0,0,0]), a relative one carrying a bias (h = [1,0,0,1]) and a
+ * velocity fix (h = [0,1,0,0]).
+ *
+ * \return TRUE if the sample passed the gate and was fused. */
+static boolean fusion_chanUpdate(Fusion_Chan *ch, const float32 h[FS_N],
+                                 float32 z, float32 r, float32 gateSq,
+                                 float32 gateMinSq, float32 *innovOut)
+{
+    float32 ph[FS_N];
+    float32 hx = 0.0f;
+    float32 s  = r;
+    float32 y;
+    float32 threshold;
+    boolean accepted = FALSE;
+    uint8   i;
+    uint8   j;
+
+    for (i = 0u; i < FS_N; i++)
+    {
+        float32 acc = 0.0f;
+
+        for (j = 0u; j < FS_N; j++)
+        {
+            acc += ch->p[i][j] * h[j];
+        }
+
+        ph[i] = acc;
+        hx   += h[i] * ch->x[i];
+        s    += h[i] * acc;
+    }
+
+    y = z - hx;
+    *innovOut = y;
+
+    threshold = gateSq * s;
+
+    if (threshold < gateMinSq)
+    {
+        /* The statistical gate has closed tighter than physical sense allows —
+         * see FUSION_GATE_MIN_M. Use the floor instead. */
+        threshold = gateMinSq;
+    }
+    else
+    {
+        /* the covariance-derived gate is the wider of the two */
+    }
+
+    if ((y * y) > threshold)
+    {
+        ch->rejectRun++;
+    }
+    else if (s > 0.0f)
+    {
+        const float32 recipS = 1.0f / s;
+
+        ch->rejectRun = 0u;
+
+        for (i = 0u; i < FS_N; i++)
+        {
+            ch->x[i] += (ph[i] * recipS) * y;
+        }
+
+        /* P -= K * (H*P). Written as an outer product of ph with itself over
+         * s, which is symmetric by construction — so the covariance cannot
+         * drift out of symmetry however long this runs. */
+        for (i = 0u; i < FS_N; i++)
+        {
+            for (j = 0u; j < FS_N; j++)
+            {
+                ch->p[i][j] -= (ph[i] * ph[j]) * recipS;
+            }
+        }
+
+        ch->anchored = TRUE;
+        accepted     = TRUE;
+    }
+    else
+    {
+        /* S <= 0 is numerically impossible for a valid covariance; refuse to
+         * divide by it rather than propagate a NaN through the whole filter. */
+    }
+
+    return accepted;
+}
+
+/* Widen the covariance after a rejection so the gate reopens on its own. */
+static void fusion_chanInflate(Fusion_Chan *ch)
+{
+    uint8 i;
+    uint8 j;
+
+    /* Scaling the whole matrix by a positive constant keeps it a valid
+     * covariance while widening the gate for the next sample. */
+    for (i = 0u; i < FS_N; i++)
+    {
+        for (j = 0u; j < FS_N; j++)
+        {
+            ch->p[i][j] *= FUSION_REJECT_INFLATE;
+        }
+    }
+}
 
 void Fusion_init(void)
 {
-    s_state.a_D     = 0.0f;
-    s_state.a_d     = 0.0f;
-    s_state.a_v_d   = 0.0f;
-    s_state.innov   = 0.0f;
-    s_state.p00     = FUSION_P00_INIT;
-    s_state.rejects = 0u;
-    s_state.resets  = 0u;
-
-    s_p00 = FUSION_P00_INIT;
-    s_p01 = FUSION_P01_INIT;
-    s_p11 = FUSION_P11_INIT;
-
-    s_rejectRun = 0u;
+    /* Only the DOWN channel has a relative sensor (the barometer) sitting
+     * alongside an absolute one, so it is the only channel whose measurement
+     * bias is observable. North and east get zero initial variance and zero
+     * random walk, which pins that state at exactly zero for good. */
+    fusion_chanInit(&s_chD, FUSION_SIGMA_A_D, FUSION_SIGMA_BARO_RW,
+                    FUSION_P_MEASB_INIT, FUSION_TAU_BARO_BIAS_S);
+    fusion_chanInit(&s_chN, FUSION_SIGMA_A_H, 0.0f, 0.0f, 0.0f);
+    fusion_chanInit(&s_chE, FUSION_SIGMA_A_H, 0.0f, 0.0f, 0.0f);
 
     s_baroAlt   = 0.0f;
     s_baroNew   = FALSE;
     s_baroRef   = 0.0f;
     s_baroRefOk = FALSE;
+
+    s_gnssLat     = 0;
+    s_gnssLon     = 0;
+    s_gnssAlt     = 0.0f;
+    s_gnssSpeed   = 0.0f;
+    s_gnssHeading = 0.0f;
+    s_gnssHAcc    = 0.0f;
+    s_gnssNew     = FALSE;
+
+    s_originLat       = 0;
+    s_originLon       = 0;
+    s_originAlt       = 0.0f;
+    s_originAltOffset = 0.0f;
+    s_mPerDegLon      = FUSION_M_PER_DEG_LON;
+    s_originOk        = FALSE;
+    s_lastITow        = 0u;
+    s_haveITow        = FALSE;
+    s_covResets       = 0u;
+
+    s_state.a_D          = 0.0f;
+    s_state.a_d          = 0.0f;
+    s_state.a_v_d        = 0.0f;
+    s_state.accBiasD     = 0.0f;
+    s_state.baroBias     = 0.0f;
+    s_state.innov        = 0.0f;
+    s_state.p00          = FUSION_P_POS_INIT;
+    s_state.a_N          = 0.0f;
+    s_state.a_E          = 0.0f;
+    s_state.posN         = 0.0f;
+    s_state.posE         = 0.0f;
+    s_state.velN         = 0.0f;
+    s_state.velE         = 0.0f;
+    s_state.accBiasN     = 0.0f;
+    s_state.accBiasE     = 0.0f;
+    s_state.innovN       = 0.0f;
+    s_state.innovE       = 0.0f;
+    s_state.pNN          = FUSION_P_POS_INIT;
+    s_state.originLatDeg = 0.0f;
+    s_state.originLonDeg = 0.0f;
+    s_state.originAltM   = 0.0f;
+    s_state.rejects      = 0u;
+    s_state.resets       = 0u;
+    s_state.gnssRejects  = 0u;
+    s_state.gnssUpdates  = 0u;
+    s_state.covResets    = 0u;
+    s_state.verticalOk   = 0u;
+    s_state.horizontalOk = 0u;
+    s_state.originSet    = 0u;
+    s_state.reserved     = 0u;
 }
 
-/* Predict: move the state forward, then grow the covariance.
- *
- * a_D is the down component of specific force with gravity removed. While the
- * board is level the projection collapses to this one line (fusion.h). */
-static void Fusion_predict(const float32 acc[3], float32 dt)
+/* Clamp an acceleration input to the physically possible. */
+static float32 fusion_clampAcc(float32 a)
 {
-    const float32 dt2 = dt * dt;
-    const float32 qa  = FUSION_SIGMA_A * FUSION_SIGMA_A;
+    float32 v = a;
 
-    s_state.a_D = FUSION_GRAVITY * (1.0f - acc[2]);
-
-    /* Clamp only the impossible; real dynamics pass through untouched. */
-    if (s_state.a_D > FUSION_ACC_D_MAX)
+    if (v > FUSION_ACC_MAX)
     {
-        s_state.a_D = FUSION_ACC_D_MAX;
+        v = FUSION_ACC_MAX;
     }
-    else if (s_state.a_D < -FUSION_ACC_D_MAX)
+    else if (v < -FUSION_ACC_MAX)
     {
-        s_state.a_D = -FUSION_ACC_D_MAX;
+        v = -FUSION_ACC_MAX;
     }
     else
     {
         /* in range */
     }
 
-    /* Position FIRST, using the OLD velocity: d integrates the velocity that
-     * was valid across this interval, plus half a*dt^2 because the velocity
-     * ramps rather than jumping. Updating a_v_d first would double that term. */
-    s_state.a_d   += (s_state.a_v_d * dt) + (s_state.a_D * dt2 * 0.5f);
-    s_state.a_v_d += s_state.a_D * dt;
-
-    /* P = F*P*F' + Q, multiplied out for F = [[1, dt], [0, 1]]. Q comes from a
-     * single acceleration error feeding both states: sigma_a*dt into velocity
-     * and sigma_a*dt^2/2 into position, and the entries are the products of
-     * those two — hence dt^4/4, dt^3/2, dt^2.
-     *
-     * Order is load-bearing: every right-hand side must see the OLD values, so
-     * p00 (which needs old p01 and p11) comes before p01 (which needs old p11)
-     * which comes before p11. */
-    s_p00 += (2.0f * dt * s_p01) + (dt2 * s_p11) + ((qa * dt2 * dt2) / 4.0f);
-    s_p01 += (dt * s_p11) + ((qa * dt2 * dt) / 2.0f);
-    s_p11 += qa * dt2;
+    return v;
 }
 
-/* Correct with the latched barometer sample. H = [1, 0], so S is a scalar and
- * the gain is a division — no matrix inverse anywhere in this filter. */
-static void Fusion_correctBaro(void)
+/* Correct the DOWN channel with the latched barometer sample. */
+static void fusion_correctBaro(void)
 {
+    /* The barometer is a RELATIVE sensor here: it measures d plus whatever the
+     * weather has done to the reference since boot, which is the measBias
+     * state. h therefore has a 1 in both slots. */
+    static const float32 h[FS_N] = { 1.0f, 0.0f, 0.0f, 1.0f };
     const float32 z = -(s_baroAlt - s_baroRef);   /* NED: baro counts UP */
-    const float32 y = z - s_state.a_d;            /* the innovation      */
-    const float32 s = s_p00 + FUSION_R_BARO;
+    float32 y = 0.0f;
 
-    s_state.innov = y;
-
-    if ((y * y) > (FUSION_GATE_SIGMA_SQ * s))
+    if (fusion_chanUpdate(&s_chD, h, z, FUSION_R_BARO, FUSION_GATE_SIGMA_SQ,
+                          FUSION_GATE_MIN_SQ, &y) != FALSE)
     {
-        /* Outlier. Counting these matters: a rising count is a sensor fault,
-         * not a tuning knob. */
+        s_state.innov = y;
+    }
+    else
+    {
+        s_state.innov = y;
         s_state.rejects++;
-        s_rejectRun++;
 
-        if (s_rejectRun >= FUSION_REJECT_MAX)
+        if (s_chD.rejectRun >= FUSION_REJECT_MAX)
         {
             /* Half a second of unbroken disagreement. The barometer is not the
              * one that is wrong: re-acquire from it and start over. */
-            s_state.a_d   = z;
-            s_state.a_v_d = 0.0f;
-            s_p00         = FUSION_P00_INIT;
-            s_p01         = FUSION_P01_INIT;
-            s_p11         = FUSION_P11_INIT;
-            s_rejectRun   = 0u;
+            s_chD.x[FS_POS]  = z - s_chD.x[FS_MEASB];
+            s_chD.x[FS_VEL]  = 0.0f;
+            s_chD.x[FS_ACCB] = 0.0f;
+            fusion_chanResetCov(&s_chD);
+            s_chD.rejectRun  = 0u;
             s_state.resets++;
         }
         else
         {
-            /* Scaling the whole matrix by a positive constant keeps it a valid
-             * covariance while widening the gate for the next sample. */
-            s_p00 *= FUSION_REJECT_INFLATE;
-            s_p01 *= FUSION_REJECT_INFLATE;
-            s_p11 *= FUSION_REJECT_INFLATE;
+            fusion_chanInflate(&s_chD);
         }
-    }
-    else
-    {
-        s_rejectRun = 0u;
-        const float32 k0 = s_p00 / s;
-        const float32 k1 = s_p01 / s;
-
-        s_state.a_d   += k0 * y;
-        s_state.a_v_d += k1 * y;
-
-        /* P = (I - K*H)*P, multiplied out. p11 uses the OLD p01, so it is
-         * computed before p01 is overwritten. */
-        s_p11 -= k1 * s_p01;
-        s_p00 -= k0 * s_p00;
-        s_p01 -= k0 * s_p01;
     }
 }
 
-void Fusion_update(FusionValues *fusion, const float32 acc[3], float32 dt, boolean valid)
+/* Correct all three channels with the latched GNSS fix. */
+static void fusion_correctGnss(void)
+{
+    static const float32 hPos[FS_N] = { 1.0f, 0.0f, 0.0f, 0.0f };
+    static const float32 hVel[FS_N] = { 0.0f, 1.0f, 0.0f, 0.0f };
+    float32 hAcc = s_gnssHAcc;
+    float32 rPos;
+    float32 gateMinSq;
+    float32 zN;
+    float32 zE;
+    float32 headRad;
+    float32 yN = 0.0f;
+    float32 yE = 0.0f;
+    boolean okN;
+    boolean okE;
+
+    if (hAcc < FUSION_GNSS_HACC_MIN)
+    {
+        hAcc = FUSION_GNSS_HACC_MIN;
+    }
+    else
+    {
+        /* the receiver is already being suitably modest */
+    }
+
+    rPos      = hAcc * hAcc;
+    gateMinSq = FUSION_GNSS_GATE_MIN_M * FUSION_GNSS_GATE_MIN_M;
+
+    if (s_originOk == FALSE)
+    {
+        /* First usable fix defines the tangent plane. The longitude scale is
+         * frozen at the origin latitude — recomputing it as the vehicle moves
+         * would make the plane subtly non-Euclidean and the position estimate
+         * would not close on itself. */
+        const float32 latDeg = (float32)s_gnssLat * FUSION_1E7_TO_DEG;
+
+        s_originLat  = s_gnssLat;
+        s_originLon  = s_gnssLon;
+        s_originAlt  = s_gnssAlt;
+        s_mPerDegLon = FUSION_M_PER_DEG_LON * cosf(latDeg * FUSION_DEG_TO_RAD);
+
+        /* Anchor GNSS altitude to whatever the vertical channel already
+         * believes, so switching the barometer from "the only reference" to
+         * "a relative sensor with a bias" does not step the altitude. From
+         * here on, the DIFFERENCE between the two sensors is what the measBias
+         * state tracks — which is the whole reason the barometer's weather
+         * drift stops leaking into altitude. */
+        s_originAltOffset = s_chD.x[FS_POS];
+
+        s_originOk = TRUE;
+        s_state.originSet    = 1u;
+        s_state.originLatDeg = latDeg;
+        s_state.originLonDeg = (float32)s_gnssLon * FUSION_1E7_TO_DEG;
+        s_state.originAltM   = s_gnssAlt;
+    }
+    else
+    {
+        /* origin already established */
+    }
+
+    /* Position, as metres from the origin on the tangent plane. The difference
+     * is taken in the receiver's native 1e-7 degree integers before anything
+     * becomes a float: float32 holds only about seven digits, so converting
+     * first would quantise the latitude to roughly 0.4 m and throw away most
+     * of what the receiver is telling us. */
+    zN = (float32)(s_gnssLat - s_originLat) * FUSION_1E7_TO_DEG * FUSION_M_PER_DEG_LAT;
+    zE = (float32)(s_gnssLon - s_originLon) * FUSION_1E7_TO_DEG * s_mPerDegLon;
+
+    okN = fusion_chanUpdate(&s_chN, hPos, zN, rPos, FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
+                            gateMinSq, &yN);
+    okE = fusion_chanUpdate(&s_chE, hPos, zE, rPos, FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
+                            gateMinSq, &yE);
+
+    s_state.innovN = yN;
+    s_state.innovE = yE;
+
+    if ((okN != FALSE) && (okE != FALSE))
+    {
+        s_state.gnssUpdates++;
+    }
+    else
+    {
+        s_state.gnssRejects++;
+
+        if (s_chN.rejectRun >= FUSION_REJECT_MAX)
+        {
+            /* A run of rejected fixes means the horizontal state is wrong, not
+             * the receiver. Re-acquire, exactly as the vertical channel does. */
+            s_chN.x[FS_POS] = zN;
+            s_chE.x[FS_POS] = zE;
+            s_chN.x[FS_VEL] = 0.0f;
+            s_chE.x[FS_VEL] = 0.0f;
+            fusion_chanResetCov(&s_chN);
+            fusion_chanResetCov(&s_chE);
+            s_chN.rejectRun = 0u;
+            s_chE.rejectRun = 0u;
+        }
+        else
+        {
+            fusion_chanInflate(&s_chN);
+            fusion_chanInflate(&s_chE);
+        }
+    }
+
+    /* Velocity. The receiver reports it as a 2-D speed and a heading, so it
+     * has to be resolved onto north and east before either channel can use it.
+     * This is the measurement that makes the horizontal accelerometer bias
+     * observable — position alone would leave bias and velocity entangled. */
+    headRad = s_gnssHeading * FUSION_DEG_TO_RAD;
+
+    {
+        const float32 rVel = FUSION_SIGMA_GNSS_VEL * FUSION_SIGMA_GNSS_VEL;
+        const float32 vN   = s_gnssSpeed * cosf(headRad);
+        const float32 vE   = s_gnssSpeed * sinf(headRad);
+        const float32 gateMinVelSq = 25.0f;   /* 5 m/s: a corrupt fix, not a manoeuvre */
+        float32 yv = 0.0f;
+
+        (void)fusion_chanUpdate(&s_chN, hVel, vN, rVel, FUSION_GATE_SIGMA_SQ,
+                                gateMinVelSq, &yv);
+        (void)fusion_chanUpdate(&s_chE, hVel, vE, rVel, FUSION_GATE_SIGMA_SQ,
+                                gateMinVelSq, &yv);
+    }
+
+    /* GNSS altitude, which is what makes the BAROMETER bias observable: the
+     * barometer sees (d + bias) and this sees d, so the pair separates them.
+     *
+     * vAcc is typically 1.5 to 2 times hAcc because every satellite is above
+     * the receiver and the vertical geometry is inherently poor, so this is
+     * deliberately a weak measurement — it is here to pin the slow drift, not
+     * to compete with the barometer for short-term altitude. */
+    {
+        const float32 zD    = -(s_gnssAlt - s_originAlt) + s_originAltOffset;
+        const float32 sigma = hAcc * 2.0f;
+        float32 yd = 0.0f;
+
+        (void)fusion_chanUpdate(&s_chD, hPos, zD, sigma * sigma,
+                                FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
+                                gateMinSq, &yd);
+    }
+
+    s_state.horizontalOk = (s_chN.anchored != FALSE) ? 1u : 0u;
+}
+
+void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, boolean valid)
 {
     if ((valid != FALSE) && (dt > FUSION_DT_MIN) && (dt < FUSION_DT_MAX))
     {
-        Fusion_predict(acc, dt);
+        const float32 aN = fusion_clampAcc(accNed[0]);
+        const float32 aE = fusion_clampAcc(accNed[1]);
+        const float32 aD = fusion_clampAcc(accNed[2]);
+
+        s_state.a_N = aN;
+        s_state.a_E = aE;
+        s_state.a_D = aD;
+
+        fusion_chanPredict(&s_chD, aD, dt);
+        fusion_chanPredict(&s_chN, aN, dt);
+        fusion_chanPredict(&s_chE, aE, dt);
 
         if (s_baroNew != FALSE)
         {
-            Fusion_correctBaro();
+            fusion_correctBaro();
             s_baroNew = FALSE;
+        }
+        else
+        {
+            /* no new barometer sample this tick */
+        }
+
+        if (s_gnssNew != FALSE)
+        {
+            fusion_correctGnss();
+            s_gnssNew = FALSE;
+        }
+        else
+        {
+            /* no new fix this tick */
         }
     }
     else
@@ -224,15 +811,24 @@ void Fusion_update(FusionValues *fusion, const float32 acc[3], float32 dt, boole
          * estimate kilometres away before the barometer could pull it back. */
     }
 
-    s_state.p00 = s_p00;
+    s_state.a_d      = s_chD.x[FS_POS];
+    s_state.a_v_d    = s_chD.x[FS_VEL];
+    s_state.accBiasD = s_chD.x[FS_ACCB];
+    s_state.baroBias = s_chD.x[FS_MEASB];
+    s_state.p00      = s_chD.p[FS_POS][FS_POS];
 
-    fusion->a_D     = s_state.a_D;
-    fusion->a_d     = s_state.a_d;
-    fusion->a_v_d   = s_state.a_v_d;
-    fusion->innov   = s_state.innov;
-    fusion->p00     = s_state.p00;
-    fusion->rejects = s_state.rejects;
-    fusion->resets  = s_state.resets;
+    s_state.posN     = s_chN.x[FS_POS];
+    s_state.posE     = s_chE.x[FS_POS];
+    s_state.velN     = s_chN.x[FS_VEL];
+    s_state.velE     = s_chE.x[FS_VEL];
+    s_state.accBiasN = s_chN.x[FS_ACCB];
+    s_state.accBiasE = s_chE.x[FS_ACCB];
+    s_state.pNN      = s_chN.p[FS_POS][FS_POS];
+
+    s_state.verticalOk = (s_chD.anchored != FALSE) ? 1u : 0u;
+    s_state.covResets  = s_covResets;
+
+    *fusion = s_state;
 }
 
 void Fusion_setBaroAlt(float32 altM, boolean valid)
@@ -251,5 +847,49 @@ void Fusion_setBaroAlt(float32 altM, boolean valid)
             s_baroRef   = altM;
             s_baroRefOk = TRUE;
         }
+        else
+        {
+            /* reference already taken */
+        }
+    }
+    else
+    {
+        /* Read failed — drop the sample rather than re-fuse the last one. */
+    }
+}
+
+void Fusion_setGnss(sint32 latDeg1e7, sint32 lonDeg1e7, float32 altM,
+                    float32 speedMps, float32 headingDeg, float32 hAccM,
+                    uint32 iTOW, boolean valid)
+{
+    if (valid != FALSE)
+    {
+        /* NAV-PVT arrives at 1 Hz but this is polled at 10 Hz. Without the
+         * time-of-week check the same fix would be fused ten times over,
+         * collapsing the covariance as though ten independent measurements had
+         * arrived — and the filter would then reject the next genuine fix
+         * because it had become far too sure of itself. */
+        if ((s_haveITow == FALSE) || (iTOW != s_lastITow))
+        {
+            s_lastITow    = iTOW;
+            s_haveITow    = TRUE;
+            s_gnssLat     = latDeg1e7;
+            s_gnssLon     = lonDeg1e7;
+            s_gnssAlt     = altM;
+            s_gnssSpeed   = speedMps;
+            s_gnssHeading = headingDeg;
+            s_gnssHAcc    = hAccM;
+            s_gnssNew     = TRUE;
+        }
+        else
+        {
+            /* same fix as last time — already fused */
+        }
+    }
+    else
+    {
+        /* No usable solution. Deliberately NOT clearing s_haveITow: when the
+         * fix comes back its iTOW will have moved on anyway, and forgetting it
+         * would only risk re-fusing a stale fix. */
     }
 }

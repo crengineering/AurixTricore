@@ -25,6 +25,7 @@
 #include "Icm42688.h"
 #include "GnssM9N.h"
 #include "fusion.h"
+#include "Ahrs.h"
 #include "SysTime.h"
 #include "Nvm.h"
 #include <math.h>
@@ -301,6 +302,12 @@ static void Task_Mag(void)
     present = Mmc5983_read(&sample);
     measurementsSetMag(present, sample.mag, sample.headingDeg);
 
+    /* Latch it for the attitude filter, which consumes it on the next IMU
+     * tick. Hard-iron correction and the mounting transform happen in there,
+     * not here -- sample.mag stays the RAW field so the published values and
+     * tools/mag_cal.py keep seeing what the sensor actually reported. */
+    Ahrs_setMag(sample.mag, present);
+
     {
         /* The plausibility test here is stronger than the barometer's, because
          * |B| is a property of the LOCATION and not of the orientation: it must
@@ -335,21 +342,37 @@ static void Task_Imu(void)
     static uint32_t last_ticks = 0u;
     boolean         fusion_valid = TRUE;
     FusionValues    fusion;
+    Ahrs_Values     ahrs;
 
     /* Called unconditionally, like the other sensor tasks: Icm42688_read()
      * owns the presence state and uses these calls to probe for a reconnected
      * sensor. */
     present = Icm42688_read(&sample);
 
-    /* update sensor fusion */
+    /* Attitude first, then navigation: the channel filters need acceleration
+     * resolved into NED, and only the AHRS can do that. */
     float32 elapsedTime = SysTime_getTimeElapsedS(&last_ticks);
     if ( (elapsedTime < 0.001f) ||
          (elapsedTime > 0.2f))
     {
         fusion_valid = FALSE;
     }
-    Fusion_update(&fusion, sample.acc, elapsedTime, fusion_valid && present);
-    measurementsSetFusion(&fusion, present, elapsedTime);
+
+    Ahrs_update(&ahrs, sample.acc, sample.gyro, elapsedTime,
+                (fusion_valid != FALSE) && (present != FALSE));
+
+    /* Gate the navigation filter on the attitude being usable, not merely on
+     * the IMU answering. While the AHRS is still averaging the gyro bias or
+     * waiting to align, its projection is meaningless and integrating it would
+     * put a real offset into the velocity before the barometer ever sees it. */
+    if (ahrs.state != (uint8)AHRS_RUNNING)
+    {
+        fusion_valid = FALSE;
+    }
+
+    Fusion_update(&fusion, ahrs.accNed, elapsedTime,
+                  (fusion_valid != FALSE) && (present != FALSE));
+    measurementsSetFusion(&fusion, &ahrs, present, elapsedTime);
 
     {
         /* Raw angular rate: there is no bias estimator in the tree, so the
@@ -401,6 +424,16 @@ static void Task_Measure100ms(void)
      * evaluates it when the read succeeded, so the boot window is covered. */
     gnssPlausible = (gnss_sample.cfgOk != 0u) ? TRUE : FALSE;
     measurementsSetGnss(gnssPresent, gnss_sample);
+
+    /* Feed the navigation filter. navOk -- not fixOk -- is the gate: it also
+     * requires a 3-D fix and an hAcc inside the usable band, which is what
+     * keeps a barely-acquired solution from dragging the origin around.
+     * Fusion_setGnss ignores a repeat of the same iTOW, so calling it at 10 Hz
+     * on a 1 Hz solution is safe. */
+    Fusion_setGnss(gnss_sample.latRaw, gnss_sample.lonRaw, gnss_sample.altM,
+                   gnss_sample.speedMps, gnss_sample.headingDeg,
+                   gnss_sample.hAccM, gnss_sample.iTOW,
+                   (gnssPresent != FALSE) && (gnss_sample.navOk != 0u));
     PeriphDiag_report(PERIPH_DIAG_GNSS, gnssPresent, gnssPlausible, (float)gnss_sample.rxBytes);
 
     measurementsUpdate();
@@ -526,7 +559,8 @@ int core0_main(void)
         Uart_println("");
     }
     icm42688DebugDump();
-    Fusion_init();          /* zero the vertical-channel state and covariance */
+    Ahrs_init();            /* start the gyro-bias calibration; hold still  */
+    Fusion_init();          /* zero every channel state and covariance      */
 
     /* init of the GNSS*/
     if (GnssM9N_init() != FALSE)

@@ -16,6 +16,7 @@ So the layout is DERIVED here and never typed:
     Xcp_Cal   0x70030100  Diagnostics.h   -> CHARACTERISTIC  (CAL_*)
     Xcp_Nvm   0x70030200  Nvm.h           -> CHARACTERISTIC  (NVM_*)
     Xcp_Gpio  0x70030300  gpio.h          -> CHARACTERISTIC  (GPIO_*)
+    Xcp_Fusion 0x70030500 Measurements.h  -> MEASUREMENT
     DIAG_* defines        Diagnostics.h   -> MEASUREMENT with BIT_MASK
 
 What is NOT derived is the prose: descriptions, units and display limits carry
@@ -64,6 +65,7 @@ BLOCKS = {
     "Xcp_Cal":  ("Diagnostics.h",  "XCP_CAL_ADDR"),
     "Xcp_Nvm":  ("Nvm.h",          "XCP_NVM_ADDR"),
     "Xcp_Gpio": ("gpio.h",         "XCP_GPIO_ADDR"),
+    "Xcp_Fusion": ("Measurements.h", "XCP_FUSION_ADDR"),
 }
 
 
@@ -329,6 +331,7 @@ PREAMBLE = """\
  *   Xcp_Cal   (calibration, RAM only) 0x70030100, {cal_size} bytes, Diagnostics.h
  *   Xcp_Nvm   (persistent, DFLASH)    0x70030200, {nvm_size} bytes, Nvm.h
  *   Xcp_Gpio  (GPIO control, RAM only) 0x70030300, {gpio_size} bytes, gpio.h
+ *   Xcp_Fusion (navigation state)     0x70030500, {fusion_size} bytes, Measurements.h
  * Transport: XCP on UDP/IP, port 5555, station 192.168.0.10.
  * DAQ: dynamic, 1 list, event channel 0 = 100 ms task.
  */
@@ -417,6 +420,7 @@ def generate() -> tuple[str, list[str]]:
     cal_objs, cal_size = block_objects("Xcp_Cal", meta, warn, "char")
     nvm_objs, nvm_size = block_objects("Xcp_Nvm", meta, warn, "char")
     gpio_objs, gpio_size = block_objects("Xcp_Gpio", meta, warn, "char")
+    fusion_objs, fusion_size = block_objects("Xcp_Fusion", meta, warn, "meas")
 
     diag_base = read_define(BSW / "Measurements.h", "XCP_DATA_ADDR")
     diag_fields, _ = parse_struct(BSW / "Measurements.h", "Xcp_Data")
@@ -435,7 +439,8 @@ def generate() -> tuple[str, list[str]]:
 
     parts = [PREAMBLE.format(version=parse_version(BSW / "Version.h"),
                              data_size=data_size, cal_size=cal_size,
-                             nvm_size=nvm_size, gpio_size=gpio_size)]
+                             nvm_size=nvm_size, gpio_size=gpio_size,
+                             fusion_size=fusion_size)]
     parts.append("\n    /* ------------------------------------------------------------------ */"
                  "\n    /* Measurements: Xcp_Data @ 0x70030000 (see Measurements.h)           */"
                  "\n    /* ------------------------------------------------------------------ */\n")
@@ -448,6 +453,8 @@ def generate() -> tuple[str, list[str]]:
     parts.append("\n\n".join(nvm_objs))
     parts.append("\n\n    /* GPIO control: Xcp_Gpio @ 0x70030300, RAM only (see gpio.h) */\n")
     parts.append("\n\n".join(gpio_objs))
+    parts.append("\n\n    /* Navigation state: Xcp_Fusion @ 0x70030500 (see Measurements.h) */\n")
+    parts.append("\n\n".join(fusion_objs))
     parts.append("\n\n  /end MODULE\n/end PROJECT\n")
     return "".join(parts), warn
 

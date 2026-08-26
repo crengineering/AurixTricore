@@ -39,6 +39,19 @@ typedef struct
   float32 vAccM;        /* vertical accuracy -- typically 1.5..2x hAccM,    */
                         /* every satellite is above you so the geometry for */
                         /* the vertical component is inherently poor        */
+
+  /* Raw fields the navigation filter needs and the float ones above cannot
+   * carry (see fusion.c):
+   *   iTOW  marks a NEW fix. NAV-PVT arrives at 1 Hz but this sample is polled
+   *         at 10 Hz, so without it the same fix would be fused ten times and
+   *         the covariance would collapse as though ten independent
+   *         measurements had arrived.
+   *   lat/lon in the receiver's native 1e-7 deg integers. float32 holds about
+   *         seven digits, so latDeg above quantises to roughly 0.4 m -- fine
+   *         for display, useless as a filter input. */
+  uint32  iTOW;         /* GPS time of week [ms]                           */
+  sint32  latRaw;       /* 1e-7 deg                                        */
+  sint32  lonRaw;       /* 1e-7 deg                                        */
 }GnssM9N_Sample;
 
 typedef struct

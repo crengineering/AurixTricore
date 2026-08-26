@@ -9,7 +9,7 @@ Ethernet-attached measurement and calibration target that reads inertial,
 barometric and magnetic sensors, fuses them into an attitude estimate, monitors
 its own health, and exposes all of it live over **XCP-on-UDP** to a PC GUI.
 
-**Firmware version: v1.17.0** (`src/bsw/Version.h`) · Hardware-validated on the
+**Firmware version: v1.19.3** (`src/bsw/Version.h`) · Hardware-validated on the
 bench.
 
 ---
@@ -27,7 +27,10 @@ bench.
 | BMP581 barometer (I2C0 `0x47`) | ✅ HW-validated |
 | MMC5983MA magnetometer (I2C0 `0x30`) | ✅ HW-validated |
 | ICM-42688-P IMU (QSPI0) | ✅ HW-validated |
-| Attitude estimation | ❌ removed 2026-08-22 — being rewritten from scratch |
+| Attitude estimation (quaternion Mahony, accel+gyro+mag) | ✅ HW-validated — `docs/FUSION.md` |
+| Vertical channel: altitude + climb rate + accel bias | ✅ HW-validated |
+| Horizontal channel: GNSS position/velocity in a NED tangent plane | ⚠️ built, **needs an outdoor fix to validate** |
+| Magnetometer hard-iron calibration (`tools/mag_cal.py`, stored in NVM) | ⚠️ tool ready, **not yet run on this board** |
 | Diagnostics: 28 debounced status bits, per-device peripheral health | ✅ |
 | GPIO / PWM feature on Port 00 (GTM TOM), XCP-controlled duty | ✅ |
 | Flight-control replay harness (UDP 5556) | ✅ |

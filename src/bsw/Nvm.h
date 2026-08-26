@@ -17,6 +17,22 @@
  *   0x0C  uint32  seaLevelPa  sea-level reference pressure [Pa] for the baro
  *                             altitude (QNH); default 101325 (standard atm)
  *
+ *   --- magnetometer calibration, appended in v1.19.0 (NVM layout 4) ---
+ *   Per-BOARD, not per-design: the offsets are the board's own magnetics as
+ *   the MMC5983MA sees them, so they belong in flash rather than in a header.
+ *   All default to a no-op (zero offset, unit scale), which is the same
+ *   uncalibrated behaviour as before this block existed.
+ *   0x10  float32 magOffX     hard-iron offset [gauss], SENSOR frame
+ *   0x14  float32 magOffY
+ *   0x18  float32 magOffZ
+ *   0x1C  float32 magScaleX   soft-iron scale, dimensionless, default 1.0
+ *   0x20  float32 magScaleY
+ *   0x24  float32 magScaleZ
+ *   0x28  float32 magDeclDeg  magnetic declination [deg], east positive.
+ *                             +3.9 in Munich. Turns magnetic north into TRUE
+ *                             north; applied at the AHRS output, not inside
+ *                             the filter (see Ahrs.c).
+ *
  * New persistent parameters are appended here (bump NVM_LAYOUT_VERSION in
  * Nvm.c; stored records of an older layout are ignored, not a fault).
  *
@@ -30,10 +46,16 @@
  */
 #define XCP_NVM_ADDR    0x70030200u
 #define XCP_NVM_MAGIC   0x4D564E58u
-#define XCP_NVM_SIZE    16u
+#define XCP_NVM_SIZE    44u
 
 /* default sea-level reference pressure [Pa] (ISA standard atmosphere) */
 #define NVM_SEA_LEVEL_PA_DEFAULT    101325u
+
+/* Default magnetic declination [deg east]. Munich, 2026: +3.9 deg. Unlike the
+ * hard-iron offsets this one is safe to default to a real value — it depends
+ * on WHERE the board is, not on the board, and being 4 degrees out is strictly
+ * better than being 0 degrees out by pretending declination does not exist. */
+#define NVM_MAG_DECL_DEG_DEFAULT    (3.9f)
 
 /* values for the 'command' word */
 #define NVM_CMD_NONE        0x00000000u
@@ -46,6 +68,16 @@ typedef struct
     uint32 command;
     uint32 userValue;
     uint32 seaLevelPa;
+
+    /* magnetometer calibration — see Ahrs.c. Appended at the END so every
+     * address above keeps its value; do the same for the next parameter. */
+    float32 magOffX;
+    float32 magOffY;
+    float32 magOffZ;
+    float32 magScaleX;
+    float32 magScaleY;
+    float32 magScaleZ;
+    float32 magDeclDeg;
 } Xcp_Nvm;
 
 extern volatile Xcp_Nvm g_xcpNvm;

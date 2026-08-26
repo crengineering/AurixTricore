@@ -725,6 +725,9 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
     sample->headingDeg = (float32)g_nav.headMot * 1.0e-5f;
     sample->hAccM      = (float32)g_nav.hAcc    * 1.0e-3f;
     sample->vAccM      = (float32)g_nav.vAcc    * 1.0e-3f;
+    sample->iTOW       = g_nav.iTOW;
+    sample->latRaw     = g_nav.lat;
+    sample->lonRaw     = g_nav.lon;
     sample->year      = g_nav.year;
     sample->month     = g_nav.month;
     sample->day       = g_nav.day;

@@ -18,7 +18,14 @@
 /* Fixed address so XCP clients can read without the map file (TASKING __at).
  * 0x70030000 is high in CPU0 DSPR0 (240 KB), clear of linker-placed data —
  * the linker errors out on any overlap. */
+#define MEAS_RAD_TO_DEG   (57.29578f)
+
 volatile Xcp_Data g_xcpData __at(XCP_DATA_ADDR);
+
+/* The navigation state lives in its own block at the next free 256-byte slot,
+ * because Xcp_Data has 8 bytes left before Xcp_Cal and this needs 176. Putting
+ * it here rather than growing Xcp_Data means no existing address moves. */
+volatile Xcp_Fusion g_xcpFusion __at(XCP_FUSION_ADDR);
 
 void measurementsInit(void)
 {
@@ -228,8 +235,14 @@ void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)
     }
 }
 
-void measurementsSetFusion(FusionValues *fusion, boolean present, float32 elapsed)
+void measurementsSetFusion(const FusionValues *fusion, const Ahrs_Values *ahrs,
+                           boolean present, float32 elapsed)
 {
+    uint8 i;
+
+    /* --- legacy fields in Xcp_Data ------------------------------------
+     * Kept and still written so the A2L entries, the GUI plots and every
+     * hardcoded address in tools/ survive the move to the block below. */
     if (present != FALSE)
     {
         g_xcpData.fusionElapsed = elapsed;
@@ -246,6 +259,67 @@ void measurementsSetFusion(FusionValues *fusion, boolean present, float32 elapse
         g_xcpData.fusionElapsed = 0.0f;
         g_xcpData.a_D           = 0.0f;
     }
+
+    /* --- the full state ------------------------------------------------ */
+    g_xcpFusion.magic  = XCP_FUSION_MAGIC;
+    g_xcpFusion.tickMs = g_TickCount_1ms;
+
+    /* Angles are published in DEGREES. The filter works in radians and always
+     * will, but every consumer of this block is a human or a plot. */
+    g_xcpFusion.rollDeg  = ahrs->rollRad  * MEAS_RAD_TO_DEG;
+    g_xcpFusion.pitchDeg = ahrs->pitchRad * MEAS_RAD_TO_DEG;
+    g_xcpFusion.yawDeg   = ahrs->yawRad   * MEAS_RAD_TO_DEG;
+
+    for (i = 0u; i < 4u; i++)
+    {
+        g_xcpFusion.q[i] = ahrs->q[i];
+    }
+
+    for (i = 0u; i < 3u; i++)
+    {
+        g_xcpFusion.rateDps[i]  = ahrs->rate[i] * MEAS_RAD_TO_DEG;
+        g_xcpFusion.gyroBias[i] = ahrs->gyroBias[i];
+        g_xcpFusion.accNed[i]   = ahrs->accNed[i];
+    }
+
+    g_xcpFusion.accMagG    = ahrs->accMagG;
+    g_xcpFusion.magFieldG  = ahrs->magFieldG;
+    g_xcpFusion.ahrsState  = ahrs->state;
+    g_xcpFusion.accTrusted = ahrs->accTrusted;
+    g_xcpFusion.magTrusted = ahrs->magTrusted;
+    g_xcpFusion.reserved   = 0u;
+
+    g_xcpFusion.posD     = fusion->a_d;
+    g_xcpFusion.velD     = fusion->a_v_d;
+    g_xcpFusion.accBiasD = fusion->accBiasD;
+    g_xcpFusion.baroBias = fusion->baroBias;
+    g_xcpFusion.innovD   = fusion->innov;
+    g_xcpFusion.varD     = fusion->p00;
+
+    g_xcpFusion.posN     = fusion->posN;
+    g_xcpFusion.posE     = fusion->posE;
+    g_xcpFusion.velN     = fusion->velN;
+    g_xcpFusion.velE     = fusion->velE;
+    g_xcpFusion.accBiasN = fusion->accBiasN;
+    g_xcpFusion.accBiasE = fusion->accBiasE;
+    g_xcpFusion.innovN   = fusion->innovN;
+    g_xcpFusion.innovE   = fusion->innovE;
+    g_xcpFusion.varN     = fusion->pNN;
+
+    g_xcpFusion.originLatDeg = fusion->originLatDeg;
+    g_xcpFusion.originLonDeg = fusion->originLonDeg;
+    g_xcpFusion.originAltM   = fusion->originAltM;
+
+    g_xcpFusion.baroRejects = fusion->rejects;
+    g_xcpFusion.baroResets  = fusion->resets;
+    g_xcpFusion.gnssRejects = fusion->gnssRejects;
+    g_xcpFusion.gnssUpdates = fusion->gnssUpdates;
+
+    g_xcpFusion.verticalOk   = fusion->verticalOk;
+    g_xcpFusion.horizontalOk = fusion->horizontalOk;
+    g_xcpFusion.originSet    = fusion->originSet;
+    g_xcpFusion.reserved2    = 0u;
+    g_xcpFusion.covResets    = fusion->covResets;
 }
 
 void measurementsUpdate(void)
