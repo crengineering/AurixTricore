@@ -363,7 +363,83 @@ be timestamped when this is addressed.
 
 ---
 
-## 8. What is not validated yet
+## 8. Barometer filtering — do not filter twice
+
+`BMP581_DSP_IIR_VAL` carried the BMP388 indoor-navigation preset (pressure IIR
+coefficient 15) until 2026-08-26. That is the wrong preset for a flight vehicle.
+
+The IIR is `y[n] = (c*y[n-1] + x[n])/(c+1)`, so at coefficient 15 and 50 Hz it is
+an exponential average with alpha = 1/16 and a time constant of ~310 ms.
+`Fusion_setBaroAlt` receives that already-smoothed value and treats it as an
+INSTANTANEOUS altitude, because the Kalman filter has no model of the lag.
+
+Oversampling and IIR are not interchangeable. `OSR_p` averages within one
+conversion and has no memory, so it reduces noise for free. The IIR reduces
+noise by REMEMBERING, and that memory is the lag. The Kalman filter is already
+the optimal smoother and `FUSION_SIGMA_BARO` tells it how much to trust each
+sample, so a hand-tuned IIR in front of it adds lag the filter cannot account
+for and buys nothing the filter is not doing better.
+
+Changed to coefficient 1 (tau ~29 ms), `OSR_p x16` unchanged.
+
+### What the change actually cost and bought (measured)
+
+| | IIR 15 | IIR 1 |
+|---|---|---|
+| innovation std, at rest | 0.0181 m | 0.0196 m |
+| baro white-noise sigma | 0.0197 m | 0.0188 m |
+| slope of innovation on `v_d` | **−0.0606 s** (r −0.16) | **+0.0058 s** (r +0.03) |
+
+The lag signature — innovation correlated with vertical velocity, which is how
+a lagging position sensor betrays itself — is **gone**, and the noise cost was
+8 %. `FUSION_SIGMA_BARO` needed no change.
+
+⚠️ **The noise did not rise 4x as predicted.** An EMA at alpha=1/16 attenuates
+white noise ~5.6x versus ~1.7x at alpha=1/2, so removing it should have been
+obvious. It was not, which means the barometer's apparent scatter is NOT sensor
+white noise — it is real low-frequency pressure fluctuation (air movement in the
+room), which an IIR barely touches. The coefficient-15 filter was paying 310 ms
+of lag for almost no noise reduction at all.
+
+⚠️ **Peak innovation is the WRONG metric for lag** and went *up* (0.064 →
+0.081 m). It is dominated by noise spikes, and removing a low-pass necessarily
+makes sample-to-sample scatter worse. Lag shows as `z ~ d - tau*v_d`, i.e. as
+innovation regressed on velocity — use that.
+
+⚠️ The 61 ms implied by the regression is a LOWER BOUND on the true sensor lag,
+not a measurement of it. The filter's gain is low, so it follows the barometer
+loosely and part of the lag lands in the output rather than the residual.
+Measuring the absolute figure needs an independent altitude reference, which the
+bench does not have.
+
+### The vertical channel is fusing correctly (measured at rest, 60 s)
+
+| | total std | first-difference std |
+|---|---|---|
+| raw baro altitude | 0.07162 m | 0.02659 m |
+| filter output `posD` | 0.06983 m | **0.00739 m** |
+
+**3.6x high-frequency attenuation** — that is the accelerometer doing real work.
+Innovation std (0.0196) matching sigma_R (0.0197) means `P_pred << R`, so the
+gain is LOW and the filter trusts its prediction over each individual sample.
+Climb-rate noise at rest is **0.0184 m/s**, which is the figure that matters for
+an altitude inner loop.
+
+`posD` total std matching the raw baro is not a failure to smooth: both are
+dominated by real slow pressure drift, which on sub-600 s timescales is genuinely
+indistinguishable from altitude change. That is what the GNSS-anchored
+`baroBias` state resolves, and it did (1.92 -> 0.01 m outdoors).
+
+### Still untestable on the bench
+
+- **Prop wash.** The barometer is a pressure sensor sitting in a downwash. Needs
+  foam over the port or a static port; no amount of filtering substitutes.
+- **Motor vibration** on the accelerometer will force `FUSION_SIGMA_A_D` up from
+  0.3 and may need the ICM-42688-P's own anti-alias filtering revisited.
+
+---
+
+## 9. What is not validated yet
 
 - **The whole horizontal channel.** It never executes without a GNSS fix, and
   there is no fix indoors. Run `tools/nav_outdoor_check.py`: `originSet` must go

@@ -50,11 +50,34 @@
 #define BMP581_DSP_CONFIG_VAL   (0x0Au)
 
 /* DSP_IIR (0x31): set_iir_t (bits 2:0) = coeff 3 (0b010),
- *                 set_iir_p (bits 5:3) = coeff 15 (0b100) -> 0x20.
- * Same intent as the BMP388's indoor-navigation preset: a strong low-pass on
- * pressure to keep the at-rest altitude quiet, trading a little step-response
- * lag, and a light one on the inherently slow temperature channel. */
-#define BMP581_DSP_IIR_VAL      (0x22u)
+ *                 set_iir_p (bits 5:3) = coeff 1 (0b001) -> 0x08.
+ *
+ * ⚠️ Pressure IIR was coeff 15 until 2026-08-26. That is the BMP388
+ * indoor-navigation preset, and it is the wrong preset for a flight vehicle.
+ *
+ * DO NOT FILTER TWICE. The IIR is y[n] = (c*y[n-1] + x[n])/(c+1), so at
+ * coeff 15 and 50 Hz it is an exponential average with alpha = 1/16 and a time
+ * constant of ~310 ms — a second to settle 95 %. Fusion_setBaroAlt receives
+ * that already-smoothed value and treats it as an INSTANTANEOUS measurement of
+ * altitude, because the Kalman filter has no model of the lag. During a steady
+ * climb the barometer therefore reads v*0.31 metres low (0.6 m at 2 m/s), and
+ * that appears as a persistent innovation offset rather than as noise. Sensor
+ * lag is also what turns a stable altitude loop into an oscillating one.
+ *
+ * Oversampling and IIR are NOT interchangeable. OSR_p averages within a single
+ * conversion and has no memory, so it reduces noise for free; the IIR reduces
+ * noise by REMEMBERING, which is exactly where the lag comes from. The Kalman
+ * filter is already the optimal smoother and FUSION_SIGMA_BARO tells it how
+ * much to trust each sample, so a hand-tuned IIR in front of it buys nothing
+ * the filter is not doing better, while adding lag it cannot account for.
+ *
+ * Coeff 1 (alpha = 1/2, tau ~ 29 ms) keeps a token anti-alias and is a 10x
+ * lag reduction. Bypass (0b000) is the logical end point if the noise proves
+ * acceptable — re-measure FUSION_SIGMA_BARO after any change here, it is a
+ * MEASURED constant and this register is what sets it.
+ *
+ * Temperature keeps coeff 3: it is inherently slow, nothing controls on it. */
+#define BMP581_DSP_IIR_VAL      (0x0Au)
 
 /* OSR_CONFIG (0x36): osr_t (bits 2:0) = x2 (0b001),
  *                    osr_p (bits 5:3) = x16 (0b100) -> 0x20,
