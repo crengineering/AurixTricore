@@ -155,13 +155,66 @@ Results are stored in `Xcp_Nvm` (`magOffX/Y/Z`, `magScaleX/Y/Z`, `magDeclDeg`),
 survive a power cycle, and default to a **no-op** so an uncalibrated board
 behaves exactly as it did before the fields existed.
 
+### Result on this board, 2026-08-26
+
+| | |
+|---|---|
+| hard iron | X **−0.1940**, Y **−0.0722**, Z **−0.8510** G |
+| soft iron | 1.0 / 1.0 / 1.0 — sphere fit, see below |
+| declination | 3.9° (Munich) |
+| raw \|B\| | 0.383 … 1.373 G, spread **135 %** |
+| corrected \|B\| | 0.432 … 0.493 G, spread **13 %**, mean **0.4655 G** |
+| fit residual | 3.51 % |
+
+The **Z offset of −0.85 G is larger than Earth's entire field**. Something on
+the board close to the sensor is strongly magnetic, and without correction the
+magnetometer was reporting mostly that. The corrected magnitude landing within
+3.5 % of the true local field (~0.48 G in Munich) is the independent check that
+the fit is physical rather than merely self-consistent.
+
+The soft-iron scales came out at exactly 1.0 because the ellipsoid fit was
+rejected in favour of the sphere fallback — a hand rotation rarely conditions
+the three squared terms well enough, and applying an ill-determined soft-iron
+correction is worse than applying none. Hard iron dominates anyway.
+
+### Two traps in the tool, both fixed after they bit
+
+**A stationary board scored 100 % coverage.** The octant check measured only
+which side of the *mean* each sample fell on, and sensor noise puts samples on
+all sides of the mean — so a board sitting still on the desk looked like perfect
+spherical coverage and would have written a garbage calibration into flash. The
+check now requires each sample to be genuinely out at ~25 % of the field
+magnitude before its octant counts.
+
+**A failed fit threw the whole rotation away.** Two runs were lost before the
+raw samples were dumped unconditionally, before fitting, so a bad run can be
+re-fitted offline instead of re-tumbled.
+
+The live `corners n/8 [########]` display exists because blind instructions do
+not work: the first successful run sat at 5/8 for a minute, and the pattern
+`#.#.#.#.` said immediately that every missing octant had +Z — the board was
+never being turned upside down. That is a one-second diagnosis from the display
+and an unanswerable question without it.
+
 Declination is applied at the AHRS *output*, not inside the filter — it is a
 property of the location, not the board, and folding it in would make the stored
 hard-iron offsets location-dependent too.
 
-**The magnetometer mounting transform is still a hypothesis.** It cannot be
-measured until hard iron is corrected, because the 2× `|B|` swing swamps any
-axis check. Calibrate first, then verify that yaw tracks a physical 90° rotation.
+**The magnetometer mounting transform.** It could not be measured until hard
+iron was corrected, because the 2× `|B|` swing swamped any axis check. After
+calibration, a level 360° rotation produced a smooth, continuous, monotonic
+sweep through all 360° of yaw with `magTrusted = 1` throughout.
+
+**Confirmed 2026-08-26:** the rotation was CLOCKWISE seen from above, and yaw
+INCREASED through it. In NED that is correct — yaw runs north to east to south
+to west, i.e. clockwise from above. The transform is validated.
+
+Smooth tracking is corroborating evidence for a reason worth understanding: the
+Mahony filter *fuses* gyro and magnetometer. If the mag transform had the wrong
+handedness, the mag correction would oppose the gyro integration on every single
+sample, and yaw would stall, jitter or lock rather than sweep cleanly. A clean
+monotonic sweep means the two agree with each other; the rotation direction is
+what pins down which way both of them are pointing.
 
 **Symptom to expect until this is done:** yaw drifts. Measured on v1.19.3 with
 the board sitting still and level, `magTrusted = 1`: yaw walked **+0.37 °/s**
@@ -259,6 +312,9 @@ Quick health read, in order of what to distrust first:
   `gnssUpdates` increments at 1 Hz (not 10 — that would mean the `iTOW` new-fix
   check is broken), and `posN`/`posE` track a walked rectangle.
 - **GNSS altitude anchoring the barometer bias.** Same reason.
-- **The magnetometer mounting transform** — see §4.
-- **Yaw accuracy against a known heading.** Needs §4 done first, then an
-  outdoor check against a real bearing.
+- **Yaw accuracy against a known TRUE heading.** The transform and the
+  calibration are both validated, but nothing has yet checked that yaw reads the
+  correct ABSOLUTE bearing — only that it advances correctly and that `|B|` is
+  orientation-independent. Indoors that check is not worth making: building
+  steel shifts the field. Do it outdoors against a known bearing, and expect the
+  3.9° declination in `Xcp_Nvm` to be part of what is being tested.

@@ -29,8 +29,8 @@ bench.
 | ICM-42688-P IMU (QSPI0) | ✅ HW-validated |
 | Attitude estimation (quaternion Mahony, accel+gyro+mag) | ✅ HW-validated — `docs/FUSION.md` |
 | Vertical channel: altitude + climb rate + accel bias | ✅ HW-validated |
-| Horizontal channel: GNSS position/velocity in a NED tangent plane | ⚠️ built, **needs an outdoor fix to validate** |
-| Magnetometer hard-iron calibration (`tools/mag_cal.py`, stored in NVM) | ⚠️ tool ready, **not yet run on this board** |
+| Horizontal channel: GNSS position/velocity in a NED tangent plane | ⚠️ built, **needs an outdoor fix to validate** (`tools/nav_outdoor_check.py`) |
+| Magnetometer hard-iron calibration (`tools/mag_cal.py`, stored in NVM) | ✅ HW-validated — \|B\| spread 135% → 13% |
 | Diagnostics: 28 debounced status bits, per-device peripheral health | ✅ |
 | GPIO / PWM feature on Port 00 (GTM TOM), XCP-controlled duty | ✅ |
 | Flight-control replay harness (UDP 5556) | ✅ |

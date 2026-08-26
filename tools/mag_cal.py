@@ -44,6 +44,7 @@ coverage was too poor to trust.
 from __future__ import annotations
 
 import argparse
+import csv
 import struct
 import sys
 import time
@@ -54,6 +55,24 @@ from pyxcp.master import Master
 from pyxcp.config import create_application_from_config
 
 HOST, PORT = "192.168.0.10", 5555
+
+ALL_OCTANTS = [(i, j, k) for i in (-1, 1) for j in (-1, 1) for k in (-1, 1)]
+
+# A sample only counts toward an octant if it is genuinely OUT in that
+# direction, not merely on the noisy side of the mean. The threshold is a
+# fraction of the FIELD MAGNITUDE rather than of the observed spread -- which
+# matters more than it sounds: with the board sitting still, the spread IS the
+# noise, so a spread-relative test finds all eight octants in a stationary
+# dataset and cheerfully reports 100% coverage. That very nearly let a garbage
+# calibration be written to flash.
+OCTANT_FRAC = 0.25
+
+
+def octants(p: np.ndarray, centre: np.ndarray) -> set:
+    d = p - centre
+    thresh = OCTANT_FRAC * float(np.median(np.linalg.norm(p, axis=1)))
+    sig = np.where(np.abs(d) > thresh, np.sign(d), 0.0).astype(int)
+    return {tuple(t) for t in sig if 0 not in t} & set(ALL_OCTANTS)
 
 # Xcp_Data: raw (uncorrected) field, see Measurements.h
 MAG_X = 0x70030090
@@ -67,8 +86,8 @@ NVM_CMD_SAVE = 0x45564153  # "SAVE"
 
 
 def read_mag(x):
-    raw = x.shortUpload(12, MAG_X, 0)
-    return struct.unpack("<fff", bytes(raw[:12]))
+    raw = bytes(x.shortUpload(12, MAG_X, 0))
+    return struct.unpack("<fff", raw[:12])
 
 
 def write_f32(x, addr, value):
@@ -81,8 +100,43 @@ def write_u32(x, addr, value):
     x.download(struct.pack("<I", int(value)))
 
 
+def fit_sphere(p: np.ndarray):
+    """Least-squares SPHERE: hard iron only, no soft iron.
+
+    Deliberately the primary fit. |p - c|^2 = r^2 expands to
+
+        x^2 + y^2 + z^2 = 2*cx*x + 2*cy*y + 2*cz*z + (r^2 - |c|^2)
+
+    which is LINEAR in the four unknowns and stays well conditioned even when
+    the rotation was uneven -- which a hand rotation always is. The ellipsoid
+    fit below needs the three SQUARED terms to be independently determined, and
+    that wants coverage a person tumbling a board rarely achieves.
+
+    Hard iron is the dominant error anyway: it shifts the sphere bodily, while
+    soft iron only distorts its shape by a few percent.
+    """
+    x, y, z = p[:, 0], p[:, 1], p[:, 2]
+    A = np.column_stack([2 * x, 2 * y, 2 * z, np.ones_like(x)])
+    b = (x * x) + (y * y) + (z * z)
+    sol, *_ = np.linalg.lstsq(A, b, rcond=None)
+    centre = sol[:3]
+    r2 = sol[3] + float(centre @ centre)
+    if r2 <= 0:
+        return None, None, None, "sphere fit degenerate (non-positive radius)"
+
+    scale = np.ones(3)
+    norms = np.linalg.norm(p - centre, axis=1)
+    residual = 100.0 * norms.std() / norms.mean()
+    return centre, scale, residual, None
+
+
 def fit_ellipsoid(p: np.ndarray):
-    """Least-squares axis-aligned ellipsoid. Returns (centre, scale, residual%)."""
+    """Least-squares axis-aligned ellipsoid: hard iron AND per-axis soft iron.
+
+    Falls back to fit_sphere when the data cannot support it. That is not a
+    corner case -- it is the normal outcome of a hand rotation, and the reason
+    this returns a usable answer instead of refusing.
+    """
     x, y, z = p[:, 0], p[:, 1], p[:, 2]
     # Design matrix for a*x^2 + b*y^2 + c*z^2 + d*x + e*y + f*z = 1
     A = np.column_stack([x * x, y * y, z * z, x, y, z])
@@ -91,18 +145,24 @@ def fit_ellipsoid(p: np.ndarray):
     a, bb, c, d, e, f = coef
 
     if min(a, bb, c) <= 0:
-        return None, None, None, "the fitted quadric is not an ellipsoid"
+        return fit_sphere(p)
 
     centre = np.array([-d / (2 * a), -e / (2 * bb), -f / (2 * c)])
     # Substituting the centre back gives the right-hand side of the centred form
     k = 1.0 + (a * centre[0] ** 2) + (bb * centre[1] ** 2) + (c * centre[2] ** 2)
     if k <= 0:
-        return None, None, None, "degenerate fit"
+        return fit_sphere(p)
 
     radii = np.sqrt(k / np.array([a, bb, c]))
     # Scale each axis onto the MEAN radius, so the corrected magnitude stays in
     # gauss rather than being normalised to 1 -- |B| remains a physical check.
     scale = radii.mean() / radii
+
+    # Reject an implausible soft-iron correction rather than apply it. Real soft
+    # iron on a board like this is a few percent; anything past 1.5x means the
+    # quadratic terms were not actually determined by the data.
+    if (scale.max() / scale.min()) > 1.5:
+        return fit_sphere(p)
 
     corrected = (p - centre) * scale
     norms = np.linalg.norm(corrected, axis=1)
@@ -111,10 +171,8 @@ def fit_ellipsoid(p: np.ndarray):
 
 
 def coverage(p: np.ndarray, centre: np.ndarray) -> float:
-    """Fraction of the sphere's octants that got at least one sample."""
-    d = p - centre
-    signs = {tuple(s) for s in np.sign(d).astype(int)}
-    return len(signs & {(i, j, k) for i in (-1, 1) for j in (-1, 1) for k in (-1, 1)}) / 8.0
+    """Fraction of the sphere's octants that got a sample genuinely out there."""
+    return len(octants(p, centre)) / 8.0
 
 
 def main():
@@ -125,10 +183,15 @@ def main():
     ap.add_argument("--write", action="store_true", help="store to NVM and SAVE")
     ap.add_argument("--decl", type=float, default=None,
                     help="magnetic declination [deg east] to store as well")
+    ap.add_argument("--save", default="mag_points.csv",
+                    help="where to dump the raw samples (always written)")
+    ap.add_argument("--load", default=None,
+                    help="re-fit a previous dump instead of collecting")
     args = ap.parse_args()
 
     conf = create_application_from_config({
-        "TRANSPORT": "ETH", "HOST": HOST, "PORT": PORT, "PROTOCOL": "UDP",
+        "Transport": {"Eth": {"host": HOST, "port": PORT,
+                              "protocol": "UDP", "ipv6": False}},
     })
 
     pts = []
@@ -138,13 +201,44 @@ def main():
               f"through ALL orientations (every face up, and tumble between them).")
         t_end = time.time() + args.seconds
         last_print = 0.0
-        while time.time() < t_end:
+        n_oct = 0
+        while True:
             pts.append(read_mag(x))
             time.sleep(args.rate)
             left = t_end - time.time()
-            if left - last_print < -2.0 or last_print == 0.0:
+
+            # Live coverage feedback. The centre is not known yet, so the
+            # running mean stands in for it -- crude, but it is only steering
+            # the operator, and it converges toward the real centre as the
+            # rotation evens out. This is the point of the whole display:
+            # turning a blind two-minute chore into something with a progress
+            # bar, so a run cannot silently end up unfittable.
+            arr = np.array(pts)
+            mid = arr.mean(axis=0)
+            octs = octants(arr, mid)
+            n_oct = len(octs)
+
+            if (left - last_print < -0.5) or (last_print == 0.0):
                 last_print = left
-                print(f"  {len(pts):5d} samples, {left:4.0f} s left", end="\r")
+                bar = "".join("#" if o in octs else "." for o in ALL_OCTANTS)
+                hint = "ALL CORNERS HIT" if n_oct == 8 else "keep tumbling"
+                # flush: without it a redirected stdout is block-buffered and
+                # the progress line does not appear until the buffer fills,
+                # which defeats the entire purpose of a live display.
+                print(f"  corners {n_oct}/8 [{bar}]  {len(pts):5d} samples  "
+                      f"{max(left, 0.0):4.0f}s left  -- {hint}      ",
+                      end="\r", flush=True)
+
+            # Stop on time, but never before every corner has been seen: the
+            # fit cannot succeed without them, so ending early only wastes the
+            # rotation that was already done.
+            if (left <= 0.0) and (n_oct == 8):
+                break
+            if left <= -30.0:
+                # Give up rather than trap the operator (or sit there until the
+                # XCP connection times out and buries the reason in a traceback).
+                print(f"\n\nstopping at {n_oct}/8 corners after 30 s of grace.")
+                break
         print()
 
         p = np.array(pts, dtype=float)
