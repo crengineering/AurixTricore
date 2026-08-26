@@ -28,7 +28,8 @@ Verify before relying on a claim here. If you find drift, fix the line.
 | SPI | `Spi.c` | QSPI0, ICM-42688-P |
 | Sensors | `Bmp581.c`, `Mmc5983.c`, `Icm42688.c` | fitted |
 | Sensor pool | `Bmp388.c`, `Mpu6050.c` | compiled, **never called** — MISRA 8.7 fires, held with deviations |
-| Fusion | *(none — removed 2026-08-22)* | to be rewritten; see docs/SENSOR_FUSION.md |
+| Attitude | `Ahrs.c/.h` | quaternion Mahony over accel+gyro+mag — **`docs/FUSION.md`** |
+| Navigation | `fusion.c/.h` | three 4-state KF channels (down/north/east) + **`Xcp_Fusion` @ `0x70030500`** |
 | GPIO / PWM | `gpio.c`, `gpio_cfg.h`, `led.c` | per-pin config; GTM TOM PWM |
 | Networking | `Echo.c`, `UdpEcho.c`, `EthStats.c` | TCP+UDP echo port 7 |
 | Per-core stats | `CoreStats.c/.h` | **the inter-core pattern to copy** — single writer/slot, no locks |
@@ -115,6 +116,35 @@ string over XCP**, because a stale `.src` will happily ship the old one.
 
 ---
 
+### Adding a fusion signal
+
+`fusion.h` `FusionValues` (or `Ahrs.h` `Ahrs_Values`) → `Measurements.h`
+`Xcp_Fusion` struct **and** its offset comment → `Measurements.c`
+`measurementsSetFusion()` → `tools/a2l_meta.json` (name, description, unit,
+limits) → `python tools/gen_a2l.py` → GUI.
+
+⚠️ `gen_a2l.py` **warns but does not fail** on a struct field missing from the
+sidecar — it emits a placeholder description so a new signal can never be
+silently dropped. CI runs `gen_a2l.py --check`, which fails only if the
+committed A2L does not match what the structs generate, so a bumped
+`Version.h` alone will turn it red.
+
+⚠️ Verify offsets against `TriCore Debug (TASKING)/src/bsw/Measurements.src`
+after any struct edit, never against host `offsetof` — TASKING aligns `uint32`
+to 2 bytes, so a `uint8` before a `uint32` shifts every later field.
+
+### Changing a sensor's filter configuration
+
+Register value in the driver (e.g. `BMP581_DSP_IIR_VAL`) → the measured noise
+constant it invalidates (`FUSION_SIGMA_BARO`) → `docs/<PERIPHERAL>.md` register
+table → `docs/FUSION.md` §2 bench numbers.
+
+**A filter setting and a filter constant are one change, not two.** The Kalman
+`R` values are *measured*, so altering what the sensor sends silently makes them
+wrong. See `docs/FUSION.md` §8 for the case where this bit.
+
+---
+
 ## 3. Fixed memory map
 
 | Block | Address | Backing | Defined in |
@@ -123,11 +153,20 @@ string over XCP**, because a stale `.src` will happily ship the old one.
 | `Xcp_Cal` | `0x70030100` | RAM only | `Diagnostics.h` |
 | `Xcp_Nvm` | `0x70030200` | DFLASH0 | `Nvm.h` |
 | `Xcp_Gpio` | `0x70030300` | RAM only | `gpio.h` |
+| `I2c_Debug` | `0x70030400` | RAM only | `I2c.h` |
+| `Xcp_Fusion` | `0x70030500` | RAM only | `Measurements.h` |
 
-Blocks are 256 bytes apart. `Xcp_Data` is **full**: `GnssVAccuracy` sits at `0xFC`
-and ends on the 256-byte boundary, so the next appended field collides with
-`Xcp_Cal`. Formerly reached `0xCC` (204 B) —
-**~52 bytes of headroom before it collides with `Xcp_Cal`.**
+Blocks are 256 bytes apart. `Xcp_Data` is **full** — its last field ends within
+8 bytes of the 256-byte boundary, so the next appended measurement collides
+with `Xcp_Cal`.
+
+**When a block fills, take the next free slot rather than re-spacing the map.**
+That is what `Xcp_Fusion` did on 2026-08-26: the navigation state needed 188
+bytes and `Xcp_Data` had 8, so it went to `0x70030500`. No existing address
+moved, so every A2L entry, GUI plot and hard-coded tool address stayed valid —
+and the seven original fusion fields are *still written* inside `Xcp_Data` for
+exactly that reason. Re-spacing is the expensive option and touches firmware,
+A2L and GUI together.
 
 ---
 

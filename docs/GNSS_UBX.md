@@ -213,7 +213,7 @@ UART1. Look each one up; do not compute it.
 
 | key | ID | type | scale/unit |
 |---|---|---|---|
-| `CFG-RATE-MEAS` | `0x30210001` | U2 | 0.001 s — time between measurements. 100 ms → 10 Hz, 1000 ms → 1 Hz |
+| `CFG-RATE-MEAS` | `0x30210001` | U2 | 0.001 s — time between measurements. 100 ms → 10 Hz, 1000 ms → 1 Hz. **This firmware sets 100 ms, so NAV-PVT arrives at 10 Hz** — do not assume the 1 Hz default |
 | `CFG-RATE-NAV` | `0x30210002` | U2 | measurements per navigation solution, max 128 |
 | `CFG-RATE-TIMEREF` | `0x20210003` | E1 | time system alignment |
 
@@ -252,9 +252,29 @@ NMEA decoder's expectations in mind.
 
 ## 6. UBX-NAV-PVT (§3.15.10) — class/id `01 07`, payload **92 bytes**
 
+> **What `GnssM9N_Sample` carries beyond the scaled floats.** The navigation
+> filter needs three raw fields that the human-readable ones cannot supply:
+>
+> - **`iTOW`** — the new-fix marker. Solutions arrive at 10 Hz and
+>   `Task_Measure100ms` polls at 10 Hz on an *independent* clock, so the two
+>   beat against each other and some polls carry a fix already fused. Without
+>   the check those repeats are counted as fresh evidence and the covariance
+>   shrinks for information that was never there. `Fusion_setGnss` ignores an
+>   unchanged `iTOW` and counts the skips.
+> - **`latRaw` / `lonRaw`** — the receiver's native 1e-7 degree integers.
+>   `float32` holds about seven significant digits, so the scaled `latDeg`
+>   quantises to roughly **0.4 m** at this latitude: fine for display, useless
+>   as a filter input. The tangent-plane difference is taken in integers first.
+>
+> ⚠️ With the poll rate equal to the solution rate, the *update rate* cannot
+> distinguish a working `iTOW` guard from a missing one — both give ~10/s. What
+> it does catch is `iTOW` failing to decode at all, which freezes the fix count
+> after the first one while the position silently goes stale. `Xcp_Fusion`
+> publishes `gnssITow` and `gnssDupes` so that is directly observable.
+
 | off | type | name | scale | unit | meaning |
 |---|---|---|---|---|---|
-| 0 | U4 | `iTOW` | — | ms | GPS time of week of the nav epoch |
+| 0 | U4 | `iTOW` | — | ms | GPS time of week of the nav epoch. **Exposed in `GnssM9N_Sample` since v1.19.x** — it is the new-fix marker the navigation filter gates on, see the note below |
 | 4 | U2 | `year` | — | y | UTC |
 | 6 | U1 | `month` | — | | 1..12 |
 | 7 | U1 | `day` | — | | 1..31 |

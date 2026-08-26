@@ -265,15 +265,48 @@ Reference result, 2026-08-01, indoors, firmware v1.15.0:
 `centre (-0.4044, -0.0848, +0.1441) G, |offset| 0.4376 G, radius 1.0414 G,`
 **`residual 0.9 %`** — a clean sphere, so the data path is confirmed.
 
-### ⚠️ OPEN ITEM: absolute scale needs one outdoor reading
+> ⚠️ **That reference disagrees with the 2026-08-26 calibration and is the
+> weaker of the two.** `tools/mag_cal.py` measured
+> `centre (-0.1940, -0.0722, -0.8510) G, radius 0.4655 G` on identical firmware
+> — `MMC5983_COUNTS_PER_GAUSS` has never changed (one commit, still 16384).
+> The radii differ by a factor of **2.24**.
+>
+> The 2026-08-26 figure is the one to trust: its **octant coverage was verified
+> at 8/8**, and it lands on ~0.48 G, the field actually expected in Munich. The
+> 2026-08-01 run recorded no coverage figure, and an incompletely covered sphere
+> extrapolates both centre and radius — a low residual does not rescue it,
+> because a well-fitted ring is still a ring. This is exactly the trap the live
+> `corners n/8` display was added to prevent.
+>
+> The **centre** moving so far (Z from +0.144 to −0.851 G) is expected and is
+> not a contradiction: the ICM-42688-P and the NEO-M9N were both added to the
+> assembly in between, and hard iron is a property of the assembly. It is
+> precisely why these numbers live in NVM rather than in a header.
 
-`MMC5983_COUNTS_PER_GAUSS` (16384) is **plausible but unconfirmed**. Everything
-else about this driver is validated on hardware.
+### ⚠️ OPEN ITEM: absolute scale — very likely settled, one outdoor run to confirm
 
-**The test:** take the board outside — away from the building, vehicles and
-reinforced concrete — and repeat the sphere fit. The radius should come out at
-**~0.48 G** in Munich. No reference instrument needed; that is why this beats
-any indoor comparison.
+`MMC5983_COUNTS_PER_GAUSS` (16384) was **plausible but unconfirmed**. It is now
+*probably* confirmed: the 2026-08-26 fit, with verified 8/8 octant coverage,
+gives a radius of **0.4655 G** against the ~0.48 G expected in Munich. A wrong
+constant would show as a clean 2x or 4x error, not as 3 %.
+
+The caveat is that this run was **indoors**, which is the very condition this
+section says cannot be trusted — building steel distorts the field. So treat it
+as strong evidence rather than proof.
+
+**To close it properly**, run the calibration outdoors, away from the building,
+vehicles and reinforced concrete:
+
+```
+python tools/mag_cal.py --seconds 120 --write --decl 3.9
+```
+
+Tumble until the display reads `corners 8/8`; it will not finish before that,
+and it refuses to write a fit with incomplete coverage or a residual above 5 %.
+The raw samples are always dumped first, so a run can be re-fitted later with
+`--load` instead of re-tumbled. `corrected |B|` is the number that matters: it
+should come out at ~0.48 G. No reference instrument needed; that is why this
+beats any indoor comparison.
 
 **Why it could not be settled indoors (attempted 2026-08-01):**
 

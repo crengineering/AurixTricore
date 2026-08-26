@@ -281,7 +281,7 @@ Duty updates at runtime go through `setCompareOneShadow` — the shadow register
 transfers at the next period boundary, so no glitch. Don't write CM1 directly.
 
 DShot300 on P22.0–3 (ATOM0/TIM) uses open-drain + 1.5k pull-up as a 3.3V→5V
-level shift. See `docs/DSHOT_PINS.md`.
+level shift. See `docs/PINNING.md` §2.6 (DSHOT_PINS.md was retired and folded in there).
 
 ---
 

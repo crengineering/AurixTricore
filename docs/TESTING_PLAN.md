@@ -319,7 +319,8 @@ whatever MISRA reports.
   the header, the classic PI bug, and on the bench it needs a saturated flight.
   Then `mixer_step`: demand more than it can deliver and assert the clamp holds
   so no `sqrt()` of a negative reaches `w_cmd`.
-- **the attitude estimator** (deleted 2026-08-22, being rewritten) — will need
+- **the attitude estimator** (`Ahrs.c`, rewritten 2026-08-26 as a quaternion
+  Mahony filter and HW-validated — see `docs/FUSION.md`) — will need
   only the stage 1b shim, no fakes at all, so it is trivial to build. The work is
   conceptual: you must understand the filter before you can state an expectation.
   Best test is the accel-trust gate — feed `|a| = 2 g` and assert the

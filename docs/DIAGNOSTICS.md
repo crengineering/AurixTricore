@@ -161,7 +161,7 @@ Die `fs*`-Werte skalieren die 8-Bit-Rohwerte in Volt
 ## NVM-Block: persistente Parameter (ab v1.6.0)
 
 Strikt getrennt vom Kalibrierblock gibt es den **persistenten
-Parameterblock** `Xcp_Nvm` an Basisadresse `0x70030200` (12 Bytes,
+Parameterblock** `Xcp_Nvm` an Basisadresse `0x70030200` (44 Bytes,
 little-endian, per XCP ab Offset 0x04 schreibbar). **Nur** dieser Block
 wird im on-chip DFLASH gespeichert (EEPROM-Emulation, zwei 4-KB-Sektoren
 ab `0xAF000000` im Ping-Pong-Verfahren — ein Stromausfall während des
@@ -174,9 +174,27 @@ Boot gewinnt der neueste gültige Datensatz, sonst gelten die Defaults.
 | 0x00 | `magic` | `0x4D564E58` | nur Firmware ("XNVM") |
 | 0x04 | `command` | 0 | NVM-Kommando (s. u.) |
 | 0x08 | `userValue` | 0 | erster persistenter Parameter (freies `uint32`) |
+| 0x0C | `seaLevelPa` | 101325 | Referenzdruck auf Meereshöhe (QNH) für die Baro-Höhe |
+| 0x10 | `magOffX` | 0.0 | Hard-Iron-Offset X [Gauss], **Sensorachsen** |
+| 0x14 | `magOffY` | 0.0 | Hard-Iron-Offset Y |
+| 0x18 | `magOffZ` | 0.0 | Hard-Iron-Offset Z |
+| 0x1C | `magScaleX` | 1.0 | Soft-Iron-Skalierung X (dimensionslos) |
+| 0x20 | `magScaleY` | 1.0 | Soft-Iron-Skalierung Y |
+| 0x24 | `magScaleZ` | 1.0 | Soft-Iron-Skalierung Z |
+| 0x28 | `magDeclDeg` | 3.9 | Missweisung [Grad, Ost positiv] — macht aus magnetisch Nord **rechtweisend** Nord |
+
+Die Magnetometer-Kalibrierung (ab v1.19.x, Layout-Version 4) ist
+**boardspezifisch**, nicht designspezifisch: die Offsets sind die Magnetik der
+Platine selbst, wie der MMC5983MA sie sieht. Deshalb gehören sie in den Flash
+und nicht in einen Header. Alle Werte sind so vorbelegt, dass sie **nichts
+verändern** (Offset 0, Skalierung 1) — ein unkalibriertes Board verhält sich
+exakt wie vor Einführung der Felder. Ermittelt werden sie mit
+`tools/mag_cal.py` (siehe `docs/FUSION.md` §4).
 
 Neue persistente Parameter werden hier angehängt (Layout-Version in
 `Nvm.c` erhöhen; alte Datensätze werden dann ignoriert, kein Fehler).
+⚠️ Die CRC deckt den gesamten Block ab, eine Größenänderung entwertet also
+gespeicherte Datensätze — genau dafür ist die Layout-Version da.
 
 Gesteuert wird über das `command`-Wort (`0x70030204`):
 

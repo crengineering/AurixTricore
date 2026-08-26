@@ -175,6 +175,27 @@ def coverage(p: np.ndarray, centre: np.ndarray) -> float:
     return len(octants(p, centre)) / 8.0
 
 
+def report(p, centre, scale, residual):
+    """Print the fit. Shared by the live path and --load so a re-fit is
+    directly comparable with the run it came from."""
+    cov = coverage(p, centre)
+    raw_norm = np.linalg.norm(p, axis=1)
+    corrected = np.linalg.norm((p - centre) * scale, axis=1).mean()
+
+    print(f"\nsamples          {len(p)}")
+    print(f"raw |B|          {raw_norm.min():.4f} .. {raw_norm.max():.4f} G "
+          f"(spread {100 * (raw_norm.max() - raw_norm.min()) / raw_norm.mean():.0f}%)")
+    print(f"octant coverage  {cov * 100:.0f}%")
+    print(f"\nhard iron  [G]   X {centre[0]:+.5f}  Y {centre[1]:+.5f}  Z {centre[2]:+.5f}")
+    print(f"soft iron        X {scale[0]:.5f}  Y {scale[1]:.5f}  Z {scale[2]:.5f}")
+    print(f"corrected |B|    {corrected:.4f} G")
+    print(f"residual         {residual:.2f} %   (under 2% is a good fit)")
+    print("  ^ this is the LOCAL FIELD MAGNITUDE and the check on")
+    print("    MMC5983_COUNTS_PER_GAUSS: ~0.48 G in Munich. A clean 2x or 4x")
+    print("    error here is a scaling bug, not a calibration problem.")
+    return cov
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -193,6 +214,18 @@ def main():
         "Transport": {"Eth": {"host": HOST, "port": PORT,
                               "protocol": "UDP", "ipv6": False}},
     })
+
+    if args.load:
+        # Re-fit a previous dump with no hardware attached. This is what makes
+        # a saved run worth saving: the fit can be revisited and argued with
+        # long after the board has moved.
+        p = np.array([[float(r["magX"]), float(r["magY"]), float(r["magZ"])]
+                      for r in csv.DictReader(open(args.load, encoding="utf-8"))])
+        centre, scale, residual, err = fit_ellipsoid(p)
+        if err:
+            sys.exit(f"fit failed: {err}")
+        report(p, centre, scale, residual)
+        return
 
     pts = []
     with Master("eth", config=conf) as x:
@@ -242,9 +275,28 @@ def main():
         print()
 
         p = np.array(pts, dtype=float)
+
+        # Dump BEFORE fitting, unconditionally. A rotation is physical effort
+        # that cannot be replayed, and an earlier version discarded the samples
+        # whenever the fit failed -- which cost two runs, and then cost the
+        # ability to re-verify a run that SUCCEEDED, because the reference fit
+        # in docs/MMC5983MA.md disagreed with it and there was nothing left to
+        # check. Keep the data; the fit is cheap to redo, the tumbling is not.
+        with open(args.save, "w", newline="", encoding="utf-8") as fh:
+            wr = csv.writer(fh)
+            wr.writerow(["magX", "magY", "magZ"])
+            wr.writerows(p)
+        print(f"raw samples saved to {args.save}")
+
         centre, scale, residual, err = fit_ellipsoid(p)
         if err:
-            sys.exit(f"fit failed: {err}\nCollect again with more tumbling.")
+            print(f"\nfit failed: {err}", file=sys.stderr)
+            print("per-axis spread of what was collected:", file=sys.stderr)
+            for i, ax in enumerate("XYZ"):
+                print(f"  {ax}  {p[:, i].min():+.4f} .. {p[:, i].max():+.4f} "
+                      f"(std {p[:, i].std():.4f})", file=sys.stderr)
+            print(f"re-fit later with:  --load {args.save}", file=sys.stderr)
+            sys.exit(1)
 
         cov = coverage(p, centre)
         raw_norm = np.linalg.norm(p, axis=1)

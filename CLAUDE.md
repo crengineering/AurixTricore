@@ -33,6 +33,9 @@ src/bsw/             Base software (owns hardware + generic services;
                      DFLASH0 (2-sector ping-pong, CRC); cal block is RAM-only
   Version.h          SW version (bump on releases; then verify via XCP —
                      amk may miss the rebuild of including files!)
+  Ahrs.c/.h          attitude: quaternion Mahony over accel + gyro + mag
+  fusion.c/.h        navigation: three 4-state KF channels (down/north/east),
+                     Xcp_Fusion block @0x70030500 — see docs/FUSION.md
   Uart.c, led.c, scheduler.c
 src/asw/             Application software (flight control: flight_ctrl.c,
                      CtrlReplay.c, state estimator to come; calls BSW only,
@@ -42,11 +45,25 @@ docs/                CODEMAP.md (what a change touches, across code/A2L/GUI/docs
                      ILLD_NOTES.md (READ FIRST for any iLLD work — signatures +
                      the traps; saves grepping 801 vendor files), PINNING.md
                      (pin allocation SSoT), DIAGNOSTICS.md (diag bits, cal
-                     block), per-peripheral notes (BMP581.md, ICM42688P.md, …),
+                     block), FUSION.md (sensor fusion: architecture, bench
+                     numbers, mounting transforms, calibration — READ FIRST
+                     before touching Ahrs.c or fusion.c), per-peripheral notes
+                     (BMP581.md, ICM42688P.md, …),
                      AurixTricore.a2l, Infineon PDFs (use the readpdf skill)
 tools/               xcp_test.py, nvm_test.py (pyXCP validation)
+                     xcp_read.py (read ANY global live, by name — no firmware
+                     change needed; the default bring-up channel)
+                     gen_a2l.py + a2l_meta.json (A2L generated from the structs)
+                     mag_cal.py (magnetometer hard-iron calibration → NVM)
+                     nav_outdoor_check.py (GNSS/horizontal validation, MF4 out)
+                     mf4_stats.py (per-signal stats over an MF4 record)
                      misra_check.py + misra_baseline.txt (MISRA gate, see below)
-.github/workflows/   misra.yml — CI MISRA check (cppcheck misra addon)
+.github/workflows/   misra.yml — CI MISRA check (cppcheck misra addon).
+                     ⚠️ triggers on main / PR / workflow_dispatch ONLY, never on
+                     a feature-branch push: run it manually before opening a PR
+                     with `gh workflow run misra.yml --ref <branch>`
+                     a2l.yml — fails if the committed A2L is stale
+                     unit_tests.yml — host tests against the iLLD fakes
 Configurations/      PLL init, boot mode header, startup software, lwipopts
 Libraries/Ethernet/  lwIP + Infineon port + RTL8211F PHY driver
 Libraries/iLLD/      Infineon Low-Level Driver (do not edit)
@@ -147,8 +164,9 @@ Scope is optional for changes that span multiple areas.
 - **Body** (optional): wrap at 72 chars; explain *why*, not just *what*
 - **Breaking changes**: add `!` after the type/scope and a `BREAKING CHANGE:` footer
   `refactor(sync)!: remove cpuSyncEvent — all cores must be updated together`
-- **Co-author line**: always include when Claude Code writes the commit
-  `Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>`
+- **Co-author line**: always include when Claude Code writes the commit, naming
+  the model that actually wrote it — e.g.
+  `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`
 
 ### Examples
 
@@ -158,7 +176,7 @@ feat(cpu2): add blinking LED on P20.13 via STM2
 Assigns D308 to CPU2 so core health is visible on the board.
 Uses MODULE_STM2 to keep timing independent of other cores.
 
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ```
 
 ```

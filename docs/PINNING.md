@@ -162,11 +162,14 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 >   un‑excluded, exactly as `I2c` was.
 >
 > **The interim MPU‑6050 (GY‑521) was physically removed on 2026‑07‑31** along
-> with the BMP388. From firmware **v1.14.0** there is no `Task_Imu`: the IMU and
-> attitude fields of the XCP block are published as zero once at start‑up with
-> `imuPresent = 0`, and the `PERIPH_DIAG_IMU`
-> slot is declared **unfitted** (`PeriphDiag_setFitted()`) so it raises no
-> diagnostics bits. `src/bsw/Mpu6050.c` stays in‑tree as the I2C fallback and as
+> with the BMP388. Between v1.14.0 and the arrival of the ICM‑42688‑P there was
+> no `Task_Imu`: the IMU and attitude fields were published as zero once at
+> start‑up with `imuPresent = 0`, and the `PERIPH_DIAG_IMU` slot was declared
+> **unfitted** (`PeriphDiag_setFitted()`) so it raised no diagnostics bits.
+> **That is history** — the ICM‑42688‑P is fitted and HW‑validated, `Task_Imu`
+> runs at 50 Hz, and attitude is live again in `Ahrs.c` (see `docs/FUSION.md`).
+> ⚠️ The ICM‑42688‑P does **not** share the MPU‑6050's axis convention: the
+> mounting transform is a permutation, not a sign flip — `docs/FUSION.md` §3. `src/bsw/Mpu6050.c` stays in‑tree as the I2C fallback and as
 > part of the peripheral driver pool (wiring: **`docs/MPU6050.md`**); it has no
 > caller and carries a justified MISRA 8.7 deviation.
 
