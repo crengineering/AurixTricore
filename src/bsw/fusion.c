@@ -183,7 +183,8 @@ static Fusion_Chan s_chD;       /* down  */
 static Fusion_Chan s_chN;       /* north */
 static Fusion_Chan s_chE;       /* east  */
 
-static FusionValues s_state;
+/* s_navState, not s_state -- see the note in Ahrs.c (MISRA 5.9). */
+static FusionValues s_navState;
 
 /* latched barometer sample */
 static float32 s_baroAlt;
@@ -533,36 +534,36 @@ void Fusion_init(void)
     s_haveITow        = FALSE;
     s_covResets       = 0u;
 
-    s_state.a_D          = 0.0f;
-    s_state.a_d          = 0.0f;
-    s_state.a_v_d        = 0.0f;
-    s_state.accBiasD     = 0.0f;
-    s_state.baroBias     = 0.0f;
-    s_state.innov        = 0.0f;
-    s_state.p00          = FUSION_P_POS_INIT;
-    s_state.a_N          = 0.0f;
-    s_state.a_E          = 0.0f;
-    s_state.posN         = 0.0f;
-    s_state.posE         = 0.0f;
-    s_state.velN         = 0.0f;
-    s_state.velE         = 0.0f;
-    s_state.accBiasN     = 0.0f;
-    s_state.accBiasE     = 0.0f;
-    s_state.innovN       = 0.0f;
-    s_state.innovE       = 0.0f;
-    s_state.pNN          = FUSION_P_POS_INIT;
-    s_state.originLatDeg = 0.0f;
-    s_state.originLonDeg = 0.0f;
-    s_state.originAltM   = 0.0f;
-    s_state.rejects      = 0u;
-    s_state.resets       = 0u;
-    s_state.gnssRejects  = 0u;
-    s_state.gnssUpdates  = 0u;
-    s_state.covResets    = 0u;
-    s_state.verticalOk   = 0u;
-    s_state.horizontalOk = 0u;
-    s_state.originSet    = 0u;
-    s_state.reserved     = 0u;
+    s_navState.a_D          = 0.0f;
+    s_navState.a_d          = 0.0f;
+    s_navState.a_v_d        = 0.0f;
+    s_navState.accBiasD     = 0.0f;
+    s_navState.baroBias     = 0.0f;
+    s_navState.innov        = 0.0f;
+    s_navState.p00          = FUSION_P_POS_INIT;
+    s_navState.a_N          = 0.0f;
+    s_navState.a_E          = 0.0f;
+    s_navState.posN         = 0.0f;
+    s_navState.posE         = 0.0f;
+    s_navState.velN         = 0.0f;
+    s_navState.velE         = 0.0f;
+    s_navState.accBiasN     = 0.0f;
+    s_navState.accBiasE     = 0.0f;
+    s_navState.innovN       = 0.0f;
+    s_navState.innovE       = 0.0f;
+    s_navState.pNN          = FUSION_P_POS_INIT;
+    s_navState.originLatDeg = 0.0f;
+    s_navState.originLonDeg = 0.0f;
+    s_navState.originAltM   = 0.0f;
+    s_navState.rejects      = 0u;
+    s_navState.resets       = 0u;
+    s_navState.gnssRejects  = 0u;
+    s_navState.gnssUpdates  = 0u;
+    s_navState.covResets    = 0u;
+    s_navState.verticalOk   = 0u;
+    s_navState.horizontalOk = 0u;
+    s_navState.originSet    = 0u;
+    s_navState.reserved     = 0u;
 }
 
 /* Clamp an acceleration input to the physically possible. */
@@ -599,12 +600,12 @@ static void fusion_correctBaro(void)
     if (fusion_chanUpdate(&s_chD, h, z, FUSION_R_BARO, FUSION_GATE_SIGMA_SQ,
                           FUSION_GATE_MIN_SQ, &y) != FALSE)
     {
-        s_state.innov = y;
+        s_navState.innov = y;
     }
     else
     {
-        s_state.innov = y;
-        s_state.rejects++;
+        s_navState.innov = y;
+        s_navState.rejects++;
 
         if (s_chD.rejectRun >= FUSION_REJECT_MAX)
         {
@@ -615,7 +616,7 @@ static void fusion_correctBaro(void)
             s_chD.x[FS_ACCB] = 0.0f;
             fusion_chanResetCov(&s_chD);
             s_chD.rejectRun  = 0u;
-            s_state.resets++;
+            s_navState.resets++;
         }
         else
         {
@@ -674,10 +675,10 @@ static void fusion_correctGnss(void)
         s_originAltOffset = s_chD.x[FS_POS];
 
         s_originOk = TRUE;
-        s_state.originSet    = 1u;
-        s_state.originLatDeg = latDeg;
-        s_state.originLonDeg = (float32)s_gnssLon * FUSION_1E7_TO_DEG;
-        s_state.originAltM   = s_gnssAlt;
+        s_navState.originSet    = 1u;
+        s_navState.originLatDeg = latDeg;
+        s_navState.originLonDeg = (float32)s_gnssLon * FUSION_1E7_TO_DEG;
+        s_navState.originAltM   = s_gnssAlt;
     }
     else
     {
@@ -689,24 +690,33 @@ static void fusion_correctGnss(void)
      * becomes a float: float32 holds only about seven digits, so converting
      * first would quantise the latitude to roughly 0.4 m and throw away most
      * of what the receiver is telling us. */
-    zN = (float32)(s_gnssLat - s_originLat) * FUSION_1E7_TO_DEG * FUSION_M_PER_DEG_LAT;
-    zE = (float32)(s_gnssLon - s_originLon) * FUSION_1E7_TO_DEG * s_mPerDegLon;
+    {
+        /* The differences are named rather than cast in place: MISRA 10.8
+         * forbids casting a composite expression to a wider type, and naming
+         * them also makes it obvious that the subtraction happens in the
+         * receiver's integers, which is the whole point. */
+        const sint32 dLat = s_gnssLat - s_originLat;
+        const sint32 dLon = s_gnssLon - s_originLon;
+
+        zN = (float32)dLat * FUSION_1E7_TO_DEG * FUSION_M_PER_DEG_LAT;
+        zE = (float32)dLon * FUSION_1E7_TO_DEG * s_mPerDegLon;
+    }
 
     okN = fusion_chanUpdate(&s_chN, hPos, zN, rPos, FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
                             gateMinSq, &yN);
     okE = fusion_chanUpdate(&s_chE, hPos, zE, rPos, FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
                             gateMinSq, &yE);
 
-    s_state.innovN = yN;
-    s_state.innovE = yE;
+    s_navState.innovN = yN;
+    s_navState.innovE = yE;
 
     if ((okN != FALSE) && (okE != FALSE))
     {
-        s_state.gnssUpdates++;
+        s_navState.gnssUpdates++;
     }
     else
     {
-        s_state.gnssRejects++;
+        s_navState.gnssRejects++;
 
         if (s_chN.rejectRun >= FUSION_REJECT_MAX)
         {
@@ -764,7 +774,7 @@ static void fusion_correctGnss(void)
                                 gateMinSq, &yd);
     }
 
-    s_state.horizontalOk = (s_chN.anchored != FALSE) ? 1u : 0u;
+    s_navState.horizontalOk = (s_chN.anchored != FALSE) ? 1u : 0u;
 }
 
 void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, boolean valid)
@@ -775,9 +785,9 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, bo
         const float32 aE = fusion_clampAcc(accNed[1]);
         const float32 aD = fusion_clampAcc(accNed[2]);
 
-        s_state.a_N = aN;
-        s_state.a_E = aE;
-        s_state.a_D = aD;
+        s_navState.a_N = aN;
+        s_navState.a_E = aE;
+        s_navState.a_D = aD;
 
         fusion_chanPredict(&s_chD, aD, dt);
         fusion_chanPredict(&s_chN, aN, dt);
@@ -811,24 +821,24 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, bo
          * estimate kilometres away before the barometer could pull it back. */
     }
 
-    s_state.a_d      = s_chD.x[FS_POS];
-    s_state.a_v_d    = s_chD.x[FS_VEL];
-    s_state.accBiasD = s_chD.x[FS_ACCB];
-    s_state.baroBias = s_chD.x[FS_MEASB];
-    s_state.p00      = s_chD.p[FS_POS][FS_POS];
+    s_navState.a_d      = s_chD.x[FS_POS];
+    s_navState.a_v_d    = s_chD.x[FS_VEL];
+    s_navState.accBiasD = s_chD.x[FS_ACCB];
+    s_navState.baroBias = s_chD.x[FS_MEASB];
+    s_navState.p00      = s_chD.p[FS_POS][FS_POS];
 
-    s_state.posN     = s_chN.x[FS_POS];
-    s_state.posE     = s_chE.x[FS_POS];
-    s_state.velN     = s_chN.x[FS_VEL];
-    s_state.velE     = s_chE.x[FS_VEL];
-    s_state.accBiasN = s_chN.x[FS_ACCB];
-    s_state.accBiasE = s_chE.x[FS_ACCB];
-    s_state.pNN      = s_chN.p[FS_POS][FS_POS];
+    s_navState.posN     = s_chN.x[FS_POS];
+    s_navState.posE     = s_chE.x[FS_POS];
+    s_navState.velN     = s_chN.x[FS_VEL];
+    s_navState.velE     = s_chE.x[FS_VEL];
+    s_navState.accBiasN = s_chN.x[FS_ACCB];
+    s_navState.accBiasE = s_chE.x[FS_ACCB];
+    s_navState.pNN      = s_chN.p[FS_POS][FS_POS];
 
-    s_state.verticalOk = (s_chD.anchored != FALSE) ? 1u : 0u;
-    s_state.covResets  = s_covResets;
+    s_navState.verticalOk = (s_chD.anchored != FALSE) ? 1u : 0u;
+    s_navState.covResets  = s_covResets;
 
-    *fusion = s_state;
+    *fusion = s_navState;
 }
 
 void Fusion_setBaroAlt(float32 altM, boolean valid)

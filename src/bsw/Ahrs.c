@@ -143,7 +143,10 @@ static float32 s_calMin[3];
 static float32 s_calMax[3];
 static uint16  s_calCount;
 
-static Ahrs_State s_state;
+/* Named s_ahrsState rather than the obvious s_state: MISRA 5.9 wants
+ * internal-linkage identifiers unique across the whole program, and
+ * fusion.c and src/asw/CtrlReplay.c each had their own s_state. */
+static Ahrs_State s_ahrsState;
 
 static float32 s_magB[3];          /* latched sample, BODY frame, corrected   */
 static float32 s_magNorm;
@@ -239,7 +242,7 @@ void Ahrs_init(void)
     }
 
     s_calCount = 0u;
-    s_state    = AHRS_CALIBRATING;
+    s_ahrsState    = AHRS_CALIBRATING;
     s_magNorm  = 0.0f;
 }
 
@@ -463,7 +466,7 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
          * it were real is how an estimator ends up confidently wrong. */
         if (valid == FALSE)
         {
-            s_state = AHRS_NO_SENSOR;
+            s_ahrsState = AHRS_NO_SENSOR;
             out->accNed[0] = 0.0f;
             out->accNed[1] = 0.0f;
             out->accNed[2] = 0.0f;
@@ -493,22 +496,22 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
         accNorm = sqrtf((accBody[0] * accBody[0]) + (accBody[1] * accBody[1])
                       + (accBody[2] * accBody[2]));
 
-        if (s_state == AHRS_NO_SENSOR)
+        if (s_ahrsState == AHRS_NO_SENSOR)
         {
             /* The sensor came back. Re-align rather than resume from a
              * quaternion that is as old as the disconnection was long. */
-            s_state = AHRS_ALIGNING;
+            s_ahrsState = AHRS_ALIGNING;
         }
         else
         {
             /* normal progression */
         }
 
-        if (s_state == AHRS_CALIBRATING)
+        if (s_ahrsState == AHRS_CALIBRATING)
         {
             if (ahrs_calibrate(gyroBody) != FALSE)
             {
-                s_state = AHRS_ALIGNING;
+                s_ahrsState = AHRS_ALIGNING;
             }
             else
             {
@@ -520,7 +523,7 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
             /* bias already known */
         }
 
-        if (s_state == AHRS_ALIGNING)
+        if (s_ahrsState == AHRS_ALIGNING)
         {
             if ((accNorm > AHRS_ACC_MIN_G) && (accNorm < AHRS_ACC_MAX_G))
             {
@@ -531,7 +534,7 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
                     s_fbI[i] = 0.0f;
                 }
 
-                s_state = AHRS_RUNNING;
+                s_ahrsState = AHRS_RUNNING;
             }
             else
             {
@@ -543,7 +546,7 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
             /* already running, or still calibrating */
         }
 
-        if (s_state == AHRS_RUNNING)
+        if (s_ahrsState == AHRS_RUNNING)
         {
             float32 e[3];
             float32 wx;
@@ -595,7 +598,7 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
             else
             {
                 /* Norm collapsed — only reachable through a NaN. Re-align. */
-                s_state = AHRS_ALIGNING;
+                s_ahrsState = AHRS_ALIGNING;
                 s_q0 = 1.0f;
                 s_q1 = 0.0f;
                 s_q2 = 0.0f;
@@ -666,14 +669,20 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
                      1.0f - (2.0f * ((s_q2 * s_q2) + (s_q3 * s_q3))));
         yaw += g_xcpNvm.magDeclDeg * AHRS_DEG_TO_RAD;
 
-        while (yaw < 0.0f)
+        /* Wrap to [0, 2pi) with fmodf rather than a pair of while loops: a
+         * floating-point loop counter is a MISRA 14.1 violation, and it is a
+         * fair rule here -- a loop like that is unbounded if the input is ever
+         * NaN or huge, which is exactly the case worth defending against in an
+         * estimator. fmodf takes one step whatever the input. */
+        yaw = fmodf(yaw, AHRS_TWO_PI);
+
+        if (yaw < 0.0f)
         {
             yaw += AHRS_TWO_PI;
         }
-
-        while (yaw >= AHRS_TWO_PI)
+        else
         {
-            yaw -= AHRS_TWO_PI;
+            /* already in range */
         }
 
         out->yawRad = yaw;
@@ -687,7 +696,7 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
         }
 
         out->magFieldG  = s_magNorm;
-        out->state      = (uint8)s_state;
+        out->state      = (uint8)s_ahrsState;
         out->accTrusted = (accUsed != FALSE) ? 1u : 0u;
         out->magTrusted = (magUsed != FALSE) ? 1u : 0u;
         out->reserved   = 0u;
