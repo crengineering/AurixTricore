@@ -83,6 +83,14 @@ every A2L entry and GUI plot below it. Append.
 `docs/DIAGNOSTICS.md` → the GUI's `BIT_MASK` lines (`DIAGNOSTICS.md:55` says
 these move together). Bit budget as above.
 
+### IMU data-ready interrupt
+
+`ImuInt.c`, `ConfigurationIsr.h` (new SRPN), `PINNING.md` §2.2/§5,
+`ICM42688P.md` §3. **No A2L, no GUI, no `Xcp_Data`, no diag bit** — the
+measurement is read by name with `tools/xcp_read.py`. See
+`docs/IMU_INTERRUPT.md` for the full design; a rare case of a hardware change
+that deliberately skips the "Add a field to `Xcp_Data`" chain above.
+
 ### Add a calibration parameter (RAM-only, lost on reset)
 
 `Diagnostics.h` `Xcp_Cal` struct → default in `Diagnostics.c` → A2L

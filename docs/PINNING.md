@@ -120,6 +120,7 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 | P22.10 | MTSR (MOSI) | `IfxQspi0_MTSR_P22_10_OUT` | — | **impl, HW-verified** |
 | P22.11 | CS (SLSO10) | `IfxQspi0_SLSO10_P22_11_OUT` | — | **impl, HW-verified** |
 | ~~P22.7~~ | ~~INT1~~ | — | — | ⚠️ **UNUSABLE, see below** |
+| **P10.7** | **INT1 (data-ready)** | `IfxScu_REQ0C_P10_7_IN` (ERU ch0 → OGU0 → SRC_SCUERU0) | X702·73 ⚠️ unverified | **impl, HW verification pending** |
 
 > ⚠️ **P22.7 and P22.8 are UNUSABLE on this TriBoard — hardware-proven
 > 2026-08-01.** Driven as plain GPIO with **nothing attached** they read back
@@ -129,7 +130,13 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 > **SCLK therefore moved to P20.13**, QSPI0's only other usable SCLK output.
 > That pad was **D308, CPU2's core-health LED**, so `Cpu2_Main.c` no longer
 > drives it and CPU2 runs without an LED (CPU0 keeps D306 — see §1.1).
-> INT1 is left unwired; the driver polls at 50 Hz and does not use it.
+> `INT1` was left unwired at first; the driver polled at 50 Hz and did not use
+> it. **That has changed** — `INT1` is now wired to **P10.7** (a different pad,
+> not P22.7 above) via the SCU's ERU, purely to measure the real edge-interval
+> distribution and settle whether the poll rate should change; see
+> `docs/IMU_INTERRUPT.md` for the pin choice, the wiring/electrical detail and
+> the measurement itself. `NavTask` still polls on its own schedule — the ISR
+> only timestamps, it does not drive the control loop (design doc §5.4).
 > The **pad self-test** in `Cpu0_Main.c` (`padSelfTestPort()`) is how this was
 > found — drive a pin and read its own pad back via `IfxPort_getPinState()`,
 > always with unwired pins on the same port as a control group. Verified
@@ -500,7 +507,6 @@ from here.
 > ch{0,1,2,3} in the alt mapping). The ATOM/TIM columns below give a **non‑colliding**
 > instance/channel per pin; ⚠ marks a pin whose *default* iLLD object would clash if
 > chosen naively (pick the listed alternate, or move DShot RX to TIM7):
-> - **P10.7** default TIM0.0 = DShot M1 → use **TIM1.0**.
 > - **P10.3** default TIM0.3 = DShot M3 → use **TIM1.3 / TIM4.6**.
 > - **P20.3** default ATOM0.4 = DShot M4 → use **ATOM1.4 / ATOM2.7N**.
 > - **P23.4** ATOM0.3N shares ch3 (M3) → use **ATOM0.7 / ATOM1.7**.
@@ -518,7 +524,6 @@ from here.
 | P23.4 | 26 | ATOM0.7 ⚠ | TIM6.3 | ⚠ avoid ATOM0.3N (ch3=M3) |
 | P10.3 | 74 | ATOM1.3 | TIM1.3 ⚠ | ⚠ avoid TIM0.3 (=M3) |
 | P10.4 | 25 | ATOM0.6 / ATOM1.6 | TIM1.6 / TIM4.7 | ch6 — no DShot clash; ASCLIN11 RXB |
-| P10.7 | 73 | ATOM1.0 | TIM1.0 ⚠ | ⚠ avoid TIM0.0 (=M1) |
 | P10.8 | 72 | ATOM1.5 | TIM4.0 / TIM1.5 | — |
 | P15.2 | 57 | ATOM1.5 / ATOM4.5 | TIM2.5 / TIM3.5 | footprint of USB‑UART alt (not assembled) |
 | P15.8 | 71 | ATOM4.1 | TIM0.2 / TIM1.2 | footprint of Eth MDINT (not assembled) |
@@ -532,7 +537,8 @@ from here.
 
 **Removed from the pool** (were listed here, are NOT free): **P33.5** → LED D303 (§4);
 **P10.5** → HWCFG4 boot strap (§4 note — conditionally usable after reset only);
-**P22.5 / P22.6** → GNSS UART, ASCLIN4 TX/RX (§2.7, taken 2026‑08‑06).
+**P22.5 / P22.6** → GNSS UART, ASCLIN4 TX/RX (§2.7, taken 2026‑08‑06);
+**P10.7** → IMU INT1 / ERU channel 0 (§2.2, taken 2026‑08‑27).
 
 ### 5.1 Free **VFLEX (3.3 V)** pins — native 3.3 V, no level shifter
 
