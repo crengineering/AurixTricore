@@ -130,9 +130,22 @@ void NavTask_step(void)
      * wire/ISR are alive is expected, not a fault. */
     g_imuDrdyStaleTicks = (uint32)SysTime_getTicks() - edgeTicks;
 
-    newSample = (edgeSeq != s_lastEdgeSeq);
-    timedOut  = (((float32)g_imuDrdyStaleTicks * NAVTASK_TICKS_TO_S)
-                 > NAVTASK_NO_EDGE_TIMEOUT_S);
+    /* Written as if/else into a boolean local, not a direct comparison
+     * assignment: cppcheck's MISRA 10.3 does not recognise `boolean` as an
+     * essentially-Boolean type, so it flags a comparison result stored
+     * straight into one as a different essential type category. Same idiom
+     * as navTask_dtValid()/NavTask_inputValid() above and ahrsInputOk below. */
+    newSample = FALSE;
+    if (edgeSeq != s_lastEdgeSeq)
+    {
+        newSample = TRUE;
+    }
+
+    timedOut = FALSE;
+    if (((float32)g_imuDrdyStaleTicks * NAVTASK_TICKS_TO_S) > NAVTASK_NO_EDGE_TIMEOUT_S)
+    {
+        timedOut = TRUE;
+    }
 
     if ((newSample == FALSE) && (timedOut == FALSE))
     {
@@ -157,7 +170,13 @@ void NavTask_step(void)
              * common case, and anything larger means edges arrived that this
              * task never individually consumed -- counted, not silently
              * dropped (docs/REFACTORING_PLAN.md §3.3's overrun row). */
-            uint32 missed = edgeSeq - s_lastEdgeSeq;
+            uint32 missed     = edgeSeq - s_lastEdgeSeq;
+            /* MISRA 10.8: cast a plain object, not the composite subtraction
+             * above it -- casting (edgeTicks - s_lastEdgeTicks) directly to
+             * float32 would cast a composite expression across essential
+             * type categories (unsigned -> floating). Same idiom Ahrs.c uses
+             * (`s_calSum[i] / (float32)n`). */
+            uint32 deltaTicks = edgeTicks - s_lastEdgeTicks;
 
             if (missed > 1u)
             {
@@ -169,11 +188,12 @@ void NavTask_step(void)
             }
 
             /* The whole reason the ISR exists: dt from the edge timestamps,
-             * not from this task's own dispatch interval
-             * (SysTime_getTimeElapsedS() measured the latter, i.e. the
-             * jitter). Correct even across a missed edge -- two edges missed
-             * gives dt ~= 2 * period, area preserved. */
-            elapsedTime     = (float32)(edgeTicks - s_lastEdgeTicks) * NAVTASK_TICKS_TO_S;
+             * not from this task's own dispatch interval (the deleted
+             * SysTime_getTimeElapsedS() measured the latter, i.e. the
+             * jitter -- T15, docs/REFACTORING_PLAN.md §3.6). Correct even
+             * across a missed edge -- two edges missed gives dt ~= 2 * period,
+             * area preserved. */
+            elapsedTime     = (float32)deltaTicks * NAVTASK_TICKS_TO_S;
             s_lastEdgeSeq   = edgeSeq;
             s_lastEdgeTicks = edgeTicks;
         }

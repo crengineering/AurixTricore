@@ -13,8 +13,11 @@
  * link time. FusionCal_init/Ahrs_init/Ahrs_update/Fusion_init/Fusion_update
  * are the REAL, already-host-tested implementations (linked via the
  * `estimator` library); NavState_init/NavState_publish are the REAL
- * NavState.c; SysTime_getTimeElapsedS is the REAL SysTime.c (iLLD-free,
- * already proven host-safe by test_GnssM9N). Only the genuinely
+ * NavState.c. T15 (docs/REFACTORING_PLAN.md §3.6) moved `dt` off
+ * SysTime_getTimeElapsedS() (deleted -- MISRA 8.7, no callers left) and onto
+ * the ImuEdge.h edge timestamps instead; NavTask.c still calls
+ * SysTime_getTicks(), the REAL SysTime.c (iLLD-free, already proven
+ * host-safe by test_GnssM9N). Only the genuinely
  * target-only calls -- the IMU bus read, the XCP publish, peripheral
  * diagnostics -- are stubbed below, purely to satisfy the linker, the same
  * pattern fakes/I2c.c and fakes/Spi.c already use for the plausibility

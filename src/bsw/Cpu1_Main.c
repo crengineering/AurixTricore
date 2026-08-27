@@ -100,6 +100,14 @@ void core1_main(void)
      * timeout, NavTask.c) and returns almost immediately otherwise, so the
      * 2 kHz poll rate is not the actual work rate -- see NavTask.h. */
     Scheduler_init(&g_sched, &MODULE_STM1, 1u);
+    /* cppcheck-suppress misra-c2012-10.8 ; deviation: SCHED_US(us) expands to
+     * the same "(uint32)((n) * <suffixed-literal>)" composite-cast shape as
+     * SCHED_MS(ms), already used and already baselined project-wide
+     * (tools/misra_baseline.txt, misra-c2012-10.8 in Cpu0_Main.c/Diagnostics.c/
+     * Xcp.c) -- this is the first SCHED_US() call in the tree, not a new
+     * pattern. Fixing the macro itself is out of scope here: scheduler.h is
+     * shared by every core's task registration, not something T15 (the rate
+     * change and only the rate change) should be touching. */
     (void)Scheduler_addTask(&g_sched, NavTask_step, SCHED_US(500u));
     Scheduler_addTask(&g_sched, Task_LedToggle, SCHED_MS(500u));
 

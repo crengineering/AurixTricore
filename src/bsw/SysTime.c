@@ -10,11 +10,3 @@ uint32_t SysTime_getTicks(void)
      * moved to CPU1 (T12). */
     return (uint32_t)IfxStm_getLower(&MODULE_STM0);
 }
-
-float SysTime_getTimeElapsedS(uint32_t *lastTicks){
-    uint32_t now = SysTime_getTicks();
-    uint32_t elapsed = now - *lastTicks;
-    *lastTicks = now;
-
-    return (float) (elapsed * 1e-08f);
-}

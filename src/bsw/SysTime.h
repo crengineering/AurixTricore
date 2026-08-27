@@ -25,6 +25,11 @@
  * 10 ns); wraps after ~42.9 s. Deltas computed with unsigned
  * subtraction stay correct across a single wrap. */
 uint32_t SysTime_getTicks(void);
-float    SysTime_getTimeElapsedS(uint32_t *lastTicks);
+
+/* SysTime_getTimeElapsedS() -- measured a caller's own dispatch interval --
+ * was deleted at T15 (docs/REFACTORING_PLAN.md §3.6, MISRA 8.7: no callers
+ * left). NavTask_step was its only caller and now takes dt from the DRDY
+ * edge timestamps (ImuEdge.h) instead, which is the more accurate source
+ * this function was always a stand-in for -- see NavTask.c. */
 
 #endif /* SYSTIME_H */
