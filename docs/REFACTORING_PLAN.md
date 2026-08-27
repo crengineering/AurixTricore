@@ -1,6 +1,8 @@
 # Refactoring plan — Cpu0_Main.c and the core partition
 
-Status: **design draft for review**. No code written. Branch `feature/refactoring`.
+Status: **design draft for review**. T1-T11 implemented; T12 in progress.
+Branch `feature/refactoring`. **§3 re-costed 2026-08-27** against the measured IMU
+data-ready interval (`docs/IMU_INTERRUPT.md` §5.6, D5 closed); T14-T16 added.
 Audience: the user (review), then the `flight-dev` agent (implementation).
 
 ---
@@ -101,7 +103,7 @@ Boundary reasons, one line each:
 | core | role | tasks |
 |---|---|---|
 | **CPU0** | comms + housekeeping. **No hard deadline.** | Led 500 ms · Baro 20 ms · Mag 20 ms · Gnss 100 ms · Housekeeping 100 ms · XcpDaq 100 ms · Nvm 100 ms · Lwip 1 ms |
-| **CPU1** | **flight core.** Hard deadline. Nothing else, ever. | NavTask 20 ms (+ the control law and motor output when they land) |
+| **CPU1** | **flight core.** Hard deadline. Nothing else, ever. | NavTask 20 ms at T12, **985 us (1014 Hz) from T15** -- see 3.4 (+ the control law and motor output when they land) |
 | CPU2-5 | idle, reserved | unchanged |
 
 Why CPU0 keeps the comms: every interrupt in the system is already bound to it —
@@ -169,7 +171,8 @@ cycles per access against 1-2 for a local DSPR. The `NavState` payload is
 `Ahrs_Values` + `FusionValues` + 2 words ≈ **232 bytes = 58 words**; at ~20 cycles
 uncached that is ~1160 cycles ≈ **3.9 µs at 300 MHz** to publish, and the same to
 read. Against `NavTask_step`'s 20 ms period and 2 ms budget that is **0.2% of the
-budget** — the cache buys nothing measurable at 50 Hz. The three sensor latches are
+budget** (re-costed for 1 kHz in 3.7: **0.4 % of the 985 us period, 1.3 % of the
+300 us budget** -- the decision is unchanged) — the cache buys nothing measurable at 50 Hz. The three sensor latches are
 3-4 words each and cost tens of nanoseconds. Meanwhile option 2 makes correctness
 depend on a barrier being present at *every future write site*, forever, including
 ones nobody has written yet. **A permanent correctness liability traded against
@@ -280,34 +283,294 @@ tolerant of a torn read" and point at `SharedRam.h` for the real rule. (Decision
 STM at 100 MHz. Budgets are per dispatch; "worst" is the value that must not blow
 the period.
 
+**Revised 2026-08-27 against measured data.** D5 is closed by
+`docs/IMU_INTERRUPT.md` §5.6, branch (A): the IMU delivers a real 1 kHz DRDY at
+**985.036 µs mean (1014.2 Hz), stddev 1.780 µs**, and the IMU SPI burst is
+**`spi_burst_max` = 124.4 µs measured**. The `NavTask_step` row below is
+**re-costed**, not re-rated, and the two-stage landing (§3.4) is a consequence of
+that.
+
+### 3.1 The reference period is 985 µs, not 1000 µs
+
+Every number in this section is against **985 µs**. The IMU's internal RC runs
+~1.4 % fast with no `CLKIN` (`docs/IMU_INTERRUPT.md` §5.6), so the sample interval
+is 985 µs and the estimator rate is **1014.2 Hz**, not 1000 Hz. Costing against a
+nominal 1000 µs would silently spend 15 µs of margin the hardware does not have.
+This is also why the estimator must take its `dt` from the ISR timestamp and never
+from a constant.
+
+### 3.2 `NavTask_step` re-costed for a 985 µs period
+
+Nominal path, per tick, on CPU1 with nothing else on the core:
+
+| item | µs | source |
+|---|---|---|
+| IMU SPI burst, 14 B @ 1 MHz | **124.4** | **measured**, `docs/IMU_INTERRUPT.md` §5.6 |
+| `Icm42688_read` around the burst — CS, decode, scaling, presence | ~15 | estimate |
+| `Ahrs_update` — 2× `sqrtf` + ~6 transcendentals in the Euler output (`Ahrs.c:733-741`) | ~25 | estimate |
+| `Fusion_update` — 3 channels × 4-state predict + conditional correct (`fusion.c:330-527`) | ~45 | estimate |
+| `NavState_publish` — ~65 words over the non-cached LMU alias (§2.4) | ~4.4 | estimate |
+| three input latch reads, LMU | ~1 | estimate |
+| liveness / plausibility accumulation | ~5 | estimate |
+| **typical total** | **~220** | 124.4 measured + ~95 estimated |
+
+- **Budget: 300 µs (30.5 % of the period). Hard cap: 400 µs.** The estimated ~95 µs
+  would have to be wrong by **3×** before the cap is threatened (124.4 + 285 = 410).
+  That is the error bar the cap is sized for; the estimates are labelled as
+  estimates, and §3.5 says how they get replaced by a measurement.
+- **1 kHz fits, with 685 µs (69.5 %) free at budget.** It fits comfortably.
+- **Minimum acceptable margin for this chain: 50 % of the period must remain free
+  at the worst case.** Not a round number — `NavTask` is *not* the final occupant
+  of CPU1. `flight_ctrl` at `Ts = 0.001f` (`CtrlReplay.c:93`) and the DShot motor
+  output have to land on this core, inside this same 985 µs, in the same tick that
+  produced the attitude. Sensor → estimate → control → motor is one chain or it is
+  not a latency budget. So the estimator may claim at most half the period, and
+  300 µs leaves 685 µs for the half that does not exist yet.
+- **The old 2.0 ms budget is deleted**, not scaled. It was an "it cannot possibly
+  take this long" figure against a 20 ms period; at 985 µs a budget larger than the
+  period is not a budget.
+
+**Fault path, and it is the one that needs a decision.** `SPI_XFER_DEADLINE_MS` is
+**10 ms** (`Spi.c:40`). A wedged QSPI therefore costs **10 consecutive ticks**, not
+one. That deadline was sized against a 20 ms period, where it was half a slot; at
+985 µs it is ten slots. Recommendation (T14): **drop the IMU transfer deadline to
+1 ms** — still 8× the measured 124.4 µs burst, so it can still only fire on a
+genuine fault, and a genuine fault then costs one tick instead of ten. Not optional
+at 1 kHz; the alternative is an unbounded-in-practice hole in the control chain.
+
+### 3.3 The revised table
+
 | task | rate | typ | worst | core | overrun behaviour |
 |---|---|---|---|---|---|
-| `NavTask_step` | **50 Hz / 20 ms** | ~0.30 ms | **2.0 ms** budget (SPI hard cap 10 ms, `Spi.c:36`) | **CPU1** | nothing else on the core to steal from; `dt` is measured, so a late tick is fused with its true `dt`; `dt > 0.2 s` freezes the filters instead of integrating garbage |
+| `NavTask_step` — **stage 1, T12** | 50 Hz / 20 ms | ~0.22 ms | **2.0 ms** budget (SPI hard cap 10 ms, `Spi.c:40`) | **CPU1** | as today; nothing else on the core to steal from |
+| `NavTask_step` — **stage 2, T15** | **1014.2 Hz / 985 µs** | **~0.22 ms** | **300 µs budget, 400 µs cap** (SPI deadline cut to 1 ms, T14) | **CPU1** | gated on `newSample`, so an overrun skips at most one *slot*, never a *sample*: the next dispatch consumes the pending edge and fuses it with its **true** `dt` from the ISR timestamp. Two edges missed = one fused step with `dt ≈ 2 ms`, still inside `FUSION_DT_MAX` / `AHRS_DT_MAX_S` (0.2 s). `missedEdges` counted and published; `dt > 0.2 s` freezes the filters rather than integrating garbage |
+| `imuDrdyIsr` | 1014.2 Hz | ~1 µs | ~1 µs, no branch on data | CPU0 today, **CPU1 from T15** (§3.6) | highest SRPN in the system (106); overrun impossible; the 100 µs pulse width makes chatter-livelock physically impossible (`docs/IMU_INTERRUPT.md` §5.3) |
 | `SensorTask_baro` | 50 Hz | 0.81 ms | **10 ms** (`I2c.c:37`) | CPU0 | delays other CPU0 tasks only; no new baro latch → the DOWN channel coasts on accel + `accelBias` |
 | `SensorTask_mag` | 50 Hz | 0.90 ms | **10 ms** | CPU0 | AHRS degrades to accel+gyro; **yaw becomes unbounded** (`Ahrs.h:15`) — this is the one off-chain failure with a flight consequence, and it is why `PeriphDiag` must stay loud |
 | `SensorTask_gnss` | 10 Hz | ~20 µs | 50 µs | CPU0 | ring-buffer read only; duplicate-`iTOW` guard makes a late poll harmless (`fusion.h:136`) |
 | `Housekeeping_100ms` | 10 Hz | ~0.5 ms | 2 ms | CPU0 | XCP block stale by one cycle |
 | `Task_XcpDaq` | 10 Hz | ~0.2 ms | 1 ms | CPU0 | one DAQ frame skipped; GUI plot gap |
-| `Task_Nvm` | 10 Hz | ~1 µs idle | **~100 ms on a save** (`Nvm.c:205-230`) | CPU0 | blocks all of CPU0 including lwIP; **after the move, nothing on the flight chain is affected — today it stalls the estimator** |
+| `Task_Nvm` | 10 Hz | ~1 µs idle | **~100 ms on a save** (`Nvm.c:205-230`) | CPU0 | blocks all of CPU0 including lwIP; **nothing on the flight chain is affected — before T12 it stalled the estimator** |
 | `Task_Lwip` | 1 kHz | ~30 µs | 1 ms | CPU0 | echo/XCP RX latency only |
-| `Task_Led` | 2 Hz | ~2 µs | — | CPU0 | cosmetic |
+| `Task_Led` | 2 Hz | ~2 µs | — | CPU0 (**and CPU1**, `Cpu1_Main.c:58`) | cosmetic — but see §3.6: it is the only other task on the flight core and must be registered **after** `NavTask_step` |
 
-CPU0 steady state ≈ 10-12% (the I2C wire time, plus lwIP which becomes *visible*
-for the first time). CPU0 pathological burst: 20 ms of I2C + a 100 ms flash erase —
-all off-chain. CPU1 ≈ 1.5%, with a single 20 ms slot to itself.
+**CPU1 load at 1 kHz: ~22 % typical (220/985), ~30 % at budget.** The earlier
+"1.5 % → ~15 %" estimate in this document and in `docs/IMU_INTERRUPT.md` §5.4 was
+**low**: it assumed a ~150 µs tick from a 112 µs SPI estimate. The burst measured
+124.4 µs and the compute was never costed at all. **~22 %, revised.** Still one
+core, still nothing else on it, still ~70 % free for the control law and the motor
+output.
+
+CPU0 is unchanged by the rate change: steady state ~10.2 % measured
+(`docs/IMU_INTERRUPT.md` §5.6), minus the IMU share once T12 lands. Pathological
+burst: 20 ms of I2C + a 100 ms flash erase — all off-chain.
+
+### 3.4 Which step raises the rate — **not T12**
+
+**Recommendation: T12 migrates at `SCHED_MS(20)` exactly as written. The rate
+change is its own step (T15), after T12 and T13 have flown.**
+
+Three reasons, in order of weight:
+
+1. **T12 is what produces the measurement T15 needs.** Once `NavTask_step` is alone
+   on CPU1, `g_coreStats[1].execMaxUs` **is** `NavTask_step`'s worst-case dispatch
+   (`scheduler.c:65-72` times each dispatch individually and keeps the max; on CPU0
+   that number is polluted by nine other tasks). The ~95 µs of estimate in §3.2
+   becomes a measured number the moment T12 flies, at zero extra cost. Raising the
+   rate before reading it means spending margin before knowing it exists.
+2. **A core migration and a 20× rate change landing together is un-attributable.**
+   If the AHRS or the KF misbehaves after a combined step, the candidate causes are
+   the LMU crossing, the QSPI ISR retarget, the rate-dependent constants (§3.8) and
+   the filter's numerical conditioning — with no way to bisect. This document calls
+   a big-bang cutover a design failure elsewhere; this would be one.
+3. **The rate change is genuinely small and genuinely revertible** *once T14's
+   prerequisites are in*: one `Scheduler_addTask` line, the `newSample` gate and the
+   `dt` source. `git revert` of T15 restores a flying 50 Hz build without touching
+   the core partition.
+
+The cost of splitting is one extra flash-and-fly cycle. That is the whole cost.
+
+### 3.5 The gate T15 must pass before it is written
+
+Read after T12 has flown for 5 minutes, over `tools/xcp_read.py`:
+
+- `g_coreStats[1].execMaxUs` ≤ **300** — the §3.2 budget, confirmed rather than
+  estimated. If it lands between 300 and 490 µs, 1 kHz is still viable but the
+  control law's half of the period is not; re-cost before proceeding.
+- `g_coreStats[1].execUs` over a 100 ms window ÷ 5 dispatches = the typical tick.
+- If `execMaxUs` ≥ **490 µs** (half the period), **do not raise to 1 kHz.** Fall
+  back to 500 Hz — the (A′) branch threshold in `docs/IMU_INTERRUPT.md` §5.6 already
+  anticipates it — and consume every second DRDY edge.
+  **§9 refines what "fall back to 500 Hz" must mean:** decimate the *control law*,
+  not the estimator. Dropping every second DRDY edge un-filtered folds the
+  244–382 Hz blade-pass band back into the control band (§9.4). If the estimator
+  itself has to shed rate, it must average the sample pair, not discard one.
+
+### 3.6 How the estimator is clocked at 1 kHz — §5.4 confirmed, slot revised
+
+**Confirmed:** the ISR timestamps and sets a `newSample` flag; `NavTask_step` stays
+a cooperative scheduler task and does the SPI burst, the AHRS and the KF in task
+context. `docs/IMU_INTERRUPT.md` §5.4's reasoning holds unchanged — doing the burst
+at SRPN 106 would put the flight chain above the QSPI driver it depends on, and
+would hide its worst case from `CoreStats`.
+
+**Revised, and this is the part the measurement changes:**
+
+- **The scheduler has no tick and no granularity problem.** `Scheduler_run` is a
+  free-running poll of the STM lower word against a per-task tick count
+  (`scheduler.c:52-58`), 10 ns resolution, so `SCHED_MS(1)` = 100 000 ticks is
+  expressible exactly. There is no jiffy to quantise against. **Stated plainly
+  because the question deserves a plain answer: cooperative tick granularity is not
+  what breaks here.**
+- **What breaks is that `SCHED_MS(1)` polls *slower than the sensor*.** The IMU
+  produces 1014.2 edges/s; a 1 ms slot dispatches at most 1000/s (`lastRun = now`
+  at `scheduler.c:63` makes the period a floor, never less). ~14 samples per second
+  would be overwritten before they were consumed, in a slow beat — the worst kind of
+  data loss, periodic and invisible in an average.
+- **So the slot must be faster than the sensor and the flag must be the clock:
+  register `NavTask_step` at `SCHED_US(500)`** (2 kHz poll) and return immediately
+  when no edge is pending. The actual work rate is then the sensor's 1014.2 Hz. A
+  poll that finds nothing costs one LMU word read plus a branch, ~0.2 µs, i.e.
+  ~0.02 % of the core; a `SCHED_MS(1)` slot buys nothing back for the aliasing it
+  introduces. (Registering at period `0` — every loop pass — also works and is even
+  safer, but it inflates the dispatch count `CoreStats` reports; 2 kHz is the same
+  guarantee with a readable load figure.)
+- **`dt` comes from the ISR edge timestamps, not from `SysTime_getTimeElapsedS`.**
+  `NavTask_step` keeps the last *consumed* edge tick in its own DSPR and computes
+  `dt = edgeTicks - lastConsumedEdgeTicks`. This stays correct when a sample is
+  skipped, and it removes task-dispatch jitter from the filter input entirely —
+  which is the whole reason the interrupt exists. `NavTask.c:92`'s
+  `SysTime_getTimeElapsedS(&s_lastTicks)` measures the *dispatch* interval, i.e. the
+  jitter, and is the wrong source once edges are available.
+- **The shared edge state must move into the LMU block, and the ISR must move to
+  CPU1.** `g_imuDrdyLastTicks` / `g_imuDrdyCount` (`ImuInt.h:58-60`) are plain
+  globals; after T12 they would be written by an ISR on CPU0 and read at 2 kHz by
+  CPU1 — exactly the cacheable cross-core access §2.4 rules out. Two changes, both
+  in T15: retarget `SRC_SCUERU0` to `IfxSrc_Tos_cpu1` (alongside the QSPI nodes T12
+  already retargets), and put `{edgeTicks, edgeCount}` in the shared LMU block as a
+  fourth object, **single writer CPU1**. The histogram and window-statistics globals
+  stay where they are — they are bring-up diagnostics, read by `tools/xcp_read.py`,
+  and they tolerate a torn read.
+- **`SysTime` must stay on STM0 for both cores.** Load-bearing, not an oversight:
+  the ISR timestamp and any task-side timestamp must share one time base or `dt` is
+  meaningless. It is a deliberate, documented exception to CLAUDE.md rule 2 ("each
+  core uses its own STM"), it is a read-only cross-core access, and it must be
+  commented as such wherever it appears — the same exception `Spi.c`/`I2c.c` already
+  take for their deadlines (Risk 3).
+- **Task order on CPU1 matters now.** `Scheduler_run` dispatches in registration
+  order (`scheduler.c:55`) and `Task_LedToggle` (`Cpu1_Main.c:58`) is registered
+  first today. At a 985 µs period a 2 µs LED task ahead of the flight chain is
+  harmless but pointless — register `NavTask_step` **first** on CPU1, and treat that
+  ordering as part of the contract for anything ever added to this core.
+
+### 3.7 What a 1 kHz estimator does to the rest of the system
+
+**The three input latches (CPU0 writes at 50 Hz, CPU1 reads at ~1014 Hz).**
+
+- Cost: 3 latches × ~4 words over the non-cached LMU alias ≈ **1 µs per tick**,
+  0.1 % of the period. Irrelevant.
+- **The contract, however, does not survive a boolean.** `Fusion_setBaroAlt` /
+  `Ahrs_setMag` / `Fusion_setGnss` back onto `s_baroNew`-style flags that the
+  *consumer* clears (`fusion.c:216`) — the two-writer bug T12 already fixes. At 20×
+  asymmetry the fix has to be the **sequence-counter** form, not a flag: the writer
+  increments `seq`, the reader keeps `lastSeq` in its own DSPR and never writes
+  shared state. A reader-clears flag polled 20× per write is a guaranteed two-writer
+  race; a sequence counter is correct at any ratio. **Note for T12: use the counter
+  form now, so T15 is a rate change and not a protocol change.**
+- Behaviour: the DOWN channel predicts every tick and corrects on 1 tick in 20.
+  That is what a Kalman filter is for and it needs no tuning change — `R` is a
+  per-measurement property and `Q` is `dt`-scaled in `fusion_chanPredict`
+  (`fusion.c:330`).
+- The magnetometer sample is re-applied to ~20 consecutive Mahony updates. **Not a
+  gain change:** the correction is `Kp*e` folded into the rate and `Ki*e*dt`
+  integrated (`Ahrs.c:625-640`), both `dt`-scaled, so the total correction per 20 ms
+  of wall time is unchanged. Verified by reading the update, not assumed.
+
+**`NavState` (CPU1 publishes at ~1014 Hz, CPU0 reads at 10 Hz).**
+
+- Publish cost **~3.9 µs every 985 µs = 0.4 % of the flight core**. It is on the
+  critical chain and it is affordable; §2.4's "0.2 % of the budget" line was written
+  against 20 ms and becomes **0.4 % of the period / 1.3 % of the 300 µs budget**. D7
+  is unchanged — a factor of six on a rounding error is still a rounding error, and
+  the barrier-discipline argument against the cached alias never depended on the
+  rate.
+- **The reader's FALSE path stops being theoretical.** Publish (~3.9 µs) and read
+  (~3.9 µs) now overlap with probability ~0.8 % per attempt; two collisions in a row
+  ≈ 6e-5, so at 10 Hz the "keep the previous snapshot" path fires roughly **once
+  every 30 minutes**. That is correct behaviour and costs one 100 ms-stale XCP
+  sample — but it means **`NavState_get` returning FALSE must not be treated as a
+  fault**: no diagnostic bit, no counter anyone reads as an error, no log line. A
+  plain wrapping counter for curiosity is fine. (There is no free `diagStatus` bit
+  anyway — bits 27-30 were the last, `docs/DIAGNOSTICS.md`.)
+- Everything downstream of `Housekeeping` — `measurementsSetFusion`, XCP DAQ, the
+  GUI — stays at 10 Hz. **The 20× asymmetry is absorbed entirely by the snapshot
+  protocol and nothing in the A2L/GUI contract changes.** The GUI plots the same
+  10 Hz stream it plots today; it simply plots a fresher sample.
+
+**T12 BLOCKER found while re-costing — `NavTask_step` still writes CPU0-owned
+state.** This bites at 50 Hz, before any rate change, and it violates §2.3 as
+written:
+
+- `NavTask.c:131` `measurementsSetImu(...)` writes `g_xcpData`
+  (`Measurements.c:174-186`), which is `__at(0x70030000)` in **CPU0's DSPR**
+  (`Measurements.c:18-23`). After T12 that is CPU1 writing another core's DSPR — the
+  exact access §2.3 rules out — and it makes `g_xcpData` a **two-writer object**
+  (CPU0's `Housekeeping` plus CPU1) that XCP DAQ reads concurrently.
+- `NavTask.c:134-135` `Icm42688_plausible` + `PeriphDiag_report` write `s_periph[]`,
+  a plain non-volatile static (`PeriphDiag.c:50`) that CPU0 reads every 100 ms in
+  `PeriphDiag_update`. Cacheable, two cores, no protocol.
+- **Fix, inside T12:** carry `acc[3]`, `gyro[3]`, `tempC`, an accumulated `liveness`
+  and a `sampleSeq` in the `NavState` payload (+32 bytes of LMU, **zero A2L cost** —
+  nothing enters `Xcp_Data`, which has only 8 bytes free anyway), and let
+  `Housekeeping_100ms` on CPU0 call `measurementsSetImu` and `PeriphDiag_report`
+  from the snapshot. Liveness is accumulated on CPU1 per sample and reported once
+  per 100 ms, so the stuck-sensor detector keeps its per-sample sensitivity instead
+  of being decimated to 10 Hz.
+
+### 3.8 Constants the measurement invalidates
+
+Each of these is correct at 50 Hz and wrong at 1014 Hz. **T14 fixes them before T15
+changes the rate**; none of them is a rate change on its own, so T14 lands and flies
+at 50 Hz with no behaviour change worth seeing.
+
+| where | today | why it breaks at 985 µs | fix |
+|---|---|---|---|
+| `NavTask.c:21` `NAVTASK_DT_MIN_S` | `0.001f` | **Blocker.** The measured interval is **985 µs < 1 ms**, so `navTask_dtValid` rejects **every** tick, `ahrsInputOk`/`fusionInputOk` are permanently FALSE and the estimator silently stops. This is the one change without which 1 kHz does not run at all | `0.0002f` (200 µs) — still catches a double dispatch, clears 985 µs by 5× |
+| `Ahrs.c:54` `AHRS_CAL_SAMPLES` | `100u`, "~2 s at 50 Hz" | becomes **~0.1 s** of gyro-bias averaging — 20× less noise rejection on the one number the whole attitude solution rests on | **make the window a duration, not a count**: accumulate `dt` and finish at 2.0 s. Rate-independent forever, and it lands in T14 with *no* behaviour change at either rate — scaling the count to `2000u` would instead make the T14 build take 40 s to calibrate at 50 Hz |
+| `Ahrs.c:72` `AHRS_CAL_MAX_SAMPLES` | `500u`, "10 s at 50 Hz" | becomes **~0.5 s**; the "give up and use a degraded bias" escape fires almost immediately, so a board powered on while still would rarely get a *good* bias | same treatment: a 10.0 s **deadline** accumulated from `dt`. `biasDegraded` keeps its meaning at any rate |
+| `Spi.c:40` `SPI_XFER_DEADLINE_MS` | `10u` | ten lost ticks per wedged transfer instead of one (§3.2) | `1u` on the IMU path |
+| `ImuInt.h:88` `g_imuDrdyStaleTicks` | designed to read 0-20 ms against a 50 Hz task | its purpose (proving D5) is spent; at 1 kHz it becomes a *live* health signal — it should read < ~1 ms, and a sustained rise means the task is falling behind the sensor | keep; re-document as a latency monitor and add `missedEdges` beside it |
+
+**Checked and NOT invalidated** — recorded so nobody re-derives it:
+
+- `FUSION_DT_MIN` `0.0001f` / `AHRS_DT_MIN_S` `0.0001f` (`fusion.c:147`, `Ahrs.c:76`)
+  already clear 985 µs by 10×. Only `NavTask`'s own gate is wrong.
+- `FUSION_REJECT_MAX` `25u` — "0.5 s at 50 Hz" (`fusion.c:117`) stays 0.5 s:
+  `rejectRun` is incremented in `fusion_chanUpdate` (`fusion.c:487`), which runs only
+  on a **measurement**, and measurements still arrive at 50 Hz (baro) and 10 Hz
+  (GNSS). Rate-independent by construction.
+- Mahony `twoKp`/`twoKi` and every `FusionCal` gain — `dt`-scaled at the point of use
+  (`Ahrs.c:625-640`, `fusion.c:330`), so rate-invariant to first order.
+- `docs/FUSION.md` §8's BMP581 IIR coefficient — clocked by the **barometer's own
+  ODR**, not the nav tick. The 310 ms time constant is unchanged.
+- The A2L, the GUI and `Xcp_Data` — untouched by any of this (§3.7).
+
+**Docs that become wrong at T15, and are T13/T16's job rather than this section's:**
+`docs/FUSION.md` §1 ("Everything runs in `Task_Imu` at 50 Hz on CPU0" — wrong on the
+task name and on both numbers), the `Task_Imu` gating sentence later in the same
+file, and the "~2 s"/"10 s" calibration prose that mirrors `Ahrs.c:54,72`.
+
+**New numerical risk that only hardware can close.** The KF covariance is updated
+20× more often in `float32`. Round-off accumulates per update, the `dt`-scaled `Q`
+terms shrink 20×, and `P` propagates 20× more often. `covResets` and the covariance
+clamp (`fusion_chanClampCov`, `fusion.c:268`) are the instrumentation that already
+exists for exactly this. **T15 acceptance: `NavCovResets` still 0 over 10 minutes
+and `NavDropped` still 0.** If either moves, the fix is `float64` in the covariance
+propagation, or the 500 Hz fallback — not a gain tweak.
 
 **Flagged, as asked:** today `Task_Imu` (the flight chain) shares its core with the
-two blocking I2C reads that are ~91% of CPU0's load, *and* with the DFLASH erase,
-*and* with unaccounted lwIP polling. After this plan it shares its core with
-nothing.
-
-**Open timing mismatch, needs a decision:** `flight_ctrl` was designed for
-`Ts = 0.001f` — 1 kHz (`CtrlReplay.c:93`). The IMU tick is 50 Hz. A 1 kHz rate loop
-cannot be fed by a 50 Hz gyro. On CPU1 a 1 kHz IMU tick costs 112 µs of SPI per
-millisecond ≈ 11% of the core, which is affordable — but it is a separate decision
-about sensor rate and filter tuning, not part of this refactor. (Decision D5.)
-
----
+two blocking I2C reads that are ~91 % of CPU0's load, *and* with the DFLASH erase,
+*and* with lwIP. After T12 it shares its core with nothing but a 2 µs LED blink.
 
 ## 4. Interfaces
 
@@ -462,6 +725,20 @@ needs one line of it — the `Ifx__dsync` wrapper — so `SharedRam.h` must keep
    fly. Every other step is independently buildable and flyable.
 8. **Nothing here is irreversible.** Every step is a code move plus one registration
    line; `git revert` restores flying firmware at every point.
+9. **The 1 kHz rate change (T15) is the one step with a filter-behaviour risk, not just
+   a structural one.** Covariance propagation runs 20x more often in `float32`
+   (§3.8), and the gyro-bias calibration window changes meaning entirely
+   (`Ahrs.c:54,72`). `NavCovResets`/`NavDropped` are the existing instrumentation and
+   are T15's acceptance criteria. Needs hardware; a host test cannot see it.
+10. **`NAVTASK_DT_MIN_S = 0.001f` (`NavTask.c:21`) is a silent killer at 1 kHz.** The
+   measured interval is 985 us, so the gate rejects every sample and the estimator
+   stops with no error anywhere — the output simply freezes. It is listed as T14's
+   first item for that reason. There is no diagnostic bit for it and none is free.
+11. **The DRDY ISR retarget to CPU1 (T15) is the second irreversible-feeling step**, in
+   the same sense as the QSPI retarget in Risk 3: get it wrong and the estimator's
+   `dt` comes from a cross-core cached global instead of the LMU block, which fails
+   as rare jitter rather than as a build error. Needs hardware; check
+   `g_imuDrdyStaleTicks` and `missedEdges`, not just that it runs.
 
 ---
 
@@ -483,18 +760,20 @@ The firmware builds and flies after every single one.
 | **T9** | new `SharedRam.c/.h`, `CoreStats.h`, `docs/ILLD_NOTES.md`, `docs/CODEMAP.md` | **the LMU foundation (§2.4).** `SharedRam.c` = the `__at(0xB00F0000)` block and nothing else (cppcheck cannot parse `__at`); `SharedRam.h` = the rules, the `Ifx__dsync` wrapper and the 32-bit-fields rule. Add a boot-time `IfxCpu_isAddressCachable()` self-check reported through `PeriphDiag`/UART. Narrow the `CoreStats.h:15-21` comment so it stops being cited as the sanctioned pattern. Record `Ifx__dsync` missing for TASKING in `ILLD_NOTES.md` and the LMU block in `CODEMAP.md` §3. Block unused so far | builds, 0 warnings; **`.map` shows the block at `0xB00F….`**; boot log reports the address non-cacheable; MISRA green (the `__at` TU isolation is what keeps cppcheck parsing) |
 | **T10** | new `NavState.c/.h`, `test/` | generation-counter snapshot in the T9 block: publish = payload → `Ifx__dsync()` → `gen++`; reader does read-copy-reread with one retry and never writes shared state. All fields 32-bit. Not yet wired in | host test: publish/get, torn-read retry, get-before-publish, FALSE path; MISRA clean; **`NavState.src` contains a `DSYNC` between the payload stores and the `gen` store** |
 | **T11** | new `NavTask.c/.h`, `Housekeeping.c`, `Cpu0_Main.c` | move `Task_Imu`'s body into `NavTask_step`; publish via `NavState_publish`; `Housekeeping_100ms` consumes `NavState_get` and calls `measurementsSetFusion`. **Still registered on CPU0** — so the crossing is exercised single-core first, where a torn read cannot happen and any regression is therefore *not* the LMU. Split out `NavTask_inputValid` + its host test | hardware: every AHRS/fusion signal in the GUI identical to before; `dropped` and `covResets` still 0 over 5 min; AHRS bench check (nose up ≈ +90°) |
-| **T12** | `Cpu0_Main.c`, `Cpu1_Main.c`, `Spi.c`, `fusion.c`, `Ahrs.c`, `SharedRam.c` | **the migration, atomic.** Move the three input latches (`Fusion_setBaroAlt` / `Ahrs_setMag` / `Fusion_setGnss` backing state) into the shared block, 32-bit fields, 8-byte aligned away from `NavState`, writer CPU0, and fix the consumer-clears-the-flag two-writer bug. Move `Spi_init` / `Icm42688_init` / `NavTask_init` into `core1_main` after the sync barrier; retarget `Spi.c:107` to `IfxSrc_Tos_cpu1`; register `NavTask_step` at `SCHED_MS(20)` on `MODULE_STM1`; comment the deliberate cross-core `MODULE_STM0` timeout reads | hardware: `WHO_AM_I 0x47` on the **CPU1** boot line; `\|a\| ≈ 0.998 g`; **`g_navState.gen` read live over `tools/xcp_read.py` increments at 50 Hz** (the direct proof the crossing works); `coreLoadPmil[1]` non-zero and `coreAlive[1]` incrementing; `coreLoadPmil[0]` drops by the IMU share; AHRS bench check again; 5 min with `dropped == 0` and no `covResets` |
+| **T12** | `Cpu0_Main.c`, `Cpu1_Main.c`, `Spi.c`, `fusion.c`, `Ahrs.c`, `SharedRam.c` | **the migration, atomic.** Move the three input latches (`Fusion_setBaroAlt` / `Ahrs_setMag` / `Fusion_setGnss` backing state) into the shared block, 32-bit fields, 8-byte aligned away from `NavState`, writer CPU0, and fix the consumer-clears-the-flag two-writer bug. Move `Spi_init` / `Icm42688_init` / `NavTask_init` into `core1_main` after the sync barrier; retarget `Spi.c:107` to `IfxSrc_Tos_cpu1`; register `NavTask_step` at `SCHED_MS(20)` on `MODULE_STM1`; comment the deliberate cross-core `MODULE_STM0` timeout reads. **Two additions from the §3 re-cost, both required for T12 itself, not for the later rate change:** (a) the three latches use a **sequence counter**, not a consumer-cleared boolean (§3.7) — correct at any writer/reader rate ratio, so T15 stays a rate change; (b) `NavTask_step` must stop writing CPU0-owned state — move `measurementsSetImu` and the IMU `PeriphDiag_report` onto CPU0 by carrying `acc`/`gyro`/`tempC`/accumulated `liveness`/`sampleSeq` in the `NavState` payload and calling them from `Housekeeping_100ms` (§3.7, T12 blocker). +32 B of LMU, zero A2L cost | hardware: `WHO_AM_I 0x47` on the **CPU1** boot line; `\|a\| ≈ 0.998 g`; **`g_navState.gen` read live over `tools/xcp_read.py` increments at 50 Hz** (the direct proof the crossing works); `coreLoadPmil[1]` non-zero and `coreAlive[1]` incrementing; `coreLoadPmil[0]` drops by the IMU share; AHRS bench check again; 5 min with `dropped == 0` and no `covResets`; **`grep -n "g_xcpData" src/bsw/NavTask.c` returns nothing** and `PeriphDiag_report` has no CPU1 call site; accel/gyro/IMU-temp still live in the GUI at 10 Hz |
 | **T13** | `docs/CODEMAP.md`, `docs/FUSION.md`, `docs/REFACTORING_PLAN.md`, `Version.h` | `FUSION.md` §1 says *"Everything runs in `Task_Imu` at 50 Hz on CPU0"* — now wrong. `CODEMAP.md` §1 says *"CPU0 does everything; CPU1-5 idle"* and §2 "Put work on another core" still points at the `CoreStats` pattern — both now wrong; repoint at `SharedRam.h`. Bump `Version.h`, regenerate the A2L (version string only) | `gh workflow run misra.yml --ref feature/refactoring` green; `a2l.yml` green; version string confirmed **over XCP**, not from the build log |
+| **T14** | `NavTask.c`, `Ahrs.c`, `Spi.c`, `ImuInt.c/.h` | **rate prerequisites, still at 50 Hz (§3.8).** `NAVTASK_DT_MIN_S` 0.001f -> 0.0002f; the two AHRS gyro-bias windows become **durations accumulated from `dt`** (2.0 s window, 10.0 s deadline) instead of sample counts, so they are rate-independent forever and unchanged at 50 Hz; IMU `SPI_XFER_DEADLINE_MS` 10 -> 1; add `missedEdges` beside `g_imuDrdyStaleTicks`. **No rate change in this task** — it flies at 50 Hz and must be behaviourally indistinguishable from T13 | builds, 0 warnings; MISRA clean; host test for the duration-based cal window (2.0 s reached at 50 Hz and at 1 kHz from the same `dt` stream); hardware: `AHRS_RUNNING` still reached in ~2 s, `\|a\| ~ 0.998 g`, `diagStatus` unchanged; 5 min with `NavDropped == 0` |
+| **T15** | `Cpu1_Main.c`, `NavTask.c`, `ImuInt.c`, `SharedRam.c/.h`, `Configurations/ConfigurationIsr.h` | **the rate change, and only the rate change (§3.4, §3.6).** Retarget `SRC_SCUERU0` to `IfxSrc_Tos_cpu1`; move `{edgeTicks, edgeCount}` into the shared LMU block, single writer CPU1; `NavTask_step` consumes the pending edge, takes `dt` from the edge timestamps instead of `SysTime_getTimeElapsedS`, and returns immediately when no edge is pending; register it at `SCHED_US(500)` **first** in CPU1's task list, `Task_LedToggle` after it. **Gate: §3.5 must pass on the T12/T13 build before this task is written** | hardware: `g_navState.gen` increments at **~1014 Hz** over `tools/xcp_read.py`; `g_coreStats[1].execMaxUs` <= **300** and `loadPmil[1]` ~ 220; `g_imuDrdyStaleTicks` < ~1 ms sustained; `missedEdges` 0 over 5 min; **`NavCovResets` and `NavDropped` both 0 over 10 min** (§3.8); AHRS bench check (nose up ~ +90 deg); `diagStatus` unchanged; CPU0 load unchanged |
+| **T16** | `docs/FUSION.md`, `docs/CODEMAP.md`, `docs/REFACTORING_PLAN.md`, `Version.h` | the T15 paperwork: `FUSION.md` §1's rate and task name, its `Task_Imu` gating sentence, the "~2 s"/"10 s" calibration prose; `CODEMAP.md` gains the 1 kHz chain and the DRDY-clocked estimator; mark §3 stage 2 as landed with the measured numbers. Bump `Version.h`; regenerate the A2L (version string only) | `misra.yml` green; `a2l.yml` green; `python tools/check_docs.py` green; version string confirmed **over XCP** |
 
-**13 tasks** (was 12; the LMU foundation is new as T9 and everything after it shifted
-by one). T1-T3 delete/relocate ~180 lines with zero behaviour change. T4-T5 create
+**16 tasks** (T1-T13 as originally planned; **T14-T16 added 2026-08-27** when the IMU measurement closed D5 — the 1 kHz rate change is deliberately *after* the core migration, see §3.4). T1-T3 delete/relocate ~180 lines with zero behaviour change. T4-T5 create
 the host-testable seams. T6-T8 restructure the task list and fix the flash-erase
 coupling. **T9-T10 build and prove the shared-memory mechanism while it is still
 unused — the point being that if the `.map` address or the `DSYNC` is wrong, it is
 found before any flight code depends on it.** T11 moves the estimator behind the new
 interface *on one core*, so a regression there is a refactoring bug, not a coherency
 bug. T12 is the only step that turns on the actual cross-core traffic. T13 is the
-paperwork that keeps the docs from lying.
+paperwork that keeps the docs from lying. **T14 fixes the rate-dependent constants while still at 50 Hz, T15 changes the rate and nothing else, T16 is its paperwork** — so a 1 kHz regression can only be the rate, and reverting T15 alone restores a flying build.
 
 After T12, `Cpu0_Main.c` should be ~120 lines: includes, two statics, `core0_main`
 with init and eight registrations, and the lwIP ISR.
@@ -509,9 +788,10 @@ with init and eight registrations, and the lwIP ISR.
 | **D2** | lwIP: a 1 ms scheduled task (accounted, +≤1 ms RX latency) or stay in the `while(TRUE)` body (free, invisible)? | **Scheduled task.** An unmeasured consumer on the comms core is exactly the kind of thing that bites later, and lwIP's own tick is already 1 ms. |
 | **D3** | `SCHEDULER_MAX_TASKS` 8 → 12? | **Yes.** CPU0 lands on exactly 8 with zero headroom. Costs 48 bytes per core. |
 | **D4** | Should the DFLASH save be gated (e.g. refused while armed) rather than merely moved off the flight core? | **Not now.** There is no armed state yet. Add the gate when arming lands; note it in `DIAGNOSTICS.md`. |
-| **D5** | **The rate mismatch.** `flight_ctrl` is designed for `Ts = 0.001f` (1 kHz, `CtrlReplay.c:93`) and the IMU runs at 50 Hz. Which moves? | Needs your call, and it is **outside this refactor**. A 1 kHz IMU tick on CPU1 costs ~11% of that core and is affordable; retuning the rate loop for 50 Hz is the other option. The refactor is designed so either choice is a rate change on one registration line. |
+| **D5** | **CLOSED 2026-08-27 by measurement.** `flight_ctrl` is designed for `Ts = 0.001f` (`CtrlReplay.c:93`); does the IMU really deliver 1 kHz? | **Yes — branch (A), `docs/IMU_INTERRUPT.md` §5.6.** 985.036 µs mean (1014.2 Hz), stddev 1.780 µs, `spi_burst_max` = 124.4 µs. `NavTask` goes to 1 kHz and `flight_ctrl` keeps `Ts = 0.001f`. Re-costed in §3.2: ~220 µs typical, 300 µs budget, CPU1 ≈ 22 %. The rate change is **T15, not T12** (§3.4), and T14 fixes the rate-dependent constants first (§3.8). Follow-on question this opened: **D8**. |
 | **D6** | **Does `g_coreStats` move into the LMU shared block** for consistency with the new rule, or stay as it is? | **Stay.** It works today, it is `volatile` and single-writer-per-slot, and it carries diagnostics — a torn read costs one wrong load number, never a flight. Moving it touches all six core mains for no behavioural gain. But its **comment must be corrected** (T9): `CoreStats.h:15-21` currently reads as the project's sanctioned inter-core pattern and is being cited as such. If you would rather have one rule with no exceptions, moving it is ~20 lines and I would not argue. |
 | **D7** | **Non-cached `0xB` alias vs cached `0x9` + `dsync` per write** for the shared block. | **Non-cached (`0xB00F0000`).** Costed in §2.4: ~3.9 µs to publish 232 bytes, 0.2% of `NavTask_step`'s budget, against a barrier discipline that every future writer would have to honour forever. Listed here because it is the one decision in §2.4 that is genuinely mine rather than the vendor's. |
+| **D8** | **CLOSED 2026-08-27 by section 9**, argued from the plant model in `C:\Users\chris\Projects\Quadrocopter`. The estimator runs at the sensor's **1014.2 Hz**, not 1000 Hz (section 3.1). `flight_ctrl` is called with a fixed `Ts = 0.001f` (`CtrlReplay.c:87`). Does the control law take the true `dt`, or get its own 1 ms slot? | **The true `dt`, from the same per-tick ISR edge delta the estimator uses -- and no second slot.** `Ts` is a *runtime* field (`flight_ctrl.h:39`) and appears in exactly one line of the control law, the backward-Euler integrator (`flight_ctrl.c:114`); the gains are continuous-time. So feeding the measured interval is a **caller-side change with zero edit to the generated file**, it is exact at any rate, and it is the only form that stays correct when an edge is missed (`dt = 2*T`, area preserved) -- where a hard-coded `0.001f` is 100 % wrong. Clamp it through the existing `NAVTASK_DT_MIN_S` / `FUSION_DT_MAX` window before use. **Not** a per-window mean: a mean is smooth exactly where correctness matters. Separately, section 9 answers the rate question behind this one: **the control law needs ~200 Hz, 500 Hz is sufficient, and 1014.2 Hz is justified by anti-aliasing of the 244-382 Hz blade-pass band, not by the control law.** See sections 9.5 and 9.6. |
 
 ## 8. Where I was unsure, and what I chose
 
@@ -546,10 +826,228 @@ with init and eight registrations, and the lwIP ISR.
   topology, not from a measurement — the conclusion (0.2% of the task budget) has
   enough margin that a factor of three either way does not change the decision, but
   the number itself is an estimate and is labelled as one.
+- **The 1 kHz re-cost is 124.4 µs measured plus ~95 µs estimated (§3.2).** I did not
+  guess at the measured part and I did not measure the estimated part — `Ahrs_update`
+  and the three KF channels are costed from their operation counts, not from a timer.
+  The conclusion (fits, with 685 µs free) survives a 3× error in that estimate, which
+  is why I was willing to publish it; but §3.5 makes T12 hand back the real number
+  before T15 spends it. If `execMaxUs[1]` comes back above 300 µs, believe it and not
+  this document.
+- **Where I was wrong before: CPU1 at 1 kHz is ~22 %, not ~15 %.** The old figure came
+  from a 112 µs SPI estimate with no compute costed at all. The direction of the error
+  matters less than the fact that the earlier number never included the estimator.
+- **`SCHED_US(500)` rather than `SCHED_MS(1)` is the least obvious call in this
+  revision (§3.6).** A 1 ms slot looks right and is wrong, because the sensor runs at
+  1014.2 Hz and a 1000 Hz poll loses ~14 samples a second in a slow beat. If the
+  `newSample` gate is ever removed, that slot becomes a bug — the gate is what makes
+  over-polling correct, not the period.
 - **`Atmosphere` as a module name.** The formula could equally live in `Bmp581.c`.
   I split it because it is not chip-specific and because a pure, iLLD-free
   translation unit is worth more as a test seam than as a saved file.
 
+---
+
+## 9. The loop rate, argued from the plant (2026-08-27)
+
+Written in answer to *"is the 1 kHz for the flight controller a hard requirement,
+or can we talk about the 1 kHz?"* Source of every number below: the Simulink/MATLAB
+model in `C:\Users\chris\Projects\Quadrocopter`, read read-only.
+
+**Answer up front: 1 kHz is not a requirement. The control law's requirement is
+~200 Hz; 500 Hz is comfortably sufficient. Take 1014.2 Hz anyway** -- not for the
+control law, but because the IMU's ODR and anti-alias filter are configured for
+1 kHz, and any decimation below Nyquist-507 Hz folds propeller vibration into the
+control band. It costs 22 % of a core that reads 0.00 % today.
+
+### 9.1 The fastest dynamics that must be controlled
+
+| dynamic | value | source | in Hz |
+|---|---|---|---|
+| Motor + ESC first-order lag | `tau = 0.05 s` -> pole at **-20 rad/s** | `quad_params.m:10`, state `pt1_w_cmd_to_w` (`quad_params.m:47`) | **3.18 Hz** |
+| Rigid-body attitude | `Ixx=Iyy=1.0e-2`, `Izz=1.8e-2 kg m2`; om-dot = M/I is a **pure integrator** -- poles at 0 | `quad_params.m:6` | 0 |
+| Translational drag | `Cd = 0.10 N/(m/s)` / `m = 1.20 kg` -> -0.083 rad/s | `quad_params.m:12,2` | 0.013 Hz |
+| Position mode from the linearisation | `0 +/- 1.6j` | Quadrocopter `README.md:101` | 0.25 Hz |
+
+**The fastest pole anywhere in the modelled plant is the motor at 20 rad/s =
+3.18 Hz.** Everything else is slower, or is an integrator. There is no fast mode
+hiding in this airframe.
+
+### 9.2 The loop bandwidths the design actually asks for
+
+The cascade is dimensioned explicitly (Quadrocopter `README.md:44-108`), and the
+gains in `quad_params.m:26-38` reproduce it arithmetically:
+
+| loop | rule | arithmetic | omega_c |
+|---|---|---|---|
+| Body rate (PI), roll/pitch | omega_c = Kp / I | 0.100 / 0.010 | **10.0 rad/s = 1.59 Hz** |
+| Body rate (PI), yaw | omega_c = Kp / I | 0.216 / 0.018 | **12.0 rad/s = 1.91 Hz** |
+| Attitude (P) | omega_c = Kp outright | 3.0 | 3 rad/s = 0.48 Hz |
+| Position (PD) | -- | -- | ~1.2 rad/s = 0.19 Hz |
+
+The I-term zero confirms the reading: `tau_kI/tau_kP` = 0.125/0.100 = 1.25 rad/s
+= omega_c/8, and 0.324/0.216 = 1.5 rad/s = omega_c/8 (`quad_params.m:26-27`; the
+rule is stated at `README.md:78`). **The fastest closed loop in this aircraft
+crosses over at 1.91 Hz.**
+
+### 9.3 The required loop rate
+
+Two rules, both applied to the yaw rate loop because it is the fastest.
+
+**Rule A -- sample rate 10-20x the closed-loop bandwidth.**
+20 x 1.91 Hz = **38 Hz**. By this rule the *existing 50 Hz `Task_Imu` already
+satisfies the control law*, which is worth stating plainly.
+
+**Rule B -- phase margin lost to discretisation.** A ZOH plus one compute period
+costs about 1.5*Ts of effective delay; the phase it adds at crossover is
+phi = omega_c * 1.5 * Ts, with omega_c = 12 rad/s:
+
+| f_s | Ts | 1.5*Ts | phi at omega_c |
+|---|---|---|---|
+| 50 Hz | 20 ms | 30 ms | **20.6 deg** |
+| 100 Hz | 10 ms | 15 ms | 10.3 deg |
+| 200 Hz | 5 ms | 7.5 ms | **5.2 deg** |
+| 500 Hz | 2 ms | 3 ms | 2.1 deg |
+| **1014.2 Hz** | 0.985 ms | 1.48 ms | **1.0 deg** |
+
+For scale, the motor lag alone already eats `atan(12/20)` = **31.0 deg** of phase at
+that crossover. The sampler is not the phase budget; the actuator is. Rule B says
+**200 Hz** (5.2 deg, an order of magnitude under the actuator's own contribution)
+and calls 50 Hz marginal at 20.6 deg.
+
+**Required rate is ~200 Hz. Going from 500 Hz to 1014 Hz buys 1.1 deg of phase
+margin.** That is not a reason to do anything.
+
+### 9.4 What the higher rate actually buys -- and what it does not
+
+**Does not buy: gyro noise averaging.** Attitude comes from *integrating* gyro, and
+the angle random walk over a fixed interval is sigma_theta = ARW * sqrt(t) --
+rate-independent. Halving the estimator rate does not double the attitude noise.
+Quadrocopter `doc/MBD_PATH.md:94` gives sigma ~ 0.0016 rad/s per sample at 1 kHz;
+at 500 Hz the per-sample sigma is smaller by sqrt(2) and there are half as many
+samples. Net zero. **Strike this from the argument for 1 kHz.**
+
+**Does not buy: disturbance rejection.** That is set by loop gain, and loop gain is
+unchanged once f_s is well above omega_c -- true from 100 Hz upward.
+
+**Does not buy: delay margin worth having.** 1.1 deg (section 9.3).
+
+**Does buy, and this is the only real one: anti-alias headroom for rotor vibration.**
+
+- Hover shaft speed `w_hover = sqrt(m*g/(4*kT))` = sqrt(11.772 / 2.0e-5) =
+  **767.2 rad/s = 122.1 Hz** (`quad_params.m:57`; its inline comment "-> 990.5 rad/s"
+  is **stale** -- `linearize/linearize_hover.m:15` gives the check value as 767).
+- At `w_max = 1200 rad/s` (`quad_params.m:11`) the shaft is 191 Hz.
+- Two-blade blade-pass = 2x shaft: **244 Hz at hover, up to 382 Hz at full throttle.**
+
+| f_s | Nyquist | blade-pass 244-382 Hz |
+|---|---|---|
+| 500 Hz | 250 Hz | **aliases** -- folds to 256...118 Hz, i.e. down toward the control band |
+| 1014.2 Hz | 507 Hz | stays in band, and is therefore *filterable* rather than already folded |
+
+The ICM-42688-P is configured at 1 kHz ODR with its filtering set for that ODR
+(`docs/IMU_INTERRUPT.md:209`, `docs/ICM42688P.md:296`). **Consuming every second edge
+is decimation without a decimation filter** -- the sensor has band-limited for
+507 Hz, not for 250 Hz. This is also the precondition for the RPM notch both repos
+already plan (`doc/projektplan.md:135`, `README.md:292`) and for the frame resonance
+that document flags near the hover fundamental.
+
+**Cost of 1014 Hz over 500 Hz:** CPU1 ~22 % vs ~11 % (section 3.2) on a core at
+0.00 % today; **20 covariance propagations per second per channel instead of 10**,
+all in `float32`, which is exactly the `NavCovResets` exposure called out in
+section 3.7 and gated by T15's acceptance; and one hardware re-validation pass.
+All three are affordable. None of them is bought back by rate.
+
+### 9.5 The `Ts` question -- confirmed
+
+**Confirmed, and it dissolves D8.**
+
+- `Ts` is a *runtime* parameter (`flight_ctrl.h:39`), not a compile-time constant.
+- It appears in exactly **one** line of the control law -- the backward-Euler
+  integrator `I_new = st->tau_I[i] + p->tau_kI[i] * p->Ts * e;` (`flight_ctrl.c:114`).
+  No derivative term, no filter coefficient. The gains are continuous-time by design
+  (`README.md:76-79`: Kp = omega_c * I).
+- Therefore **`Ts` is a caller-side value with zero edit to the generated file**, and
+  the control law is rate-independent by construction.
+
+**Where the value comes from: the per-tick delta of the ISR edge timestamps** -- the
+same `dt` T15 already hands `Ahrs_update` and `Fusion_step`. One clock, one `dt`, one
+place it can be wrong.
+
+- **Not a fixed `0.001f`.** At the true 985.036 us that is a +1.5 % integrator-gain
+  error (harmless -- Ki 0.125 behaves as 0.1269), but on a *missed* edge it is 100 %
+  wrong and the integrator under-accumulates a whole tick's area.
+- **Not a per-window mean.** A mean is smooth exactly in the case where correctness
+  matters: a skipped or doubled tick. The per-tick delta is right in both.
+- Clamp it through the existing window (`NAVTASK_DT_MIN_S` after T14, `FUSION_DT_MAX`
+  / `AHRS_DT_MAX_S` = 0.2 s) before it reaches either the filters or `p->Ts`.
+- For the record: the estimator runs at **1014.2 Hz, not 1000 Hz** (section 3.1), so
+  "1 kHz" in this plan is shorthand for the sensor's rate and never for a 1 ms slot.
+
+### 9.6 Must the estimator and the control law run at the same rate?
+
+**No -- and here they should anyway.**
+
+Splitting them (estimator 1014 Hz, rate controller 507 Hz) is a legitimate and common
+architecture, and section 9.3 says the controller would not notice. What it costs here:
+
+- a **rate-transition seam** inside the flight chain -- which state the controller
+  reads, whether it is the latest or a decimated one, and a second `dt` to keep
+  consistent. That is the class of thing section 2.4 spent its length removing.
+- a second timing case to reason about on overrun, on top of the `newSample` gate.
+
+What it buys: ~10-20 us per 985 us of CPU1, on a core running 22 %. **Not worth it.**
+The motor is a first-order lag at 3.18 Hz (section 9.1); it cannot tell a 507 Hz
+command stream from a 1014 Hz one under any circumstance.
+
+**The one case where the split is right** is the section 3.5 fallback: if T12 hands
+back `execMaxUs[1]` >= 490 us, decimate the **control law** to 507 Hz and leave the
+estimator on every edge -- because the estimator's rate is the anti-aliasing argument
+(section 9.4) and the controller's is not. Prefer that over dropping the estimator
+to 500 Hz.
+
+### 9.7 What I could not determine from the model files
+
+- **No linearisation output is stored.** `linearize/linearize_hover.m:13-16` runs
+  `linmod` and then only `disp(eig(A))` -- no gain or phase margin, no `margin()` call,
+  no saved A/B/C/D, and no target crossover written anywhere in the scripts. The
+  crossover figures in section 9.2 are the *design intent* from `README.md:49-53,76-79`,
+  reproduced independently from the gains and inertias. **The achieved phase margin of
+  the real loop is not recoverable without running MATLAB**, and I did not.
+- **No file records a chosen rate with a reason.** `Ts = 0.001` is asserted at
+  `quad_params.m:50` ("Abtastzeit Regler (1 kHz)"), repeated at `sil/build_sfun.m:16`,
+  `pil/replay_export.m:27`, `pil/replay_udp.m:115` and `pil/run_pil.m:110`, and stated
+  as fact in `README.md:45` and `doc/projektplan.md:28,44` -- always as a given, never
+  with a derivation. **1 kHz in the model is the sensor's rate, adopted; it was not
+  derived from the plant.** That is the honest answer to the question.
+- **Blade count and propeller are not fixed.** `README.md:298` and
+  `doc/projektplan.md:130` say frame, motor KV and propeller are still open.
+  Section 9.4 assumes two blades; a three-blade prop moves blade-pass to 366-573 Hz,
+  which *strengthens* the 1014 Hz case and would exceed even its Nyquist at full
+  throttle.
+- **The "~83 Hz Hover-Grundton" at `doc/projektplan.md:135` does not match this
+  parameter set** -- 122.1 Hz falls out of `quad_params.m:2,8`. One of the two belongs
+  to a different airframe. If 83 Hz is the real one, two-blade blade-pass is 166 Hz,
+  which does *not* alias at 500 Hz, and 500 Hz becomes fully defensible. **Resolve this
+  when the propeller is chosen -- it is the single number the recommendation is
+  sensitive to.**
+
+### 9.8 Effect on the task list
+
+- **T14 -- unchanged, and vindicated.** Making the AHRS calibration windows
+  *durations* rather than sample counts is precisely the rate-independence this
+  section argues for. Same for `NAVTASK_DT_MIN_S`.
+- **T15 -- unchanged in substance.** It stays "the rate change and only the rate
+  change", still gated on section 3.5, still to 1014.2 Hz. Two additions belong in its
+  commit message rather than its diff: the rate is the *sensor's*, adopted with ~5x
+  headroom over the ~200 Hz the control law needs (section 9.3), and the justification
+  is section 9.4's Nyquist argument, not the control law.
+- **T16 -- one line added:** `FUSION.md` and `CODEMAP.md` should say *1014.2 Hz,
+  DRDY-clocked, `dt` per tick* and never "1 kHz fixed", so the next reader does not
+  re-derive this.
+- **New, for whoever lands the control law (not this refactor):** `p->Ts` takes the
+  per-tick `dt`, not `0.001f`. `CtrlReplay.c:87` keeps `0.001f` -- the replay harness is
+  fed a fixed `Ts` grid by `pil/replay_export.m:27` and must stay bit-comparable with
+  the model.
 ---
 
 ## Sources
