@@ -14,8 +14,16 @@ then build, flash, and:
     python tools/xcp_read.py 0x70030000:hex:64          # raw address + length
     python tools/xcp_read.py --find dbg                 # grep the map
 
-Format is NAME[:TYPE] or 0xADDR[:TYPE][:LEN]. Types: u8 u16 u32 i8 i16 i32 f32
-hex str (default u32).
+Format is NAME[:TYPE] or 0xADDR[:TYPE][:LEN]. Types: u8 u16 u32 u64 i8 i16 i32
+f32 hex str (default u32).
+
+Array form: NAME:TYPExN, e.g. g_imuDrdyHist:u32x32 -- reads N consecutive
+elements starting at NAME's address. SHORT_UPLOAD is capped at 63 bytes
+(XCP_MAX_CTO - 1), so anything bigger than that -- an array, or an explicit
+hex:hex:LEN read over 63 -- is split into multiple shortUpload calls at
+increasing addresses and concatenated; a single scalar read is still one
+call, unchanged. See short_upload_chunked() below, which
+tools/imu_int_stats.py also imports directly for the same reason.
 
 !! The address of a symbol CHANGES ON EVERY BUILD. This tool re-reads the map
    each run for that reason -- never hardcode an address you looked up once.
@@ -38,9 +46,16 @@ HOST, PORT = "192.168.0.10", 5555
 # TASKING map symbol table rows:  | name | 0xaddress |  ... |
 SYM_RE = re.compile(r"^\|\s*(\S+)\s*\|\s*(0x[0-9a-fA-F]+)\s*\|")
 
-SIZES = {"u8": 1, "i8": 1, "u16": 2, "i16": 2, "u32": 4, "i32": 4, "f32": 4}
-FMTS = {"u8": "<B", "i8": "<b", "u16": "<H", "i16": "<h",
-        "u32": "<I", "i32": "<i", "f32": "<f"}
+SIZES = {"u8": 1, "i8": 1, "u16": 2, "i16": 2, "u32": 4, "i32": 4, "u64": 8, "f32": 4}
+FMTS = {"u8": "B", "i8": "b", "u16": "H", "i16": "h",
+        "u32": "I", "i32": "i", "u64": "Q", "f32": "f"}
+
+# NAME:TYPExN -- an array of N elements of one of the scalar TYPEs above.
+ARRAY_RE = re.compile(r"^(u8|i8|u16|i16|u32|i32|u64|f32)x(\d+)$")
+
+# Any single shortUpload is capped at this many bytes (XCP_MAX_CTO - 1,
+# Xcp.c) -- stay one below that so the count byte always fits.
+XCP_CHUNK_MAX = 60
 
 
 def load_symbols():
@@ -70,17 +85,33 @@ def parse_target(spec, syms):
                      f"\nIt must be non-static to appear there.{hint}")
         addr = syms[head]
 
+    m = ARRAY_RE.match(typ)
+    if m:
+        base, count = m.group(1), int(m.group(2))
+        nbytes = SIZES[base] * count
+        # No 63-byte cap here: main() reads arrays via short_upload_chunked().
+        return head, addr, typ, nbytes
+
     if typ in ("hex", "str"):
         nbytes = int(parts[2]) if len(parts) > 2 else 16
     elif typ in SIZES:
         nbytes = SIZES[typ]
     else:
-        sys.exit(f"Unknown type '{typ}' (use {' '.join(list(SIZES) + ['hex', 'str'])})")
+        sys.exit(f"Unknown type '{typ}' (use {' '.join(list(SIZES) + ['hex', 'str'])} "
+                 f"or TYPExN for an array)")
 
     if nbytes > 63:
         sys.exit(f"{spec}: {nbytes} bytes exceeds the 63-byte SHORT_UPLOAD limit "
-                 f"(XCP_MAX_CTO - 1). Split it.")
+                 f"(XCP_MAX_CTO - 1). Split it, or use the TYPExN array form.")
     return head, addr, typ, nbytes
+
+
+def render_scalar(val, typ):
+    if typ == "f32":
+        return f"{val:.6g}"
+    if typ.startswith("u"):
+        return f"{val} (0x{val:0{2 * SIZES[typ]}X})"
+    return str(val)
 
 
 def render(raw, typ):
@@ -88,12 +119,40 @@ def render(raw, typ):
         return " ".join(f"{b:02X}" for b in raw)
     if typ == "str":
         return raw.split(b"\x00")[0].decode("ascii", errors="replace")
-    val = struct.unpack(FMTS[typ], raw)[0]
-    if typ == "f32":
-        return f"{val:.6g}"
-    if typ.startswith("u"):
-        return f"{val} (0x{val:0{2 * SIZES[typ]}X})"
-    return str(val)
+
+    m = ARRAY_RE.match(typ)
+    if m:
+        base, count = m.group(1), int(m.group(2))
+        vals = struct.unpack(f"<{count}{FMTS[base]}", raw)
+        return "[" + ", ".join(render_scalar(v, base) for v in vals) + "]"
+
+    val = struct.unpack(f"<{FMTS[typ]}", raw)[0]
+    return render_scalar(val, typ)
+
+
+def short_upload_chunked(x, addr, nbytes, chunk=XCP_CHUNK_MAX):
+    """Read nbytes starting at addr as one or more shortUpload calls, each
+    <= chunk bytes, concatenated in order. Used for anything -- an array read
+    or an explicit hex:hex:LEN -- bigger than one SHORT_UPLOAD can carry.
+    tools/imu_int_stats.py imports this directly to pull g_imuDrdyHist. """
+    out = bytearray()
+    off = 0
+    while off < nbytes:
+        n = min(chunk, nbytes - off)
+        out += bytes(x.shortUpload(n, addr + off, 0))
+        off += n
+    return bytes(out)
+
+
+def connect(host=HOST, port=PORT):
+    """Build and connect a pyXCP Master over UDP. Returned object is a
+    context manager (`with connect() as x:`) exactly like Master itself --
+    tools/imu_int_stats.py uses the same connection recipe as this file. """
+    conf = create_application_from_config({
+        "Transport": {"Eth": {"host": host, "port": port,
+                              "protocol": "UDP", "ipv6": False}},
+    })
+    return Master("eth", config=conf)
 
 
 def main():
@@ -120,18 +179,16 @@ def main():
 
     targets = [parse_target(t, syms) for t in args.targets]
 
-    conf = create_application_from_config({
-        "Transport": {"Eth": {"host": args.host, "port": args.port,
-                              "protocol": "UDP", "ipv6": False}},
-    })
-
-    with Master("eth", config=conf) as x:
+    with connect(args.host, args.port) as x:
         x.connect()
         try:
             while True:
                 cols = []
                 for label, addr, typ, nbytes in targets:
-                    raw = bytes(x.shortUpload(nbytes, addr, 0))
+                    if nbytes > 63:
+                        raw = short_upload_chunked(x, addr, nbytes)
+                    else:
+                        raw = bytes(x.shortUpload(nbytes, addr, 0))
                     cols.append(f"{label}@0x{addr:08X} = {render(raw, typ)}")
                 print(f"[{time.strftime('%H:%M:%S')}] " + "   ".join(cols), flush=True)
                 if args.watch is None:
