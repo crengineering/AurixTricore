@@ -136,7 +136,27 @@ void ImuInt_init(void)
 
     IfxScuEru_disableFallingEdgeDetection(IMU_ERU_IN);
     IfxScuEru_enableRisingEdgeDetection(IMU_ERU_IN);      /* INT1 is active-high pulsed */
-    IfxScuEru_enableAutoClear(IMU_ERU_IN);
+    /* Deliberately NOT IfxScuEru_enableAutoClear(), despite its name and
+     * despite the vendor's own worked example (IfxScuEru.h:89-111) calling
+     * it unconditionally in the same recipe this file otherwise follows.
+     * The bit it writes is EICRn.LDENx = "Level Detection Enable"
+     * (Ifx_SCU_EICR_Bits, Libraries/Infra/Sfr/TC39xB/IfxScu_regdef.h:368) --
+     * the iLLD wrapper's name is a misnomer, not a description. With LDEN
+     * enabled, INTFx tracks the pin LEVEL: set by the enabled edge (here,
+     * rising) and cleared by the OPPOSITE edge (falling) or by software --
+     * it does not self-clear after one edge the way the name suggests. The
+     * OGU's pattern-detection stage below fires on every TRANSITION of
+     * INTFx, so a genuine ~100 us pulse (push-pull, INT_TPULSE_DURATION=0,
+     * docs/ICM42688P.md SS8) sets INTFx on the rising edge (the real
+     * data-ready event) and clears it again ~100 us later on the falling
+     * edge -- two transitions, two interrupts, for one data-ready pulse.
+     * This is exactly the bimodal ~107 us / ~878 us distribution the first
+     * hardware measurement found (SUM = the true ~985 us period,
+     * docs/IMU_INTERRUPT.md SS5.6) before this fix. EIEN
+     * (enableTriggerPulse, below) already generates a genuine one-shot
+     * pulse per edge on its own -- LDEN is for a signal that is genuinely
+     * HELD at a level (e.g. a button), not one that self-terminates.
+     * See docs/ILLD_NOTES.md SS10 for the general finding. */
     IfxScuEru_enableTriggerPulse(IMU_ERU_IN);
     IfxScuEru_connectTrigger(IMU_ERU_IN, IfxScuEru_InputNodePointer_0);   /* -> OGU0 */
 

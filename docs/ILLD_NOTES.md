@@ -338,7 +338,6 @@ unlike `Qspi`/`I2c`, nothing has to be un-excluded.
 void IfxScuEru_initReqPin(IfxScu_Req_In *req, IfxPort_InputMode mode); /* inline */
 void IfxScuEru_enableRisingEdgeDetection (IfxScuEru_InputChannel  ch);
 void IfxScuEru_disableFallingEdgeDetection(IfxScuEru_InputChannel ch);
-void IfxScuEru_enableAutoClear           (IfxScuEru_InputChannel  ch);
 void IfxScuEru_enableTriggerPulse        (IfxScuEru_InputChannel  ch);
 void IfxScuEru_connectTrigger            (IfxScuEru_InputChannel  ch,
                                           IfxScuEru_InputNodePointer trigSel);
@@ -351,6 +350,8 @@ void IfxScuEru_setInterruptGatingPattern (IfxScuEru_OutputChannel out,
 
 Working order is the example in `IfxScuEru.h:89-111`; then
 `IfxSrc_init(&SRC_SCUERU<n>, IfxSrc_Tos_cpuX, srpn)` + `IfxSrc_enable`.
+⚠️ **That vendor example also calls `IfxScuEru_enableAutoClear()`, which is
+wrong for a pulsed signal — see T14. Omitted from the list above on purpose.**
 
 **T10 — only 8 pads on the 516 package reach the ERU, and most are taken.**
 The complete list is `IfxScu_PinMap_TC39xB_516.h:112-128` (18 objects, 8 input
@@ -376,6 +377,30 @@ mux from `req->select` (`Ifx_RxSel_c` for that pin), so do not call
 `IfxScuEru_setInputFilterDepth`/`setInputFilterPredivider` write `SCU_EIFILT`
 for *all* ERU inputs. Enabling it for one signal changes behaviour for every
 future ERU user. Leave it disabled unless a finding forces it.
+
+**T14 — `IfxScuEru_enableAutoClear()` is a misnomer; it does NOT self-clear
+after one edge, and combining it with edge detection double-counts a pulse.**
+The bit it writes is `EICRn.LDENx` = **"Level Detection Enable"**
+(`Ifx_SCU_EICR_Bits`, `Libraries/Infra/Sfr/TC39xB/IfxScu_regdef.h:368` — the
+regdef header, generated from Infineon's own register database, is
+authoritative; the wrapper function name is not). With `LDENx` enabled,
+`INTFx` tracks the pin's **level**: it is *set* by the edge you enabled
+(`RENx`/`FENx`) and *cleared* by the **opposite** edge, or by software
+(`FMR.FCx`) — confirmed against Infineon's community KB article "How to use
+and configure the External Request Unit for AURIX" (no full peripheral UM in
+this repo, `docs/ILLD_NOTES.md` intro). The OGU's pattern-detection stage
+fires on every **transition** of `INTFx`, not only the set. For a signal that
+is genuinely held at a level (a button, say) that is the wanted behaviour —
+one interrupt while it's pressed, roughly. For a **self-terminating pulse**
+(any data-ready line with a finite `INT_TPULSE_DURATION`) it produces **two**
+interrupts per pulse: one on the rising edge (the real event) and a second
+when `INTFx` clears on the falling edge, `TPULSE_DURATION` later. Found on the
+ICM-42688-P INT1 line (`docs/IMU_INTERRUPT.md`): a bimodal ~107 µs / ~878 µs
+interval distribution, the two populations summing to the true ~985 µs sample
+period. `IfxScuEru_enableTriggerPulse()` (`EICRn.EIENx`) already generates a
+genuine one-shot trigger per edge on its own — `LDENx` is not needed for a
+pulsed signal and is actively wrong for one. **For a pulse: `RENx`/`FENx` +
+`EIENx` only, never `LDENx`.**
 
 **Pad note:** a 3.3 V peripheral driving a VEXT (5 V) pad still needs
 `IfxPort_setPinPadDriver(port, pin, IfxPort_PadDriver_ttlSpeed1)` *after*
