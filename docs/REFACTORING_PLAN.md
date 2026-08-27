@@ -1,8 +1,14 @@
 # Refactoring plan — Cpu0_Main.c and the core partition
 
-Status: **design draft for review**. T1-T11 implemented; T12 in progress.
-Branch `feature/refactoring`. **§3 re-costed 2026-08-27** against the measured IMU
+Status: T1-T15 implemented and built (0 errors, 0 warnings; host tests and
+MISRA green); T16 (this paperwork pass) in progress. Branch
+`feature/refactoring`. **§3 re-costed 2026-08-27** against the measured IMU
 data-ready interval (`docs/IMU_INTERRUPT.md` §5.6, D5 closed); T14-T16 added.
+**T15's hardware acceptance (§3.5/T15 row: `execMaxUs`, `loadPmil`,
+`missedEdges`, `NavCovResets`/`NavDropped` over 10 min, the AHRS bench check)
+is NOT YET CONFIRMED on hardware as of this line** — it needs a flash the
+implementer cannot perform; the numbers below stay as specified/estimated
+until that flash reports back. Do not read "implemented" as "hardware-proven".
 Audience: the user (review), then the `flight-dev` agent (implementation).
 
 ---
@@ -343,7 +349,7 @@ at 1 kHz; the alternative is an unbounded-in-practice hole in the control chain.
 | task | rate | typ | worst | core | overrun behaviour |
 |---|---|---|---|---|---|
 | `NavTask_step` — **stage 1, T12** | 50 Hz / 20 ms | ~0.22 ms | **2.0 ms** budget (SPI hard cap 10 ms, `Spi.c:40`) | **CPU1** | as today; nothing else on the core to steal from |
-| `NavTask_step` — **stage 2, T15** | **1014.2 Hz / 985 µs** | **~0.22 ms** | **300 µs budget, 400 µs cap** (SPI deadline cut to 1 ms, T14) | **CPU1** | gated on `newSample`, so an overrun skips at most one *slot*, never a *sample*: the next dispatch consumes the pending edge and fuses it with its **true** `dt` from the ISR timestamp. Two edges missed = one fused step with `dt ≈ 2 ms`, still inside `FUSION_DT_MAX` / `AHRS_DT_MAX_S` (0.2 s). `missedEdges` counted and published; `dt > 0.2 s` freezes the filters rather than integrating garbage |
+| `NavTask_step` — **stage 2, T15 (code landed, hardware pending)** | **1014.2 Hz / 985 µs** | **~0.22 ms** | **300 µs budget, 400 µs cap** (SPI deadline cut to 1 ms, T14) | **CPU1** | gated on `newSample`, so an overrun skips at most one *slot*, never a *sample*: the next dispatch consumes the pending edge and fuses it with its **true** `dt` from the ISR timestamp. Two edges missed = one fused step with `dt ≈ 2 ms`, still inside `FUSION_DT_MAX` / `AHRS_DT_MAX_S` (0.2 s). `missedEdges` counted and published; `dt > 0.2 s` freezes the filters rather than integrating garbage. **The typ/worst columns here are still the §3.2 estimate, not a T15 hardware measurement** — `execMaxUs`/`loadPmil`/`missedEdges`/`NavCovResets`/`NavDropped` need the flash-and-fly pass this document's implementer could not perform (see the Status line) |
 | `imuDrdyIsr` | 1014.2 Hz | ~1 µs | ~1 µs, no branch on data | CPU0 today, **CPU1 from T15** (§3.6) | highest SRPN in the system (106); overrun impossible; the 100 µs pulse width makes chatter-livelock physically impossible (`docs/IMU_INTERRUPT.md` §5.3) |
 | `SensorTask_baro` | 50 Hz | 0.81 ms | **10 ms** (`I2c.c:37`) | CPU0 | delays other CPU0 tasks only; no new baro latch → the DOWN channel coasts on accel + `accelBias` |
 | `SensorTask_mag` | 50 Hz | 0.90 ms | **10 ms** | CPU0 | AHRS degrades to accel+gyro; **yaw becomes unbounded** (`Ahrs.h:15`) — this is the one off-chain failure with a flight consequence, and it is why `PeriphDiag` must stay loud |

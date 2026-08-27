@@ -28,18 +28,23 @@ where it enters.
                                        measurement bias
 ```
 
-Everything runs in `NavTask_step` at 50 Hz on **CPU1**, the dedicated flight
-core (`docs/REFACTORING_PLAN.md` T12) — nothing else is registered on that
-core but a 2 µs LED blink. The barometer, magnetometer and GNSS tasks run on
-CPU0 and **latch** their samples into the shared LMU block
-(`Fusion_setBaroAlt`, `Ahrs_setMag`, `Fusion_setGnss`; backing state in
+Everything runs in `NavTask_step` on **CPU1**, the dedicated flight core
+(`docs/REFACTORING_PLAN.md` T12) — nothing else is registered on that core but
+a 2 µs LED blink. **The rate is 1014.2 Hz, DRDY-clocked, not a fixed 1 kHz**
+(T15, `docs/REFACTORING_PLAN.md` §3.1/§3.6/§9): the IMU's own INT1 edge — timed
+by `imuDrdyIsr`, now on CPU1 too — is the clock, and `NavTask_step` (registered
+at `SCHED_US(500)`, a 2 kHz poll well above the sensor) takes its `dt` from the
+edge timestamps every time, never from a constant or from its own dispatch
+interval. Adopted at ~5x the ~200 Hz the control law actually needs (§9.3),
+justified by anti-aliasing the 244-382 Hz propeller blade-pass band rather
+than by the control law (§9.4) — a fixed 1000 µs would be 1.4 % wrong on a
+normal tick and 100 % wrong across a missed edge. The barometer, magnetometer
+and GNSS tasks run on CPU0 and **latch** their samples into the shared LMU
+block (`Fusion_setBaroAlt`, `Ahrs_setMag`, `Fusion_setGnss`; backing state in
 `FusionLatch.h`/`AhrsLatch.h`, see `docs/CODEMAP.md` §3); `NavTask_step`
 consumes whatever has arrived and publishes the result via `NavState_publish`
 for CPU0 to read with `NavState_get`. That keeps a single writer per state and
-needs no locking. **50 Hz is today's rate, not the final one** — the IMU
-delivers a measured 1014.2 Hz DRDY edge (`docs/IMU_INTERRUPT.md` §5.6) and
-`docs/REFACTORING_PLAN.md` T14/T15 raise `NavTask_step` to that rate in a
-later, separate step; do not describe the rate as 1 kHz until T15 has flown.
+needs no locking.
 
 ### Why a cascade rather than one big EKF
 
@@ -540,19 +545,26 @@ drift away from the estimate that produced it.
 
 `ahrs_calibrate()` restarts its window whenever the gyro spread exceeds 3 °/s.
 With no bound that never completes on a board powered on while moving — in a
-vehicle, on a vibrating bench, in a hand — and `Task_Imu` gates the entire
+vehicle, on a vibrating bench, in a hand — and `NavTask_step` gates the entire
 navigation filter on `AHRS_RUNNING`: no attitude, no position, no velocity,
 indefinitely, with nothing saying why.
 
-There is now a 500-sample (10 s) deadline. A bias averaged over a moving window
-is worse than one averaged over a still window, and enormously better than no
-estimate at all; the Mahony integral converges the remainder within seconds once
-the accelerometer and magnetometer start correcting. The degraded result is
-flagged, not hidden: `ahrsBiasDegraded` (`0xBC`) says the calibration was taken
-while the board was moving. It also divides by the samples actually accumulated
-rather than the nominal 100, because at the deadline the window is usually
-partial and dividing by 100 regardless would scale the bias toward zero and make
-it look deceptively good.
+There is now a 10 s deadline, and a 2 s still-window to accept a clean bias
+before it. Both are **durations accumulated from `dt`**, not sample counts
+(T14, `docs/REFACTORING_PLAN.md` §3.8) — a count sized "100 samples, ~2 s at
+50 Hz" would silently become ~0.1 s of averaging the moment the task rate
+changed, 20x less noise rejection on the one number the whole attitude
+solution rests on. Accumulating `dt` instead means the same 2 s/10 s at any
+rate this task ever runs at, past (50 Hz) or present (1014.2 Hz). A bias
+averaged over a moving window is worse than one averaged over a still window,
+and enormously better than no estimate at all; the Mahony integral converges
+the remainder within seconds once the accelerometer and magnetometer start
+correcting. The degraded result is flagged, not hidden: `ahrsBiasDegraded`
+(`0xBC`) says the calibration was taken while the board was moving. It also
+divides by the samples actually accumulated rather than a nominal count,
+because at the deadline the window is usually partial and dividing by a fixed
+number regardless would scale the bias toward zero and make it look
+deceptively good.
 
 ---
 

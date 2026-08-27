@@ -16,8 +16,8 @@ Verify before relying on a claim here. If you find drift, fix the line.
 
 | Subsystem | Files | Notes |
 |---|---|---|
-| Core entry | `Cpu0_Main.c` … `Cpu5_Main.c` | **CPU1 is the flight core** (`NavTask_step`, T12); CPU0 does comms + sensors + housekeeping; **CPU2–5 idle** |
-| Scheduling | `scheduler.c/.h` | cooperative, `SCHEDULER_MAX_TASKS 8` per core |
+| Core entry | `Cpu0_Main.c` … `Cpu5_Main.c` | **CPU1 is the flight core** (`NavTask_step`, T12), clocked at the IMU's own **1014.2 Hz DRDY edge** (T15, `docs/REFACTORING_PLAN.md` §3.6/§9) — never 1 kHz fixed, `dt` per tick; CPU0 does comms + sensors + housekeeping; **CPU2–5 idle** |
+| Scheduling | `scheduler.c/.h` | cooperative, `SCHEDULER_MAX_TASKS 12` per core |
 | Timing | `SysTime.c` | BSW time service (ASW must use this, not iLLD) |
 | XCP slave | `Xcp.c` | UDP 5555: poll, cal writes, DAQ |
 | Measurements | `Measurements.c/.h` | **`Xcp_Data` @ `0x70030000`** — offset map in the header |
@@ -203,9 +203,10 @@ crossing `0xB00F0060 + 256` — the same spacing convention as the XCP blocks
 above. Confirmed non-overlapping via the `.map` file, the same check T9/T10
 used for `g_navState`.
 
-`g_imuEdge` (T15, §3.6) is the fourth crossing and the odd one out: writer and
-reader (`NavTask_step`) end up on the SAME core once the DRDY ISR retargets to
-CPU1, so it is not a cache-coherency crossing at all — it is placed here
+`g_imuEdge` (T15, §3.6) is the fourth crossing and the odd one out: writer
+(`imuDrdyIsr`) and reader (`NavTask_step`) are on the SAME core, both CPU1,
+since the DRDY ISR retargeted there in T15 — so it is not a cache-coherency
+crossing at all — it is placed here
 anyway because it is the same "must never see a torn combination of two
 fields written together" problem the ISR and the task race on, and reusing
 the one audited protocol beats inventing a second for an ISR/task boundary.

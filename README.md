@@ -8,7 +8,7 @@ A flight-controller platform: an Ethernet-attached measurement and calibration
 target that reads inertial, barometric, magnetic and GNSS sensors, monitors its
 own health, and exposes all of it live over **XCP-on-UDP** to a PC GUI.
 
-**Firmware version: v1.19.11** (`src/bsw/Version.h`) · Hardware-validated on the
+**Firmware version: v1.19.12** (`src/bsw/Version.h`) · Hardware-validated on the
 bench.
 
 ### Companion repositories
