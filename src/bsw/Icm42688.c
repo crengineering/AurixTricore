@@ -92,9 +92,15 @@
 #define ICM42688_RESET_MS            (10u)
 #define ICM42688_WAKE_MS             (10u)
 
-/* Hot-plug recovery: retry this often (calls, i.e. 50 per second from the
- * 20 ms IMU task) while the device is missing. */
-#define ICM42688_RECOVERY_PERIOD     (50u)     /* ~1 s */
+/* Hot-plug recovery: retry this often, in CALLS, while the device is missing.
+ * Was "50 per second, ~1 s" at the 20 ms IMU task (T13 and earlier); T15
+ * (docs/REFACTORING_PLAN.md §3.6) gates NavTask_step's call to this function
+ * on a pending DRDY edge, but a genuinely absent sensor produces none, so the
+ * fallback there still calls this every ~500 us poll while absent -- 50 calls
+ * is now ~25 ms, not ~1 s. Faster recovery, not a regression: this constant
+ * only bounds how OFTEN the (cheap, single-byte) probe fires, never how much
+ * it costs. */
+#define ICM42688_RECOVERY_PERIOD     (50u)
 
 static boolean s_icm42688Present = FALSE;
 

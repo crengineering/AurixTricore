@@ -12,9 +12,17 @@
  * is never configured as an output by this file, at init or in the ISR.
  *
  * The ISR times edges and bins the interval; it does not read the IMU over
- * SPI and does not decide anything about the flight chain. NavTask_step
- * keeps sampling on its own schedule -- see docs/IMU_INTERRUPT.md SS5.4 for
- * why this stays a measurement, not a clock, for now.
+ * SPI and does not decide anything about the flight chain -- see
+ * docs/IMU_INTERRUPT.md SS5.4 for why the SPI burst stays in task context.
+ *
+ * T15 (docs/REFACTORING_PLAN.md §3.6): the ISR now IS NavTask_step's clock.
+ * It moved to CPU1 (IFX_INTERRUPT's vectabNum and IfxSrc_init()'s
+ * isrProvider in ImuInt.c) and publishes {ticks, seq} into the LMU shared
+ * block (ImuEdge.h) every edge; NavTask_step polls at SCHED_US(500), well
+ * above the ~1014 Hz DRDY rate, and only does the SPI burst/AHRS/fusion work
+ * when ImuEdge_snapshot() shows a seq it has not consumed yet -- ~1014 Hz in
+ * practice, not the poll rate. The globals below are unaffected: they stay
+ * bring-up diagnostics, still written from this same ISR.
  *
  * All of the state below is a plain, non-static global on purpose: it is
  * read by tools/xcp_read.py (SHORT_UPLOAD works on any global in the map --

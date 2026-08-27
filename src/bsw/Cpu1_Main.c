@@ -91,9 +91,17 @@ void core1_main(void)
     BringUp_dumpImu();     /* one-time ICM-42688-P register dump -- see BringUp.h */
     NavTask_init();         /* NavState_init, FusionCal_init, Ahrs_init, Fusion_init */
 
+    /* T15 (docs/REFACTORING_PLAN.md §3.6): NavTask_step registered FIRST and
+     * at SCHED_US(500) -- Scheduler_run() dispatches in registration order
+     * (scheduler.c), and at a ~985 us sensor period a task ahead of the
+     * flight chain is no longer merely harmless the way it was at 20 ms, so
+     * this ordering is now part of the contract for anything else ever added
+     * to this core. NavTask_step itself gates on a pending DRDY edge (or a
+     * timeout, NavTask.c) and returns almost immediately otherwise, so the
+     * 2 kHz poll rate is not the actual work rate -- see NavTask.h. */
     Scheduler_init(&g_sched, &MODULE_STM1, 1u);
+    (void)Scheduler_addTask(&g_sched, NavTask_step, SCHED_US(500u));
     Scheduler_addTask(&g_sched, Task_LedToggle, SCHED_MS(500u));
-    (void)Scheduler_addTask(&g_sched, NavTask_step, SCHED_MS(20u));  /* 50 Hz IMU (QSPI0) */
 
     while (TRUE)
     {

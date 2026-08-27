@@ -42,6 +42,10 @@ boolean Icm42688_plausible(const Icm42688_Sample *sample, float32 *liveness)
 volatile uint32 g_imuDrdyStaleTicks;
 volatile uint32 g_imuDrdyLastTicks;
 
+/* T14: reserved, wired in T15 (ImuInt.h) -- NavTask.c's missed-edge counting
+ * (T15) references it directly, so it needs the same link-only stub. */
+volatile uint32 g_imuDrdyMissedEdges;
+
 /* T12, docs/REFACTORING_PLAN.md 3.7: NavTask_step no longer calls
  * measurementsSetImu()/PeriphDiag_report() at all -- both moved to
  * Housekeeping_100ms (CPU0), reading the raw sample + accumulated liveness

@@ -39,8 +39,10 @@
  * parse error and trips on a second one in the same file
  * (Measurements.c:28-36). SharedRam.c therefore holds ONLY the `__at()`
  * definitions for objects placed at SHARED_LMU_ADDR and nothing else -- no
- * logic. A later object that also needs `__at()` here (NavState, T10) gets
- * its OWN .c file for the same reason, at its own fixed offset in this block.
+ * logic. A later object that also needs `__at()` here (NavState, T10; the
+ * three input latches and the DRDY edge handoff, T12/T15) gets its OWN .c
+ * file for the same reason, at its own fixed offset in this block -- see
+ * docs/CODEMAP.md §3 for the full occupant list and their addresses.
  *
  * Rules for anything placed in this block, restated from §2.4 (all four
  * planned crossings, not just this one):

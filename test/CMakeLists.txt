@@ -139,6 +139,20 @@ target_link_libraries(test_imuint PRIVATE unity test_common)
 add_test(NAME imuint COMMAND test_imuint)
 
 #[[
+ImuEdge (T15, docs/REFACTORING_PLAN.md §3.6): the ISR->NavTask_step edge
+handoff protocol. ImuEdge_snapshot() is pure and iLLD-free (Ifx_Types.h only,
+same static-inline-in-the-header idiom as ImuInt_accumulate() above); only
+g_imuEdge's __at() placement (ImuEdgePlace.c) needs the tasking_shim
+treatment already set up for it above (test_navtask target).
+]]
+add_executable(test_imuedge
+    test_imuedge.c
+    ${BSW}/ImuEdgePlace.c
+)
+target_link_libraries(test_imuedge PRIVATE unity test_common)
+add_test(NAME imuedge COMMAND test_imuedge)
+
+#[[
 NavState (T10, docs/REFACTORING_PLAN.md §2.4/§4): the generation-counter
 publish/get protocol, still unwired to anything real. g_navState's __at()
 placement now lives in its own translation unit, NavStatePlace.c (split out
@@ -173,13 +187,22 @@ test_navtask.c itself, purely to satisfy the linker. NavTask.c gained a
 g_imuDrdyStaleTicks/g_imuDrdyLastTicks reference in I5 (docs/IMU_INTERRUPT.md)
 -- ImuInt.h's declarations are iLLD-free and included fine, but the real
 storage is in ImuInt.c, which pulls in ERU/SRC/Port headers with no host
-fakes, so those two globals are stubbed directly in test_navtask.c instead,
-same treatment as the other target-only symbols there.
+fakes, so those two globals (plus g_imuDrdyMissedEdges, T14) are stubbed
+directly in test_navtask.c instead, same treatment as the other target-only
+symbols there. T15 added a REAL dependency instead of a stub: ImuEdge.h's
+g_imuEdge is genuinely iLLD-free (Ifx_Types.h only) and ImuEdge_snapshot() is
+the same static-inline-in-the-header idiom as ImuInt_accumulate() -- only its
+__at() placement (ImuEdgePlace.c) needs the tasking_shim treatment, same as
+NavStatePlace.c below.
 ]]
+set_source_files_properties(${BSW}/ImuEdgePlace.c PROPERTIES
+    COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/fakes/tasking_shim.h")
+
 add_executable(test_navtask
     test_navtask.c
     ${BSW}/NavState.c
     ${BSW}/NavStatePlace.c
+    ${BSW}/ImuEdgePlace.c
     ${BSW}/SysTime.c
     fakes/IfxStm.c
 )

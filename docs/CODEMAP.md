@@ -193,6 +193,7 @@ second one in the same translation unit — see `SharedRam.h`). Occupants so far
 | `g_baroLatch` | CPU0 (`SensorTask_baro`) | `0xB00F0200`, 24 bytes | `FusionLatch.h` / `FusionLatchPlace.c` |
 | `g_gnssLatch` | CPU0 (`SensorTask_gnss`) | `0xB00F0300`, 40 bytes | `FusionLatch.h` / `FusionLatchPlace.c` |
 | `g_magLatch` | CPU0 (`SensorTask_mag`) | `0xB00F0400`, 24 bytes | `AhrsLatch.h` / `AhrsLatchPlace.c` |
+| `g_imuEdge` | CPU1 (`imuDrdyIsr`) | `0xB00F0500`, 8 bytes | `ImuEdge.h` / `ImuEdgePlace.c` |
 
 The three latches (T12) are the "three input latches" of §2.4/§2.3 — moved off
 plain statics that a CPU0 writer and a CPU1 reader shared with no protocol.
@@ -201,6 +202,13 @@ size, so a `NavState_t` growth cannot silently reach one without first
 crossing `0xB00F0060 + 256` — the same spacing convention as the XCP blocks
 above. Confirmed non-overlapping via the `.map` file, the same check T9/T10
 used for `g_navState`.
+
+`g_imuEdge` (T15, §3.6) is the fourth crossing and the odd one out: writer and
+reader (`NavTask_step`) end up on the SAME core once the DRDY ISR retargets to
+CPU1, so it is not a cache-coherency crossing at all — it is placed here
+anyway because it is the same "must never see a torn combination of two
+fields written together" problem the ISR and the task race on, and reusing
+the one audited protocol beats inventing a second for an ISR/task boundary.
 
 **When a block fills, take the next free slot rather than re-spacing the map.**
 That is what `Xcp_Fusion` did on 2026-08-26: the navigation state needed 188

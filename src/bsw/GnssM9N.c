@@ -679,7 +679,17 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
 
                     if (g_len >= (g_ubx_payload_len + 6u))
                     {
-                        if (gnss_ubx_decode(g_buffer, g_len, g_ubx_payload_len, &g_nav) != TRUE)
+                        /* g_ubx_payload_len is uint16 (ubx_rd_u16, above) but
+                         * bounded to <= GNSS_UBX_MAX_RX_PAYLOAD (94) on every
+                         * path that reaches this call: g_len is uint8 and the
+                         * guard above requires g_len >= payload_len + 6, so a
+                         * payload_len this call ever sees cannot exceed
+                         * g_len's own max (GNSSM9N_BUFFER_SIZE). Explicit cast
+                         * -- found while an unrelated header touch forced
+                         * this file's first rebuild in a while and surfaced
+                         * the implicit-truncation warning; not part of any
+                         * planned change here. */
+                        if (gnss_ubx_decode(g_buffer, g_len, (uint8)g_ubx_payload_len, &g_nav) != TRUE)
                         {
                             g_errors++;
                         }

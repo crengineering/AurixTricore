@@ -14,6 +14,8 @@
  * touches only STM0 and this module's own globals, never a GPIO register.
  *********************************************************************************************************************/
 #include "ImuInt.h"
+#include "ImuEdge.h"
+#include "SharedRam.h"
 #include "SysTime.h"
 #include "ConfigurationIsr.h"
 #include "IfxPort.h"
@@ -63,8 +65,18 @@ void imuDrdyIsr(void);
 
 /* cppcheck-suppress misra-c2012-17.3 ; deviation: IFX_INTERRUPT is a vendor
  * macro that emits the vector-table entry; the handler is prototyped
- * immediately above. */
-IFX_INTERRUPT(imuDrdyIsr, 0, ISR_PRIORITY_IMU_DRDY);
+ * immediately above.
+ *
+ * T15 (docs/REFACTORING_PLAN.md §3.6): retargeted from CPU0 to CPU1, the
+ * flight core, alongside NavTask_step -- the whole point of the edge
+ * timestamp is to source NavTask_step's dt without task-dispatch jitter, and
+ * that only holds if the ISR and the task it feeds sit on the same core's
+ * time base. vectabNum (this `1`, LINK-TIME: which core's vector table,
+ * int_tab_tc1) MUST equal IfxSrc_init()'s isrProvider (RUN-TIME, below) --
+ * see the ImuInt_init() comment and docs/ILLD_NOTES.md §3 T15 for the trap
+ * this is: getting the two out of sync hangs CPU1 with no build error and no
+ * timeout, because a trap does not unwind through a C busy-wait. */
+IFX_INTERRUPT(imuDrdyIsr, 1, ISR_PRIORITY_IMU_DRDY);
 
 /* cppcheck-suppress misra-c2012-8.7 ; deviation: referenced by the interrupt
  * vector table, not by C code; static would break the vector entry. */
@@ -80,6 +92,19 @@ void imuDrdyIsr(void)
 
     g_imuDrdyLastTicks = now;
     g_imuDrdyCount++;
+
+    /* T15: the producer side of the ISR->NavTask_step handoff (ImuEdge.h).
+     * Payload (`ticks`) first, THEN the barrier, THEN `seq` -- the same
+     * store-barrier-publish order as every other object in the LMU block
+     * (SharedRam.h rule 3), even though this particular pair now shares a
+     * core with its one reader: it is still an ISR racing a task, and this
+     * is the one audited protocol for that shape of race in this tree. */
+    g_imuEdge.ticks = now;
+    /* cppcheck-suppress misra-c2012-17.3 ; deviation: Ifx__dsync() wraps
+     * TASKING's __dsync() intrinsic, which has no declaration anywhere
+     * cppcheck can see (SharedRam.h). */
+    Ifx__dsync();
+    g_imuEdge.seq = g_imuEdge.seq + 1u;
 
     if (g_imuDrdyCount > 1u)   /* the first edge has no valid dt */
     {
@@ -152,6 +177,16 @@ void ImuInt_init(void)
 
     g_imuDrdyMissedEdges = 0u;
 
+    /* T15: zero the ISR->NavTask_step handoff too. Payload then seq, same
+     * discipline as the ISR's own write (SharedRam.h rule 3) -- safe by
+     * construction here (single-threaded boot, before the scheduler starts),
+     * not by synchronisation, same reasoning Fusion_init()/Ahrs_init() give
+     * for zeroing their own latches. */
+    g_imuEdge.ticks = 0u;
+    /* cppcheck-suppress misra-c2012-17.3 ; deviation: see the ISR above. */
+    Ifx__dsync();
+    g_imuEdge.seq   = 0u;
+
     /* ERU wiring, docs/IMU_INTERRUPT.md SS4. IfxScuEru_initReqPin() only ever
      * sets a pin to INPUT (see IfxScuEru.h) -- additive to, never a
      * replacement of, BringUp_initImuIntPinSafe()'s pulldown/TTL state. The
@@ -195,7 +230,16 @@ void ImuInt_init(void)
      * vendor SFR macro backed by a union (Ifx_SRC_SRCR, IfxSrc_reg.h) -- this
      * fires on every iLLD register access of this shape project-wide
      * (docs/ILLD_NOTES.md), not something this file can fix. */
-    IfxSrc_init(&SRC_SCUERU0, IfxSrc_Tos_cpu0, ISR_PRIORITY_IMU_DRDY);
+    /* T15: isrProvider = cpu1, matching IFX_INTERRUPT(imuDrdyIsr, 1, ...)
+     * above -- see that macro's comment and docs/ILLD_NOTES.md §3 T15. This
+     * call itself still runs on CPU0 (ImuInt_init() is still called from
+     * core0_main, unchanged): IfxSrc_init() only writes a routing register
+     * and does not care which core executes the write, only what value ends
+     * up in it, so there is no need to relocate the call to CPU1 the way
+     * Spi_init() was in T12 -- that move was about keeping driver init
+     * together with its peripheral's owning core, not a requirement of this
+     * register. */
+    IfxSrc_init(&SRC_SCUERU0, IfxSrc_Tos_cpu1, ISR_PRIORITY_IMU_DRDY);
     IfxSrc_enable(&SRC_SCUERU0);
     /* cppcheck-suppress-end misra-c2012-19.2 */
 }

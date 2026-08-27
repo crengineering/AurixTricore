@@ -26,7 +26,10 @@
 void NavTask_init(void);
 
 /** The flight chain, one tick: IMU read, AHRS update, fusion update,
- *  NavState_publish. Registered at 20 ms. */
+ *  NavState_publish. Registered at SCHED_US(500) (T15) -- a 2 kHz poll well
+ *  above the sensor's measured ~1014.2 Hz DRDY rate; the body returns almost
+ *  immediately unless a new edge (or a timeout, see NavTask.c) is pending, so
+ *  the actual work rate tracks the sensor, not the poll period. */
 void NavTask_step(void);
 
 /** Whether this tick's inputs are trustworthy enough to feed the fusion
