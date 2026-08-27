@@ -12,11 +12,22 @@
 
 #include "Ifx_Types.h"
 
-/** Dump the BMP581, MMC5983MA and ICM-42688-P configuration/status registers
- *  plus one raw measurement burst each, over Uart_print/Uart_println. Call
- *  once at boot, after each sensor's init has run — see the per-device
- *  comments in BringUp.c for how to read the output. */
-void BringUp_dumpSensors(void);
+/** Dump the BMP581 and MMC5983MA configuration/status registers plus one raw
+ *  measurement burst each, over Uart_print/Uart_println. Call once at boot,
+ *  after each sensor's init has run — see the per-device comments in
+ *  BringUp.c for how to read the output.
+ *  CPU0 only: both sensors are on I2C0, which core0_main() owns. */
+void BringUp_dumpI2cSensors(void);
+
+/** Dump the ICM-42688-P configuration/status registers plus one raw
+ *  measurement burst, same as BringUp_dumpI2cSensors() above but split out
+ *  (T12, docs/REFACTORING_PLAN.md): the ICM-42688-P is on QSPI0, which moves
+ *  to CPU1 with Spi_init()/Icm42688_init() -- reading it from CPU0 after that
+ *  would be a second core driving the same bus Spi_transfer()'s own core
+ *  assumes it owns, racing NavTask_step's transfers instead of merely
+ *  reading stale state the way the LMU crossings do. Call once at boot on
+ *  CPU1, after Icm42688_init() has run there. */
+void BringUp_dumpImu(void);
 
 /** Permanent, explicit safety configuration for P10.7 -- the ICM-42688-P
  *  INT1 candidate pin (docs/IMU_INTERRUPT.md). Configures it as an input

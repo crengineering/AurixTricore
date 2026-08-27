@@ -78,6 +78,14 @@ static void i2c_note(i2c_XferResult res, uint8 busStatus)
 static i2c_XferResult i2c_xferWrite(uint16 devAddr8, const uint8 *data, uint16 len);
 static i2c_XferResult i2c_xferRead(uint16 devAddr8, uint8 *data, uint16 len);
 
+/* MODULE_STM0 note (T12, docs/REFACTORING_PLAN.md Risk 3): every I2c.c
+ * timeout/delay below reads MODULE_STM0, same as Spi.c and SysTime.c. Unlike
+ * those two, this one is NOT actually cross-core after T12: I2c_init() and
+ * every caller (Bmp581/Mmc5983 via SensorTask_baro/SensorTask_mag,
+ * PeriphDiag_update via Housekeeping_100ms) still run on CPU0, the same
+ * core that owns MODULE_STM0. Documented here anyway, alongside the two
+ * genuine exceptions, so nobody "fixes" this to MODULE_STM0 assuming it was
+ * cross-core when the I2C bus itself never left CPU0. */
 static void i2c_halfBitDelay(void)
 {
     IfxStm_waitTicks(&MODULE_STM0, I2C_RECOVERY_HALF_TICKS);

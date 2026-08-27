@@ -5,6 +5,8 @@
 #include "Ahrs.h"
 #include "Nvm.h"
 #include "FusionCal.h"
+#include "AhrsLatch.h"
+#include "SharedRam.h"
 #include <math.h>
 
 /* --- tuning -------------------------------------------------------------- */
@@ -173,6 +175,10 @@ static boolean s_biasDegraded;  /* deadline hit before a clean window */
  * fusion.c and src/asw/CtrlReplay.c each had their own s_state. */
 static Ahrs_State s_ahrsState;
 
+/* CPU1-side cache of the last CONSUMED magnetometer sample, refreshed from
+ * g_magLatch (AhrsLatch.h) at the top of every Ahrs_update() call -- see
+ * ahrs_refreshMag() below. Ahrs_setMag() (CPU0) no longer writes these
+ * directly, same T12 discipline as fusion.c's baro/GNSS latches. */
 static float32 s_magB[3];          /* latched sample, BODY frame, corrected   */
 static float32 s_magNorm;
 
@@ -271,6 +277,22 @@ void Ahrs_init(void)
     s_biasDegraded = FALSE;
     s_ahrsState    = AHRS_CALIBRATING;
     s_magNorm  = 0.0f;
+
+    /* g_magLatch (AhrsLatch.h): the PRODUCER's state, zeroed here even though
+     * Ahrs_init() runs on CPU1 (via NavTask_init, T12) -- safe by
+     * construction, not synchronisation, for the same reason Fusion_init()
+     * zeroing g_baroLatch/g_gnssLatch is safe: SensorTask_mag (the only
+     * writer) does not run until CPU0's own Scheduler_run() loop starts,
+     * strictly after CPU1 has already reached this point in its own, much
+     * shorter boot sequence (see fusion.c Fusion_init() for the full
+     * argument). */
+    for (i = 0u; i < 3u; i++)
+    {
+        g_magLatch.magB[i] = 0.0f;
+    }
+    g_magLatch.magNorm  = 0.0f;
+    g_magLatch.reserved = 0u;
+    g_magLatch.gen      = 0u;
 }
 
 /* Average the gyro while the board is still; motion restarts the window. */
@@ -506,12 +528,50 @@ static void ahrs_errorVector(const float32 accBody[3], float32 accNorm,
     }
 }
 
+/* Read one consistent snapshot of g_magLatch into s_magB/s_magNorm. CPU1
+ * (the consumer) ONLY -- same protocol as NavState_get()/
+ * baroLatch_get()/gnssLatch_get() (fusion.c): read gen, copy the payload,
+ * re-read gen; one retry on a mismatch, then give up and leave s_magB/
+ * s_magNorm exactly as they were (the last consumed sample), rather than a
+ * torn mix of old and new. Unlike the baro/GNSS latches there is no
+ * "already consumed this gen" check: this latch is LEVEL-triggered, so every
+ * Ahrs_update() tick re-applies whatever the latch currently holds, exactly
+ * as the original single-core code did with no "new sample" concept at all. */
+static void ahrs_refreshMag(void)
+{
+    uint8   attempt;
+    boolean ok = FALSE;
+
+    for (attempt = 0u; (attempt < 2u) && (ok == FALSE); attempt++)
+    {
+        uint32  genBefore = g_magLatch.gen;
+        float32 magB[3];
+        float32 magNorm;
+
+        magB[0] = g_magLatch.magB[0];
+        magB[1] = g_magLatch.magB[1];
+        magB[2] = g_magLatch.magB[2];
+        magNorm = g_magLatch.magNorm;
+
+        if (g_magLatch.gen == genBefore)
+        {
+            s_magB[0] = magB[0];
+            s_magB[1] = magB[1];
+            s_magB[2] = magB[2];
+            s_magNorm = magNorm;
+            ok = TRUE;
+        }
+    }
+}
+
 void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
                  float32 dt, boolean valid)
 {
     boolean accUsed = FALSE;
     boolean magUsed = FALSE;
     uint8   i;
+
+    ahrs_refreshMag();
 
     if ((valid == FALSE) || (dt <= AHRS_DT_MIN_S) || (dt >= AHRS_DT_MAX_S))
     {
@@ -782,6 +842,12 @@ void Ahrs_nedToBody(const float32 vNed[3], float32 vBody[3])
     ahrs_nedToBody(vNed, vBody);
 }
 
+/* CPU0 ONLY (SensorTask_mag). Writes g_magLatch (AhrsLatch.h): payload ->
+ * Ifx__dsync() -> gen++, same discipline as every other shared object
+ * (SharedRam.h rule 3) -- applied on BOTH branches here, even though this
+ * latch is level-triggered rather than one-shot, so the reader's torn-read
+ * retry (ahrsMagLatch_get(), below) is meaningful for every write, not only
+ * some of them. */
 void Ahrs_setMag(const float32 mag[3], boolean valid)
 {
     if (valid != FALSE)
@@ -794,20 +860,30 @@ void Ahrs_setMag(const float32 mag[3], boolean valid)
         const float32 sy = (g_xcpNvm.magScaleY > 0.0f) ? g_xcpNvm.magScaleY : 1.0f;
         const float32 sz = (g_xcpNvm.magScaleZ > 0.0f) ? g_xcpNvm.magScaleZ : 1.0f;
         float32 corrected[3];
+        float32 bodyMag[3];
 
         corrected[0] = (mag[0] - g_xcpNvm.magOffX) * sx;
         corrected[1] = (mag[1] - g_xcpNvm.magOffY) * sy;
         corrected[2] = (mag[2] - g_xcpNvm.magOffZ) * sz;
 
-        ahrs_mountMag(corrected, s_magB);
+        ahrs_mountMag(corrected, bodyMag);
 
-        s_magNorm = sqrtf((s_magB[0] * s_magB[0]) + (s_magB[1] * s_magB[1])
-                        + (s_magB[2] * s_magB[2]));
+        g_magLatch.magB[0] = bodyMag[0];
+        g_magLatch.magB[1] = bodyMag[1];
+        g_magLatch.magB[2] = bodyMag[2];
+        g_magLatch.magNorm = sqrtf((bodyMag[0] * bodyMag[0]) + (bodyMag[1] * bodyMag[1])
+                                  + (bodyMag[2] * bodyMag[2]));
     }
     else
     {
         /* Stop trusting a field we are no longer receiving: leaving the last
          * sample latched would let a dead magnetometer keep steering yaw. */
-        s_magNorm = 0.0f;
+        g_magLatch.magNorm = 0.0f;
     }
+
+    /* cppcheck-suppress misra-c2012-17.3 ; deviation: Ifx__dsync() wraps
+     * TASKING's __dsync() intrinsic, which has no declaration anywhere
+     * cppcheck can see (SharedRam.h). */
+    Ifx__dsync();
+    g_magLatch.gen = g_magLatch.gen + 1u;
 }

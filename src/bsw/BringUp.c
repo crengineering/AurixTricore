@@ -131,10 +131,14 @@ static void icm42688DebugDump(void)
     }
 }
 
-void BringUp_dumpSensors(void)
+void BringUp_dumpI2cSensors(void)
 {
     bmp581DebugDump();
     mmc5983DebugDump();
+}
+
+void BringUp_dumpImu(void)
+{
     icm42688DebugDump();
 }
 

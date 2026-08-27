@@ -4,6 +4,8 @@
  *********************************************************************************************************************/
 #include "fusion.h"
 #include "FusionCal.h"
+#include "FusionLatch.h"
+#include "SharedRam.h"
 #include <math.h>
 
 /* --- tuning: vertical channel -------------------------------------------- */
@@ -211,20 +213,33 @@ static Fusion_Chan s_chE;       /* east  */
 /* s_navState, not s_state -- see the note in Ahrs.c (MISRA 5.9). */
 static FusionValues s_navState;
 
-/* latched barometer sample */
+/* CPU1-side cache of the last CONSUMED barometer/GNSS sample, refreshed from
+ * g_baroLatch/g_gnssLatch (FusionLatch.h) inside Fusion_update(). The setters
+ * (Fusion_setBaroAlt/Fusion_setGnss, called from CPU0) no longer write these
+ * directly -- see baroLatch_get()/gnssLatch_get() below and
+ * docs/REFACTORING_PLAN.md 2.4/T12. s_baroLastGen/s_gnssLastGen are the
+ * consumer's OWN bookkeeping of "have I fused this generation yet"; they are
+ * never shared and never written by the producer, which is what fixes the
+ * old s_baroNew/s_gnssNew two-writer bug (the producer set it, the consumer
+ * cleared it -- two cores writing the same word). */
 static float32 s_baroAlt;
-static boolean s_baroNew;
 static float32 s_baroRef;
-static boolean s_baroRefOk;
+static uint32  s_baroLastGen;
 
-/* latched GNSS fix */
 static sint32  s_gnssLat;
 static sint32  s_gnssLon;
 static float32 s_gnssAlt;
 static float32 s_gnssSpeed;
 static float32 s_gnssHeading;
 static float32 s_gnssHAcc;
-static boolean s_gnssNew;
+static uint32  s_gnssLastGen;
+
+/* GNSS duplicate-of-the-last-fix guard. Read and written ONLY by
+ * Fusion_setGnss() (CPU0), never by the consumer, so -- unlike the fields
+ * above -- these carry no cross-core visibility requirement and stay plain
+ * statics rather than moving into g_gnssLatch (FusionLatch.h). */
+static uint32  s_lastITow;
+static boolean s_haveITow;
 
 /* tangent-plane origin */
 static sint32  s_originLat;
@@ -233,8 +248,6 @@ static float32 s_originAlt;
 static float32 s_originAltOffset;   /* d at the instant the origin was set */
 static float32 s_mPerDegLon;
 static boolean s_originOk;
-static uint32  s_lastITow;
-static boolean s_haveITow;
 
 /* Put the covariance back to its initial value, off-diagonals included.
  *
@@ -575,10 +588,9 @@ void Fusion_init(void)
     fusion_chanInit(&s_chE, &g_fusionCal.sigmaAccH, FUSION_SIGMA_A_H,
                     NULL_PTR, 0.0f);
 
-    s_baroAlt   = 0.0f;
-    s_baroNew   = FALSE;
-    s_baroRef   = 0.0f;
-    s_baroRefOk = FALSE;
+    s_baroAlt     = 0.0f;
+    s_baroRef     = 0.0f;
+    s_baroLastGen = 0u;
 
     s_gnssLat     = 0;
     s_gnssLon     = 0;
@@ -586,7 +598,34 @@ void Fusion_init(void)
     s_gnssSpeed   = 0.0f;
     s_gnssHeading = 0.0f;
     s_gnssHAcc    = 0.0f;
-    s_gnssNew     = FALSE;
+    s_gnssLastGen = 0u;
+
+    /* g_baroLatch/g_gnssLatch (FusionLatch.h): the PRODUCER's state, zeroed
+     * here even though Fusion_init() itself runs on CPU1 (via NavTask_init,
+     * T12). Safe by construction, not by synchronisation: SensorTask_baro/
+     * SensorTask_gnss (the only writers) do not run until CPU0's own
+     * Scheduler_run() loop starts, which is the LAST thing core0_main() does
+     * -- strictly after CPU1 has already reached this point in its own,
+     * much shorter boot sequence. There is no concurrent access at boot,
+     * just two sequential writes in real time, so no barrier is needed for
+     * THIS store; Ifx__dsync() still guards every ONGOING publish below. */
+    g_baroLatch.gen          = 0u;
+    g_baroLatch.altM         = 0.0f;
+    g_baroLatch.refM         = 0.0f;
+    g_baroLatch.refOk        = 0u;
+    g_baroLatch.droppedCount = 0u;
+    g_baroLatch.reserved     = 0u;
+
+    g_gnssLatch.gen          = 0u;
+    g_gnssLatch.lat          = 0;
+    g_gnssLatch.lon          = 0;
+    g_gnssLatch.altM         = 0.0f;
+    g_gnssLatch.speedMps     = 0.0f;
+    g_gnssLatch.headingDeg   = 0.0f;
+    g_gnssLatch.hAccM        = 0.0f;
+    g_gnssLatch.iTOW         = 0u;
+    g_gnssLatch.droppedCount = 0u;
+    g_gnssLatch.dupesCount   = 0u;
 
     s_originLat       = 0;
     s_originLon       = 0;
@@ -672,6 +711,63 @@ static float32 fusion_clampAcc(float32 a)
     }
 
     return v;
+}
+
+/* Read one consistent snapshot of g_baroLatch/g_gnssLatch. CPU1 (the
+ * consumer) ONLY -- mirrors NavState_get()'s protocol exactly (NavState.c):
+ * read gen, copy the payload, re-read gen; one retry on a mismatch, then
+ * give up and report FALSE so the caller keeps consuming its last-known-good
+ * cache (s_baroAlt/s_baroRef, s_gnssLat/.../s_gnssHAcc) rather than a torn
+ * mix of old and new fields. Never writes g_baroLatch/g_gnssLatch -- that is
+ * what keeps this side of the crossing free of the old two-writer bug. */
+static boolean baroLatch_get(BaroLatch_t *out)
+{
+    uint8   attempt;
+    boolean ok = FALSE;
+
+    for (attempt = 0u; (attempt < 2u) && (ok == FALSE); attempt++)
+    {
+        uint32 genBefore = g_baroLatch.gen;
+
+        out->gen   = genBefore;
+        out->altM  = g_baroLatch.altM;
+        out->refM  = g_baroLatch.refM;
+        out->refOk = g_baroLatch.refOk;
+
+        if (g_baroLatch.gen == genBefore)
+        {
+            ok = TRUE;
+        }
+    }
+
+    return ok;
+}
+
+static boolean gnssLatch_get(GnssLatch_t *out)
+{
+    uint8   attempt;
+    boolean ok = FALSE;
+
+    for (attempt = 0u; (attempt < 2u) && (ok == FALSE); attempt++)
+    {
+        uint32 genBefore = g_gnssLatch.gen;
+
+        out->gen        = genBefore;
+        out->lat        = g_gnssLatch.lat;
+        out->lon        = g_gnssLatch.lon;
+        out->altM       = g_gnssLatch.altM;
+        out->speedMps   = g_gnssLatch.speedMps;
+        out->headingDeg = g_gnssLatch.headingDeg;
+        out->hAccM      = g_gnssLatch.hAccM;
+        out->iTOW       = g_gnssLatch.iTOW;
+
+        if (g_gnssLatch.gen == genBefore)
+        {
+            ok = TRUE;
+        }
+    }
+
+    return ok;
 }
 
 /* Correct the DOWN channel with the latched barometer sample. */
@@ -923,25 +1019,48 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, bo
         fusion_chanPredict(&s_chN, aN, dt);
         fusion_chanPredict(&s_chE, aE, dt);
 
-        if (s_baroNew != FALSE)
         {
-            fusion_correctBaro();
-            fusion_boundMeasBias(&s_chD);
-            s_baroNew = FALSE;
-        }
-        else
-        {
-            /* no new barometer sample this tick */
+            BaroLatch_t baroSnap;
+
+            /* gen differs from what was already fused -> a new sample is
+             * waiting. A failed (torn) read is treated the same as "nothing
+             * new": the cache from the last good consumption is left alone,
+             * exactly as the original s_baroNew==FALSE path did. */
+            if ((baroLatch_get(&baroSnap) != FALSE) && (baroSnap.gen != s_baroLastGen))
+            {
+                s_baroAlt     = baroSnap.altM;
+                s_baroRef     = baroSnap.refM;
+                s_baroLastGen = baroSnap.gen;
+
+                fusion_correctBaro();
+                fusion_boundMeasBias(&s_chD);
+            }
+            else
+            {
+                /* no new barometer sample this tick */
+            }
         }
 
-        if (s_gnssNew != FALSE)
         {
-            fusion_correctGnss();
-            s_gnssNew = FALSE;
-        }
-        else
-        {
-            /* no new fix this tick */
+            GnssLatch_t gnssSnap;
+
+            if ((gnssLatch_get(&gnssSnap) != FALSE) && (gnssSnap.gen != s_gnssLastGen))
+            {
+                s_gnssLat     = gnssSnap.lat;
+                s_gnssLon     = gnssSnap.lon;
+                s_gnssAlt     = gnssSnap.altM;
+                s_gnssSpeed   = gnssSnap.speedMps;
+                s_gnssHeading = gnssSnap.headingDeg;
+                s_gnssHAcc    = gnssSnap.hAccM;
+                s_gnssLastGen = gnssSnap.gen;
+
+                fusion_correctGnss();
+                s_navState.gnssITow = gnssSnap.iTOW;
+            }
+            else
+            {
+                /* no new fix this tick */
+            }
         }
     }
     else
@@ -951,6 +1070,14 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, bo
          * counter held, up to 42.9 s, and integrating that would put the
          * estimate kilometres away before the barometer could pull it back. */
     }
+
+    /* Producer-owned running counters (FusionLatch.h): read every tick
+     * regardless of whether a new sample latched, exactly like the original
+     * code, where the setters incremented s_navState.dropped/gnssDupes
+     * directly and unconditionally. A single 32-bit field needs no gen
+     * protection (SharedRam.h rule 3), so these are plain volatile reads. */
+    s_navState.dropped   = g_baroLatch.droppedCount + g_gnssLatch.droppedCount;
+    s_navState.gnssDupes = g_gnssLatch.dupesCount;
 
     s_navState.a_d      = s_chD.x[FS_POS];
     s_navState.a_v_d    = s_chD.x[FS_VEL];
@@ -972,6 +1099,10 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, bo
     *fusion = s_navState;
 }
 
+/* CPU0 ONLY (SensorTask_baro). Writes g_baroLatch (FusionLatch.h): payload
+ * fields -> Ifx__dsync() -> gen++, same discipline as NavState_publish() --
+ * see SharedRam.h rule 3. droppedCount is a standalone counter and needs no
+ * barrier of its own. */
 void Fusion_setBaroAlt(float32 altM, boolean valid)
 {
     /* A NaN or infinite altitude is dropped here rather than fused. It cannot
@@ -982,26 +1113,31 @@ void Fusion_setBaroAlt(float32 altM, boolean valid)
     {
         /* Counted, not just dropped: a silently discarded sample makes a
          * failing sensor indistinguishable from a healthy one. */
-        s_navState.dropped++;
+        g_baroLatch.droppedCount = g_baroLatch.droppedCount + 1u;
     }
     else if (valid != FALSE)
     {
-        s_baroAlt = altM;
-        s_baroNew = TRUE;
+        g_baroLatch.altM = altM;
 
         /* The first valid sample defines d = 0. Taking the reference here, not
          * at power-on, keeps the filter working in RELATIVE altitude: the
          * sea-level formula carries weather bias, and none of that belongs in
          * the state. */
-        if (s_baroRefOk == FALSE)
+        if (g_baroLatch.refOk == 0u)
         {
-            s_baroRef   = altM;
-            s_baroRefOk = TRUE;
+            g_baroLatch.refM  = altM;
+            g_baroLatch.refOk = 1u;
         }
         else
         {
             /* reference already taken */
         }
+
+        /* cppcheck-suppress misra-c2012-17.3 ; deviation: Ifx__dsync() wraps
+         * TASKING's __dsync() intrinsic, which has no declaration anywhere
+         * cppcheck can see (SharedRam.h). */
+        Ifx__dsync();
+        g_baroLatch.gen = g_baroLatch.gen + 1u;
     }
     else
     {
@@ -1009,6 +1145,10 @@ void Fusion_setBaroAlt(float32 altM, boolean valid)
     }
 }
 
+/* CPU0 ONLY (SensorTask_gnss). Writes g_gnssLatch (FusionLatch.h) on a new
+ * fix: payload -> Ifx__dsync() -> gen++ (SharedRam.h rule 3). s_lastITow/
+ * s_haveITow are plain fusion.c statics, not part of the shared block --
+ * only this function ever touches them (see their declaration above). */
 void Fusion_setGnss(sint32 latDeg1e7, sint32 lonDeg1e7, float32 altM,
                     float32 speedMps, float32 headingDeg, float32 hAccM,
                     uint32 iTOW, boolean valid)
@@ -1041,20 +1181,25 @@ void Fusion_setGnss(sint32 latDeg1e7, sint32 lonDeg1e7, float32 altM,
 
         if (sane == FALSE)
         {
-            s_navState.dropped++;
+            g_gnssLatch.droppedCount = g_gnssLatch.droppedCount + 1u;
         }
         else if ((s_haveITow == FALSE) || (iTOW != s_lastITow))
         {
             s_lastITow    = iTOW;
             s_haveITow    = TRUE;
-            s_gnssLat     = latDeg1e7;
-            s_gnssLon     = lonDeg1e7;
-            s_gnssAlt     = altM;
-            s_gnssSpeed   = speedMps;
-            s_gnssHeading = headingDeg;
-            s_gnssHAcc    = hAccM;
-            s_gnssNew     = TRUE;
-            s_navState.gnssITow = iTOW;
+
+            g_gnssLatch.lat        = latDeg1e7;
+            g_gnssLatch.lon        = lonDeg1e7;
+            g_gnssLatch.altM       = altM;
+            g_gnssLatch.speedMps   = speedMps;
+            g_gnssLatch.headingDeg = headingDeg;
+            g_gnssLatch.hAccM      = hAccM;
+            g_gnssLatch.iTOW       = iTOW;
+
+            /* cppcheck-suppress misra-c2012-17.3 ; deviation: see
+             * Fusion_setBaroAlt() above. */
+            Ifx__dsync();
+            g_gnssLatch.gen = g_gnssLatch.gen + 1u;
         }
         else
         {
@@ -1063,7 +1208,7 @@ void Fusion_setGnss(sint32 latDeg1e7, sint32 lonDeg1e7, float32 altM,
              * changing at all, and a count near the poll rate means the fix is
              * not being refreshed. Both are faults that leave the position
              * looking entirely plausible. */
-            s_navState.gnssDupes++;
+            g_gnssLatch.dupesCount = g_gnssLatch.dupesCount + 1u;
         }
     }
     else

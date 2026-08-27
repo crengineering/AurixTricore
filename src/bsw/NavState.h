@@ -32,11 +32,47 @@ typedef struct
     uint32       gen;          /**< monotonic, +1 per publish; no even/odd needed
                                  *   (the writer never holds an odd/half-written
                                  *   state visible -- payload is written
-                                 *   completely, THEN this increments) */
+                                 *   completely, THEN this increments). Also
+                                 *   doubles as the IMU sample sequence number
+                                 *   the T12 blocker fix needs: NavTask_step
+                                 *   publishes exactly once per IMU sample, at
+                                 *   any rate, so a second field would be
+                                 *   redundant. */
     Ahrs_Values  ahrs;
     FusionValues fusion;
     float32      dtS;
     uint32       imuPresent;   /**< was uint8 + reserved[3]; see file header */
+    /* T12 blocker fix (docs/REFACTORING_PLAN.md 3.7): the raw IMU sample and
+     * an ACCUMULATED liveness sum, so NavTask_step (CPU1) never again has to
+     * call measurementsSetImu()/PeriphDiag_report() itself -- both write
+     * CPU0-owned state (g_xcpData is CPU0 DSPR; PeriphDiag's s_periph[] is a
+     * plain non-volatile static) and would become two-writer objects the
+     * moment NavTask_step runs on CPU1. Housekeeping_100ms (CPU0) makes
+     * those calls instead, from this snapshot -- same pattern as
+     * measurementsSetFusion already uses. +32 bytes, zero A2L cost: none of
+     * this reaches Xcp_Data, which has only 8 bytes free (docs/CODEMAP.md 3).
+     */
+    float32      imuAcc[3];    /**< latest sample, sensor frame [g]           */
+    float32      imuGyro[3];   /**< latest sample, sensor frame [deg/s]       */
+    float32      imuTempC;     /**< latest sample [degC]                      */
+    float32      imuLiveness;  /**< RUNNING total of Icm42688_plausible()'s
+                                 *   per-sample liveness sum, incremented every
+                                 *   NavTask_step tick and NEVER reset by the
+                                 *   writer. Housekeeping_100ms diffs two
+                                 *   reads of this instead of reading the
+                                 *   latest instantaneous value, which is what
+                                 *   keeps the stuck-sensor detector sensitive
+                                 *   to every tick instead of only the one
+                                 *   tick that happens to land on its 100 ms
+                                 *   boundary: for a genuinely stuck sensor the
+                                 *   per-tick contribution is bit-identical
+                                 *   every tick, so consecutive 100 ms windows
+                                 *   sum an identical run and the DIFFERENCE
+                                 *   is bit-identical too -- the same
+                                 *   frozen-value trip PeriphDiag_report()
+                                 *   already does, just fed a windowed delta
+                                 *   instead of one sample in twenty (or,
+                                 *   after T15, one in twenty at 1 kHz). */
 } NavState_t;
 
 /** Defined (with __at()) in NavStatePlace.c, not here -- see SharedRam.h and
@@ -50,13 +86,18 @@ extern volatile NavState_t g_navState;
 void NavState_init(void);
 
 /** Publish one snapshot. CPU1 (the nav core) ONLY.
- *  Sequence: store payload (ahrs, fusion, dtS, imuPresent) -> Ifx__dsync() ->
- *  gen++. The barrier is what stops the TriCore store buffer from posting
- *  the gen store ahead of the payload stores even though the alias is
- *  non-cached; volatile alone only orders the compiler, not the store
- *  buffer. Never call this from any core but the nav core. */
+ *  Sequence: store payload (ahrs, fusion, dtS, imuPresent, imuAcc, imuGyro,
+ *  imuTempC, imuLiveness) -> Ifx__dsync() -> gen++. The barrier is what stops
+ *  the TriCore store buffer from posting the gen store ahead of the payload
+ *  stores even though the alias is non-cached; volatile alone only orders the
+ *  compiler, not the store buffer. Never call this from any core but the nav
+ *  core.
+ *  \param liveness  the CALLER's running total (NavTask_step accumulates,
+ *                   never resets) -- see the imuLiveness field comment. */
 void NavState_publish(const Ahrs_Values *ahrs, const FusionValues *fusion,
-                       float32 dtS, boolean imuPresent);
+                       float32 dtS, boolean imuPresent,
+                       const float32 imuAcc[3], const float32 imuGyro[3],
+                       float32 imuTempC, float32 liveness);
 
 /** Read one consistent snapshot into *out. Any core.
  *  Sequence: read gen -> copy payload -> re-read gen; if they match, the

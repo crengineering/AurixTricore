@@ -110,6 +110,12 @@ volatile uint32 g_imuSpiBurstTicks;      /**< last burst duration, STM0 ticks */
 volatile uint32 g_imuSpiBurstMaxTicks;   /**< running max since reset         */
 /* cppcheck-suppress-end misra-c2012-8.7 */
 
+/* MODULE_STM0, not MODULE_STM1, even though Icm42688_init() (the only
+ * caller) runs on CPU1 since T12 (docs/REFACTORING_PLAN.md) -- same
+ * deliberate, read-only cross-core exception as Spi.c/SysTime.c: a one-time
+ * boot delay has no dt-consistency argument for its own STM, so it is simply
+ * left on the module every other timeout in this tree already uses, rather
+ * than introducing a third STM reference for one call site. */
 static void Icm42688_delayMs(uint32 ms)
 {
     IfxStm_waitTicks(&MODULE_STM0, ms * ICM42688_STM_TICKS_PER_MS);

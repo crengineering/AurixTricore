@@ -35,15 +35,6 @@ boolean Icm42688_plausible(const Icm42688_Sample *sample, float32 *liveness)
     return FALSE;
 }
 
-void measurementsSetImu(boolean present, const float32 acc[3], const float32 gyro[3],
-                        float32 temperatureC)
-{
-    (void)present;
-    (void)acc;
-    (void)gyro;
-    (void)temperatureC;
-}
-
 /* I5, docs/IMU_INTERRUPT.md 5.5: NavTask_step now reads/writes these two.
  * Their real storage is in ImuInt.c, which pulls in ERU/SRC/Port headers
  * with no host fakes -- stubbed here like every other target-only symbol
@@ -51,13 +42,12 @@ void measurementsSetImu(boolean present, const float32 acc[3], const float32 gyr
 volatile uint32 g_imuDrdyStaleTicks;
 volatile uint32 g_imuDrdyLastTicks;
 
-void PeriphDiag_report(PeriphDiag_Id id, boolean readOk, boolean plausible, float32 liveness)
-{
-    (void)id;
-    (void)readOk;
-    (void)plausible;
-    (void)liveness;
-}
+/* T12, docs/REFACTORING_PLAN.md 3.7: NavTask_step no longer calls
+ * measurementsSetImu()/PeriphDiag_report() at all -- both moved to
+ * Housekeeping_100ms (CPU0), reading the raw sample + accumulated liveness
+ * back out of NavState instead (see NavTask.c and Housekeeping.c). Nothing
+ * left in NavTask.c references either symbol, so the stubs that used to
+ * satisfy the linker for them are gone too. */
 
 void setUp(void)
 {

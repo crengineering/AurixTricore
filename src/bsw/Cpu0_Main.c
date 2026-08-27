@@ -21,15 +21,12 @@
 #include "I2c.h"
 #include "Bmp581.h"
 #include "Mmc5983.h"
-#include "Spi.h"
-#include "Icm42688.h"
 #include "GnssM9N.h"
 #include "SharedRam.h"
 #include "CoreStats.h"
 #include "BringUp.h"
 #include "ImuInt.h"
 #include "SensorTask.h"
-#include "NavTask.h"
 #include "Housekeeping.h"
 #include "PeriphDiag.h"
 #include "EthStats.h"
@@ -142,7 +139,8 @@ int core0_main(void)
     (void)Scheduler_addTask(&g_sched, Task_Lwip,       SCHED_MS(1u));    /* 1 kHz lwIP poll */
     (void)Scheduler_addTask(&g_sched, SensorTask_baro, SCHED_MS(20u));   /* 50 Hz barometer */
     (void)Scheduler_addTask(&g_sched, SensorTask_mag,  SCHED_MS(20u));   /* 50 Hz magnetometer */
-    (void)Scheduler_addTask(&g_sched, NavTask_step,    SCHED_MS(20u));  /* 50 Hz IMU (QSPI0) */
+    /* NavTask_step moved to core1_main's own scheduler (T12,
+     * docs/REFACTORING_PLAN.md): the flight core gets nothing else, ever. */
     /* Registration order preserves the original dispatch order within a
      * shared 100 ms dispatch (Scheduler_run walks tasks array-order): NVM
      * before GNSS before housekeeping before DAQ, exactly as the single
@@ -199,37 +197,15 @@ int core0_main(void)
      * The IMU slot must be declared unfitted or it would assert NO_RESPONSE
      * forever and leave the diagnostics permanently red over hardware that is
      * deliberately absent. Baro/mag/GNSS are SensorTask's to declare — see
-     * SensorTask_init() below, called once GnssM9N_init() has run. */
+     * SensorTask_init() below, called once GnssM9N_init() has run. This stays
+     * on CPU0 regardless of T12: it only records what this build expects,
+     * independent of which core brings the IMU up (PeriphDiag_setFitted()
+     * itself is a plain, CPU0-only write here, unlike PeriphDiag_report()). */
     PeriphDiag_setFitted(PERIPH_DIAG_IMU, TRUE);
 
-    /* Flight IMU on its own bus: QSPI0, nothing shared with the I2C sensors.
-     * Brought up after them so a failure here cannot be confused with a
-     * problem on the shared bus. */
-    Spi_init();
-    if (Icm42688_init() != FALSE)
-    {
-        Uart_print("ICM-42688-P detected (WHO_AM_I 0x47) in SPI mode ");
-        Uart_printHexByte(Spi_getMode());
-        Uart_println("");
-    }
-    else
-    {
-        uint8 who = 0u;
-
-        Uart_println("ICM-42688-P not found");
-        Spi_setMode(SPI_MODE_0);
-        (void)Icm42688_readWhoAmI(&who);
-        Uart_print("  WHO_AM_I mode0=");
-        Uart_printHexByte(who);
-        who = 0u;
-        Spi_setMode(SPI_MODE_3);
-        (void)Icm42688_readWhoAmI(&who);
-        Uart_print("  mode3=");
-        Uart_printHexByte(who);
-        Uart_println("");
-    }
-    BringUp_dumpSensors();  /* one-time register dump, all three sensors, for bring-up diagnosis */
-    NavTask_init();         /* NavState_init, FusionCal_init, Ahrs_init, Fusion_init (T11) */
+    BringUp_dumpI2cSensors();  /* one-time register dump, BMP581+MMC5983 (T12:
+                                * the ICM-42688-P dump moved to core1_main --
+                                * see BringUp.h for why it cannot stay here) */
 
     /* init of the GNSS*/
     if (GnssM9N_init() != FALSE)

@@ -31,6 +31,10 @@
 #include "Uart.h"
 #include "scheduler.h"
 #include "led.h"
+#include "Spi.h"
+#include "Icm42688.h"
+#include "NavTask.h"
+#include "BringUp.h"
 
 extern IfxCpu_syncEvent cpuSyncEvent;
 
@@ -54,8 +58,42 @@ void core1_main(void)
 
     Led_init(&g_led, &MODULE_P20, 12u);
 
+    /* Flight IMU on QSPI0 (T12, docs/REFACTORING_PLAN.md): moved here from
+     * core0_main verbatim, along with NavTask_init(), so the QSPI ISR
+     * retarget (Spi.c), the driver init and the task registration below all
+     * land on the same core together -- an intermediate state with the ISR
+     * on one core and the init on another does not fly (Risk 7 of the
+     * refactor's predecessor step, T11, applies identically here). Nothing
+     * shared with the I2C0 sensors, which stay on CPU0. */
+    Spi_init();
+    if (Icm42688_init() != FALSE)
+    {
+        Uart_print("ICM-42688-P detected (WHO_AM_I 0x47) in SPI mode ");
+        Uart_printHexByte(Spi_getMode());
+        Uart_println("");
+    }
+    else
+    {
+        uint8 who = 0u;
+
+        Uart_println("ICM-42688-P not found");
+        Spi_setMode(SPI_MODE_0);
+        (void)Icm42688_readWhoAmI(&who);
+        Uart_print("  WHO_AM_I mode0=");
+        Uart_printHexByte(who);
+        who = 0u;
+        Spi_setMode(SPI_MODE_3);
+        (void)Icm42688_readWhoAmI(&who);
+        Uart_print("  mode3=");
+        Uart_printHexByte(who);
+        Uart_println("");
+    }
+    BringUp_dumpImu();     /* one-time ICM-42688-P register dump -- see BringUp.h */
+    NavTask_init();         /* NavState_init, FusionCal_init, Ahrs_init, Fusion_init */
+
     Scheduler_init(&g_sched, &MODULE_STM1, 1u);
     Scheduler_addTask(&g_sched, Task_LedToggle, SCHED_MS(500u));
+    (void)Scheduler_addTask(&g_sched, NavTask_step, SCHED_MS(20u));  /* 50 Hz IMU (QSPI0) */
 
     while (TRUE)
     {

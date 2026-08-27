@@ -24,6 +24,10 @@
 
 static Ahrs_Values  s_ahrs;
 static FusionValues s_fusion;
+static float32      s_imuAcc[3];
+static float32      s_imuGyro[3];
+static float32      s_imuTempC;
+static float32      s_imuLiveness;
 
 void setUp(void)
 {
@@ -64,6 +68,11 @@ void setUp(void)
     s_fusion.verticalOk = 1u; s_fusion.horizontalOk = 1u; s_fusion.originSet = 1u;
     s_fusion.reserved = 0u;
 
+    s_imuAcc[0]  = 0.1f;  s_imuAcc[1]  = 0.2f;  s_imuAcc[2]  = -0.98f;
+    s_imuGyro[0] = 1.0f;  s_imuGyro[1] = -2.0f; s_imuGyro[2] = 3.0f;
+    s_imuTempC    = 28.5f;
+    s_imuLiveness = 12.34f;
+
     NavState_init();
 }
 
@@ -86,6 +95,10 @@ void test_get_before_publish_returns_init_state(void)
     TEST_ASSERT_EQUAL_UINT32(0u, snap.imuPresent);
     TEST_ASSERT_EQUAL_FLOAT(0.0f, snap.dtS);
     TEST_ASSERT_EQUAL_UINT8(0u, snap.ahrs.state);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, snap.imuAcc[0]);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, snap.imuGyro[2]);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, snap.imuTempC);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, snap.imuLiveness);
 }
 
 /* One publish -> one matching get(), gen advanced by exactly one, and every
@@ -99,7 +112,8 @@ void test_publish_then_get_roundtrips_and_advances_gen(void)
     TEST_ASSERT_EQUAL(TRUE, ok);
     TEST_ASSERT_EQUAL_UINT32(0u, snap.gen);
 
-    NavState_publish(&s_ahrs, &s_fusion, 0.02f, TRUE);
+    NavState_publish(&s_ahrs, &s_fusion, 0.02f, TRUE,
+                      s_imuAcc, s_imuGyro, s_imuTempC, s_imuLiveness);
 
     ok = NavState_get(&snap);
     TEST_ASSERT_EQUAL(TRUE, ok);
@@ -110,6 +124,10 @@ void test_publish_then_get_roundtrips_and_advances_gen(void)
     TEST_ASSERT_EQUAL_UINT8(s_ahrs.state, snap.ahrs.state);
     TEST_ASSERT_EQUAL_FLOAT(s_fusion.posN, snap.fusion.posN);
     TEST_ASSERT_EQUAL_UINT32(s_fusion.gnssITow, snap.fusion.gnssITow);
+    TEST_ASSERT_EQUAL_FLOAT(s_imuAcc[2],  snap.imuAcc[2]);
+    TEST_ASSERT_EQUAL_FLOAT(s_imuGyro[1], snap.imuGyro[1]);
+    TEST_ASSERT_EQUAL_FLOAT(s_imuTempC,   snap.imuTempC);
+    TEST_ASSERT_EQUAL_FLOAT(s_imuLiveness, snap.imuLiveness);
 }
 
 /* imuPresent is stored as 0/1 regardless of what non-zero value `boolean`
@@ -119,11 +137,13 @@ void test_publish_normalises_imu_present_to_0_or_1(void)
 {
     NavState_t snap;
 
-    NavState_publish(&s_ahrs, &s_fusion, 0.02f, (boolean)42u);
+    NavState_publish(&s_ahrs, &s_fusion, 0.02f, (boolean)42u,
+                      s_imuAcc, s_imuGyro, s_imuTempC, s_imuLiveness);
     (void)NavState_get(&snap);
     TEST_ASSERT_EQUAL_UINT32(1u, snap.imuPresent);
 
-    NavState_publish(&s_ahrs, &s_fusion, 0.02f, FALSE);
+    NavState_publish(&s_ahrs, &s_fusion, 0.02f, FALSE,
+                      s_imuAcc, s_imuGyro, s_imuTempC, s_imuLiveness);
     (void)NavState_get(&snap);
     TEST_ASSERT_EQUAL_UINT32(0u, snap.imuPresent);
 }
@@ -137,7 +157,8 @@ void test_gen_increments_by_one_per_publish(void)
 
     for (i = 0u; i < 5u; i++)
     {
-        NavState_publish(&s_ahrs, &s_fusion, 0.02f, TRUE);
+        NavState_publish(&s_ahrs, &s_fusion, 0.02f, TRUE,
+                          s_imuAcc, s_imuGyro, s_imuTempC, s_imuLiveness);
     }
 
     (void)NavState_get(&snap);

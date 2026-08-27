@@ -8,8 +8,6 @@
 #include "fusion.h"
 #include "FusionCal.h"
 #include "NavState.h"
-#include "Measurements.h"
-#include "PeriphDiag.h"
 #include "SysTime.h"
 #include "ImuInt.h"
 
@@ -55,12 +53,20 @@ boolean NavTask_inputValid(float32 dtS, boolean imuPresent, uint8 ahrsState)
     return valid;
 }
 
+/* Running total of Icm42688_plausible()'s per-sample liveness, published
+ * verbatim in NavState_t.imuLiveness (NEVER reset here after boot) -- see
+ * that field's comment. Housekeeping_100ms does the resetting-by-diffing;
+ * this side just keeps adding. CPU1-only, same as every other NavTask.c
+ * static. */
+static float32 s_imuLivenessAccum;
+
 void NavTask_init(void)
 {
     NavState_init();        /* the publish target, before anything publishes */
     FusionCal_init();        /* estimator tuning defaults, BEFORE the filters */
     Ahrs_init();              /* start the gyro-bias calibration; hold still  */
     Fusion_init();            /* zero every channel state and covariance      */
+    s_imuLivenessAccum = 0.0f;
 }
 
 void NavTask_step(void)
@@ -115,23 +121,30 @@ void NavTask_step(void)
     fusionInputOk = NavTask_inputValid(elapsedTime, present, ahrs.state);
     Fusion_update(&fusion, ahrs.accNed, elapsedTime, fusionInputOk);
 
+    /* Raw sample + an accumulated liveness sum ride along in the SAME publish
+     * as the fusion output (T12 blocker, docs/REFACTORING_PLAN.md 3.7):
+     * measurementsSetImu() writes g_xcpData (CPU0 DSPR) and PeriphDiag_report()
+     * writes PeriphDiag's plain non-volatile s_periph[] -- calling either one
+     * from here, once NavTask_step runs on CPU1, would make both a two-writer
+     * object racing against CPU0's Housekeeping_100ms/PeriphDiag_update. So
+     * this task no longer calls them at all; it only accumulates and
+     * publishes, and Housekeeping_100ms (CPU0) makes both calls from the
+     * NavState snapshot. Icm42688_plausible()'s instantaneous liveness is
+     * summed, never reset, so Housekeeping's diff of two reads sees every
+     * tick's contribution instead of only the one tick nearest its 100 ms
+     * boundary -- see NavState_t.imuLiveness. */
+    {
+        float32 sampleLiveness = 0.0f;
+
+        (void)Icm42688_plausible(&sample, &sampleLiveness);
+        s_imuLivenessAccum += sampleLiveness;
+    }
+
     /* Publish for Housekeeping_100ms to pick up (NavState_get) and forward to
      * XCP -- replaces the direct measurementsSetFusion() call this task made
      * before T11. Still a same-core write in T11 (NavTask_step is CPU0 until
      * T12), so this is exercising the protocol, not yet the cross-core case. */
-    NavState_publish(&ahrs, &fusion, elapsedTime, present);
-
-    {
-        /* Raw angular rate: there is no bias estimator in the tree, so the
-         * published value still carries the sensor offset. Unlike the fusion
-         * output above, this is the raw sample, which NavState does not
-         * carry -- so it still goes straight to Xcp_Data here, same as
-         * before T11 and safe for the same reason: still CPU0 writing to
-         * CPU0's own DSPR. */
-        measurementsSetImu(present, sample.acc, sample.gyro, sample.tempC);
-
-        float32 liveness = 0.0f;
-        boolean plausible = Icm42688_plausible(&sample, &liveness);
-        PeriphDiag_report(PERIPH_DIAG_IMU, present, plausible, liveness);
-    }
+    NavState_publish(&ahrs, &fusion, elapsedTime, present,
+                      sample.acc, sample.gyro, sample.tempC,
+                      s_imuLivenessAccum);
 }

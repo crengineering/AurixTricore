@@ -5,10 +5,16 @@
  * T11 (docs/REFACTORING_PLAN.md): moved out of Cpu0_Main.c's Task_Imu
  * verbatim, publishing via NavState_publish() instead of calling
  * measurementsSetFusion() directly -- Housekeeping_100ms is now the one that
- * reads NavState and publishes to XCP. Still registered on CPU0: T11 only
- * changes WHERE this code lives, not which core runs it, so a torn cross-core
- * read is structurally impossible here and a regression can only be a
- * refactoring bug, never a coherency bug. T12 is the actual migration.
+ * reads NavState and publishes to XCP.
+ *
+ * T12: the actual migration. NavTask_init()/NavTask_step() now run on CPU1
+ * (core1_main, after its sync barrier) -- the crossing NavState_publish()
+ * exercises is a real cross-core one from here on, not the same-core dry run
+ * T11 was. NavTask_step() also stopped calling measurementsSetImu()/
+ * PeriphDiag_report() directly (both write CPU0-owned state -- g_xcpData is
+ * CPU0 DSPR, PeriphDiag's s_periph[] is a plain non-volatile static); the raw
+ * sample and an accumulated liveness now ride in the NavState payload and
+ * Housekeeping_100ms makes those calls instead (NavState.h, Housekeeping.c).
  *********************************************************************************************************************/
 #ifndef NAVTASK_H
 #define NAVTASK_H

@@ -220,10 +220,20 @@ Zwei Dinge fehlen dem Host:
 g_xcpNvm (Hard-Iron-Kalibrierung) kommt aus fakes/Nvm.c.
 -m ist noetig, weil die Estimator-Mathematik gegen libm linkt (sinf, atan2f...).
 ]]
+#[[
+T12 (docs/REFACTORING_PLAN.md 2.4): the three input latches moved off plain
+statics into their own LMU __at() objects (FusionLatchPlace.c/
+AhrsLatchPlace.c), each in its own translation unit per SharedRam.h's
+cppcheck constraint. No separate tasking_shim.h wiring needed here: both
+land in the `estimator` target below, which already applies
+`-include tasking_shim.h` to every one of its sources.
+]]
 add_library(estimator STATIC
     ${BSW}/fusion.c
     ${BSW}/Ahrs.c
     ${BSW}/FusionCal.c
+    ${BSW}/FusionLatchPlace.c
+    ${BSW}/AhrsLatchPlace.c
     fakes/Nvm.c
 )
 target_include_directories(estimator PUBLIC fakes ${BSW})

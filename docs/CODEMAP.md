@@ -176,9 +176,24 @@ top 64 K of `lmuram` (768 K total) at the **non-cached** alias so no coherency
 handling is needed on either side of a crossing; the cached alias of the same
 physical RAM is `0x90040000`-`0x900FFFFF`. Every object placed there gets its
 own `.c` file with a single `__at()` definition (cppcheck cannot parse a
-second one in the same translation unit — see `SharedRam.h`). First and only
-occupant so far: `g_coreStats` (`CoreStats.h`), at the base of the block,
-96 bytes. `NavState` (T10) is the next occupant, at `0xB00F0060`.
+second one in the same translation unit — see `SharedRam.h`). Occupants so far
+(writer, then address):
+
+| object | writer | address | defined in |
+|---|---|---|---|
+| `g_coreStats` | each core, own slot | `0xB00F0000`, 96 bytes | `CoreStats.h` / `SharedRam.c` |
+| `g_navState` | CPU1 (`NavTask_step`) | `0xB00F0060` | `NavState.h` / `NavStatePlace.c` |
+| `g_baroLatch` | CPU0 (`SensorTask_baro`) | `0xB00F0200`, 24 bytes | `FusionLatch.h` / `FusionLatchPlace.c` |
+| `g_gnssLatch` | CPU0 (`SensorTask_gnss`) | `0xB00F0300`, 40 bytes | `FusionLatch.h` / `FusionLatchPlace.c` |
+| `g_magLatch` | CPU0 (`SensorTask_mag`) | `0xB00F0400`, 24 bytes | `AhrsLatch.h` / `AhrsLatchPlace.c` |
+
+The three latches (T12) are the "three input latches" of §2.4/§2.3 — moved off
+plain statics that a CPU0 writer and a CPU1 reader shared with no protocol.
+Each is 256 bytes clear of its neighbour, generously past `g_navState`'s own
+size, so a `NavState_t` growth cannot silently reach one without first
+crossing `0xB00F0060 + 256` — the same spacing convention as the XCP blocks
+above. Confirmed non-overlapping via the `.map` file, the same check T9/T10
+used for `g_navState`.
 
 **When a block fills, take the next free slot rather than re-spacing the map.**
 That is what `Xcp_Fusion` did on 2026-08-26: the navigation state needed 188

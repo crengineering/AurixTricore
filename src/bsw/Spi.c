@@ -104,7 +104,14 @@ void Spi_init(void)
     cfg.txPriority      = ISR_PRIORITY_QSPI0_TX;
     cfg.rxPriority      = ISR_PRIORITY_QSPI0_RX;
     cfg.erPriority      = ISR_PRIORITY_QSPI0_ER;
-    cfg.isrProvider     = IfxSrc_Tos_cpu0;
+    /* T12 (docs/REFACTORING_PLAN.md 2.4/Risk 3): Spi_init() itself now runs
+     * on CPU1 (core1_main), so the three QSPI0 interrupts that complete a
+     * transfer must be serviced there too. Leaving this at cpu0 would still
+     * "work" -- the IMU keeps reading -- but Spi_transfer()'s busy-wait on
+     * CPU1 would then depend on CPU0's interrupt latency, a silent jitter
+     * source that announces itself only as noise in NavTask_step's timing,
+     * never as a build or boot failure. */
+    cfg.isrProvider     = IfxSrc_Tos_cpu1;
     cfg.maximumBaudrate = SPI_BAUDRATE_HZ;
     cfg.pins                 = &pins;
     /* No DMA: the transfers are a handful of bytes and the interrupt path is
@@ -194,6 +201,18 @@ boolean Spi_transfer(const uint8 *tx, uint8 *rx, uint16 len)
             if (IfxQspi_SpiMaster_exchange(&s_spiImuChannel, tx, dest, len)
                 == IfxQspi_Status_ok)
             {
+                /* ⚠️ Deliberate exception to "each core uses its own STM"
+                 * (CLAUDE.md rule 2): since T12, Spi_transfer() runs on CPU1
+                 * (called from NavTask_step) but this deadline still reads
+                 * MODULE_STM0, CPU0's timer. That is intentional, not a
+                 * leftover -- SysTime.c (the dt base every core shares) is
+                 * likewise pinned to MODULE_STM0 on purpose, and a second
+                 * time base here would let this deadline and NavTask_step's
+                 * own dt drift apart. It is read-only and cross-core STM
+                 * reads are safe (docs/REFACTORING_PLAN.md Risk 3); it is
+                 * still a deliberate deviation and must not be "fixed" to
+                 * MODULE_STM1 without re-deriving SPI_XFER_DEADLINE_MS
+                 * against that module's own tick rate. */
                 uint32 start = IfxStm_getLower(&MODULE_STM0);
                 uint32 limit = (uint32)SPI_XFER_DEADLINE_MS * SPI_STM_TICKS_PER_MS;
 
