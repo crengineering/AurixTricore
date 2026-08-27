@@ -18,16 +18,22 @@ Usage
 Reads (all non-static globals in src/bsw/ImuInt.h / Icm42688.h, no A2L, no
 Xcp_Data, no diag bit -- docs/IMU_INTERRUPT.md SS5.1):
 
-    g_imuDrdyCount, g_imuDrdyDtMin, g_imuDrdyDtMax, g_imuDrdyDtSum,
-    g_imuDrdyHist[32], g_imuDrdyHistBase, g_imuDrdyUnder, g_imuDrdyOver,
-    g_imuDrdyStaleTicks, g_imuSpiBurstMaxTicks
+    g_imuDrdyCount, g_imuDrdyDtMin, g_imuDrdyDtMax, g_imuDrdyWindowSum,
+    g_imuDrdyWindowIntervals, g_imuDrdyHist[32], g_imuDrdyHistBase,
+    g_imuDrdyUnder, g_imuDrdyOver, g_imuDrdyStaleTicks, g_imuSpiBurstMaxTicks
 
-mean is EXACT (g_imuDrdyDtSum / intervals, per ImuInt.h's own comment that
-the mean is meant to be computed on the host). stddev and p99 are
-APPROXIMATE: the ISR keeps a histogram, not raw samples, so both are
-computed from per-bin midpoints (bins are the one place this tool cannot
-recover the exact values, by construction -- that is the cost of a bounded
-O(1) ISR, and the whole reason SS5.2 chose a histogram over storing samples).
+mean is the EXACT mean of the most recently COMPLETED
+IMUINT_MEAN_WINDOW_EDGES-interval window (~1 s at ~1 kHz), from
+g_imuDrdyWindowSum / g_imuDrdyWindowIntervals -- a uint32 that resets every
+window, not a uint64 grand total since reset (2026-08-27, so overflow is
+structurally impossible and a per-second time series -- poll with --watch --
+shows RC-oscillator drift better than one grand mean ever could). Until the
+first window closes, no exact mean is available yet and this tool says so
+rather than guessing. stddev and p99 are APPROXIMATE and unrelated to the
+window: the ISR keeps a histogram, not raw samples, so both are computed
+from per-bin midpoints (bins are the one place this tool cannot recover the
+exact values, by construction -- that is the cost of a bounded O(1) ISR, and
+the whole reason SS5.2 chose a histogram over storing samples).
 """
 from __future__ import annotations
 
@@ -55,7 +61,8 @@ FIELDS = [
     ("g_imuDrdyCount", "u32"),
     ("g_imuDrdyDtMin", "u32"),
     ("g_imuDrdyDtMax", "u32"),
-    ("g_imuDrdyDtSum", "u64"),
+    ("g_imuDrdyWindowSum", "u32"),
+    ("g_imuDrdyWindowIntervals", "u32"),
     ("g_imuDrdyHist", "u32x32"),
     ("g_imuDrdyHistBase", "u32"),
     ("g_imuDrdyUnder", "u32"),
@@ -86,18 +93,20 @@ def read_snapshot(x, syms):
 
 
 def unpack(raw_map):
-    count      = struct.unpack("<I", raw_map["g_imuDrdyCount"])[0]
-    dt_min     = struct.unpack("<I", raw_map["g_imuDrdyDtMin"])[0]
-    dt_max     = struct.unpack("<I", raw_map["g_imuDrdyDtMax"])[0]
-    dt_sum     = struct.unpack("<Q", raw_map["g_imuDrdyDtSum"])[0]
-    hist       = list(struct.unpack("<32I", raw_map["g_imuDrdyHist"]))
-    hist_base  = struct.unpack("<I", raw_map["g_imuDrdyHistBase"])[0]
-    under      = struct.unpack("<I", raw_map["g_imuDrdyUnder"])[0]
-    over       = struct.unpack("<I", raw_map["g_imuDrdyOver"])[0]
-    stale      = struct.unpack("<I", raw_map["g_imuDrdyStaleTicks"])[0]
-    burst_max  = struct.unpack("<I", raw_map["g_imuSpiBurstMaxTicks"])[0]
+    count       = struct.unpack("<I", raw_map["g_imuDrdyCount"])[0]
+    dt_min      = struct.unpack("<I", raw_map["g_imuDrdyDtMin"])[0]
+    dt_max      = struct.unpack("<I", raw_map["g_imuDrdyDtMax"])[0]
+    window_sum  = struct.unpack("<I", raw_map["g_imuDrdyWindowSum"])[0]
+    window_ivl  = struct.unpack("<I", raw_map["g_imuDrdyWindowIntervals"])[0]
+    hist        = list(struct.unpack("<32I", raw_map["g_imuDrdyHist"]))
+    hist_base   = struct.unpack("<I", raw_map["g_imuDrdyHistBase"])[0]
+    under       = struct.unpack("<I", raw_map["g_imuDrdyUnder"])[0]
+    over        = struct.unpack("<I", raw_map["g_imuDrdyOver"])[0]
+    stale       = struct.unpack("<I", raw_map["g_imuDrdyStaleTicks"])[0]
+    burst_max   = struct.unpack("<I", raw_map["g_imuSpiBurstMaxTicks"])[0]
     return {
-        "count": count, "dt_min": dt_min, "dt_max": dt_max, "dt_sum": dt_sum,
+        "count": count, "dt_min": dt_min, "dt_max": dt_max,
+        "window_sum": window_sum, "window_intervals": window_ivl,
         "hist": hist, "hist_base": hist_base, "under": under, "over": over,
         "stale": stale, "burst_max": burst_max,
     }
@@ -108,23 +117,28 @@ def ticks_to_us(ticks):
 
 
 def compute_stats(s):
-    """-> dict with n, mean_us, min_us, max_us, stddev_us (approx or None),
-    p99_us (approx or None, may carry a note), centred (bool).
+    """-> dict with n, mean_us (exact, only once a window has closed),
+    min_us, max_us, stddev_us (approx or None), p99_us (approx or None, may
+    carry a note), centred (bool), window_intervals (0 until the first
+    window closes).
 
     n excludes both the first edge (no dt: ImuInt.c `if count > 1u`) AND the
     first WARMUP_EDGES intervals after it -- the firmware discards those
     outright (ImuInt.h IMUINT_WARMUP_EDGES) and never publishes dt_min/max/
-    sum/hist_base for them, so counting them here would divide the
-    (post-warm-up-only) dt_sum by too large a denominator."""
+    hist_base for them. n is the whole-run (since reset) interval count that
+    min/max/histogram cover; it is INDEPENDENT of window_sum/window_intervals,
+    which only ever describe the most recently completed ~1 s window."""
     n = max(0, s["count"] - 1 - WARMUP_EDGES)
-    result = {"n": n, "centred": n >= 1, "count": s["count"]}
+    result = {"n": n, "centred": n >= 1, "count": s["count"],
+              "window_intervals": s["window_intervals"]}
 
     if n == 0:
         return result
 
-    result["mean_us"] = ticks_to_us(s["dt_sum"] / n)
     result["min_us"] = ticks_to_us(s["dt_min"])
     result["max_us"] = ticks_to_us(s["dt_max"])
+    if s["window_intervals"] > 0:
+        result["mean_us"] = ticks_to_us(s["window_sum"] / s["window_intervals"])
 
     if not result["centred"]:
         return result
@@ -141,9 +155,15 @@ def compute_stats(s):
     if weighted_n == 0:
         return result   # centred but somehow nothing binned yet
 
-    mean_ticks = s["dt_sum"] / n   # reuse the EXACT mean as the centre
-    var_ticks2 = sum(cnt * (mid - mean_ticks) ** 2 for mid, cnt, _ in buckets) / weighted_n
-    result["stddev_us"] = math.sqrt(var_ticks2) / TICKS_PER_US
+    if "mean_us" in result:
+        # stddev needs a centre to measure distance from; only the (exact)
+        # window mean is trustworthy enough to be that centre -- before the
+        # first window closes, stddev is left out rather than centred on
+        # something weaker (e.g. a bin midpoint), same "do not guess" rule
+        # as everywhere else in this tool.
+        mean_ticks = s["window_sum"] / s["window_intervals"]
+        var_ticks2 = sum(cnt * (mid - mean_ticks) ** 2 for mid, cnt, _ in buckets) / weighted_n
+        result["stddev_us"] = math.sqrt(var_ticks2) / TICKS_PER_US
 
     target = 0.99 * weighted_n
     cum = 0.0
@@ -179,6 +199,11 @@ def classify(stats):
     if not stats["centred"]:
         return ("WARMING UP", "still inside the first "
                 f"{WARMUP_EDGES} discarded intervals; re-read shortly.")
+    if "mean_us" not in stats:
+        return ("AWAITING FIRST WINDOW", "min/max/histogram are live, but no "
+                f"IMUINT_MEAN_WINDOW_EDGES-interval window has closed yet "
+                f"(~1 s at ~1 kHz) -- no exact mean to classify against. "
+                f"Re-read shortly.")
 
     mean_us, min_us, max_us = stats["mean_us"], stats["min_us"], stats["max_us"]
     spread_us = max_us - min_us
@@ -233,8 +258,12 @@ def print_snapshot(s, stats, hist=True):
         print(f"  -> {label}: {why}")
         return
 
+    mean_str = (f"mean={stats['mean_us']:.3f} us (exact, last completed "
+                f"~1 s window, {stats['window_intervals']} intervals)"
+                if "mean_us" in stats else
+                "mean=(no completed window yet)")
     print(f"min={stats['min_us']:.2f} us  max={stats['max_us']:.2f} us  "
-         f"mean={stats['mean_us']:.3f} us (exact)")
+         f"{mean_str}")
     if "stddev_us" in stats:
         print(f"stddev~={stats['stddev_us']:.3f} us (approx, from histogram bins)")
     if "p99_us" in stats:

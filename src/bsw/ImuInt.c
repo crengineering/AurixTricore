@@ -35,7 +35,8 @@ volatile uint32 g_imuDrdyLastTicks;
 volatile uint32 g_imuDrdyDtTicks;
 volatile uint32 g_imuDrdyDtMin;
 volatile uint32 g_imuDrdyDtMax;
-volatile uint64 g_imuDrdyDtSum;
+volatile uint32 g_imuDrdyWindowSum;
+volatile uint32 g_imuDrdyWindowIntervals;
 volatile uint32 g_imuDrdyHist[IMUINT_HIST_BINS];
 volatile uint32 g_imuDrdyHistBase;
 volatile uint32 g_imuDrdyUnder;
@@ -43,9 +44,10 @@ volatile uint32 g_imuDrdyOver;
 volatile uint32 g_imuDrdyStaleTicks;   /* written by NavTask.c, not here */
 /* cppcheck-suppress-end misra-c2012-8.7 */
 
-/* Non-volatile shadow of the running accumulator (dtMin/dtMax/dtSum/
- * histBase/centred flag) -- the ISR is the only writer of both this and the
- * g_imuDrdy* globals above, so there is nothing to synchronise between them.
+/* Non-volatile shadow of the running accumulator (dtMin/dtMax/windowSum/
+ * windowCount/histBase/centred flag) -- the ISR is the only writer of both
+ * this and the g_imuDrdy* globals above, so there is nothing to synchronise
+ * between them.
  * Keeping it out of the volatile globals is what lets ImuInt_accumulate()
  * stay a plain, host-testable function (test/test_imuint.c).
  * Named s_imuIntState rather than the obvious s_state -- MISRA 5.9 wants
@@ -86,7 +88,7 @@ void imuDrdyIsr(void)
         bin = ImuInt_accumulate(&s_imuIntState, dt);
 
         /* Only publish once warm-up (IMUINT_WARMUP_EDGES) is behind us --
-         * before that, ImuInt_accumulate() left dtMin/dtMax/dtSum/histBase
+         * before that, ImuInt_accumulate() left dtMin/dtMax/histBase
          * untouched, and copying them out would publish stale sentinel/zero
          * values instead of leaving the previous (also stale, but at least
          * not misleadingly "final-looking") ones. g_imuDrdyDtTicks above is
@@ -96,8 +98,17 @@ void imuDrdyIsr(void)
         {
             g_imuDrdyDtMin    = s_imuIntState.dtMin;
             g_imuDrdyDtMax    = s_imuIntState.dtMax;
-            g_imuDrdyDtSum    = s_imuIntState.dtSum;
             g_imuDrdyHistBase = s_imuIntState.histBase;
+        }
+
+        /* Mean window: publish only on the edge that closes one (~once a
+         * second at ~1 kHz), from `bin` -- not from s_imuIntState, which
+         * ImuInt_accumulate() has already reset for the next window by the
+         * time control returns here. See ImuInt_BinResult's comment. */
+        if (bin.windowComplete != FALSE)
+        {
+            g_imuDrdyWindowSum       = bin.windowSum;
+            g_imuDrdyWindowIntervals = bin.windowCount;
         }
 
         if (bin.justCentered != FALSE)
@@ -133,7 +144,8 @@ void ImuInt_init(void)
     s_imuIntState.dtCount         = 0u;
     s_imuIntState.dtMin           = 0xFFFFFFFFu;
     s_imuIntState.dtMax           = 0u;
-    s_imuIntState.dtSum           = 0u;
+    s_imuIntState.windowSum       = 0u;
+    s_imuIntState.windowCount     = 0u;
     s_imuIntState.histBase        = 0u;
     s_imuIntState.histCentered    = FALSE;
 

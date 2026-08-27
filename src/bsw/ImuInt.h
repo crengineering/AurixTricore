@@ -43,6 +43,16 @@
 #define IMUINT_WARMUP_EDGES       (100u)
 /** Bins below the anchor sample the centred base is set to. */
 #define IMUINT_HIST_MARGIN_BINS   (16u)
+/** Intervals per mean window (~1 s at ~1 kHz). Chosen so the running sum
+ *  cannot overflow a uint32 even pathologically: at the nominal ~985 us
+ *  (98 500 ticks) it is ~9.85e7 over a window, ~44x under 0xFFFFFFFF
+ *  (~4.29e9); even 1000 back-to-back ~20 ms dropped-edge outliers
+ *  (~2.04e6 ticks each, docs/IMU_INTERRUPT.md SS5.6) sum to ~2.04e9, still
+ *  under the limit with margin. No uint64 anywhere in this module any more
+ *  (user request, 2026-08-27) -- overflow is structurally impossible
+ *  because the window resets long before it could approach one, not
+ *  because the type was widened. See g_imuDrdyWindowSum's comment. */
+#define IMUINT_MEAN_WINDOW_EDGES  (1000u)
 
 /* --- edges since reset / most recent interval -------------------------- */
 extern volatile uint32 g_imuDrdyCount;        /**< edges since reset                */
@@ -52,8 +62,21 @@ extern volatile uint32 g_imuDrdyDtTicks;      /**< most recent interval, ticks  
 /* --- distribution ------------------------------------------------------ */
 extern volatile uint32 g_imuDrdyDtMin;        /**< min interval since reset, ticks  */
 extern volatile uint32 g_imuDrdyDtMax;        /**< max interval since reset, ticks  */
-extern volatile uint64 g_imuDrdyDtSum;        /**< sum of intervals; mean computed
-                                                *   on the host, never in the ISR   */
+/** Sum of ticks over the most recently COMPLETED IMUINT_MEAN_WINDOW_EDGES-
+ *  interval window (~1 s at ~1 kHz) -- was a running uint64 grand total
+ *  since reset; replaced (2026-08-27) with a uint32 that resets every
+ *  window instead, so overflow becomes structurally impossible rather than
+ *  merely 43 s away. Together with g_imuDrdyWindowIntervals (always
+ *  IMUINT_MEAN_WINDOW_EDGES once at least one window has closed, published
+ *  alongside it for that reason) this gives an EXACT per-window mean,
+ *  computed on the host -- never in the ISR, same rule as always. Updates
+ *  once per window, not once per edge: between updates it holds the LAST
+ *  completed window's sum, not a live-growing partial one, so a host read
+ *  never sees a half-built window. A time series of these (poll roughly
+ *  once a second) shows RC-oscillator drift better than one grand mean
+ *  ever could. */
+extern volatile uint32 g_imuDrdyWindowSum;
+extern volatile uint32 g_imuDrdyWindowIntervals; /**< intervals in that window (see above) */
 extern volatile uint32 g_imuDrdyHist[IMUINT_HIST_BINS];  /**< 1 us bins             */
 extern volatile uint32 g_imuDrdyHistBase;     /**< ticks; bin i covers
                                                 *   [base+100i, base+100(i+1)),
@@ -85,7 +108,10 @@ typedef struct
                                *   "edges - 1"; now "edges - 1 - warm-up")   */
     uint32  dtMin;
     uint32  dtMax;
-    uint64  dtSum;
+    uint32  windowSum;       /**< current (in-progress) window's running sum;
+                               *   resets to 0 the moment it closes (below)  */
+    uint32  windowCount;     /**< intervals folded into windowSum so far,
+                               *   0 .. IMUINT_MEAN_WINDOW_EDGES-1           */
     uint32  histBase;
     boolean histCentered;
 } ImuInt_State;
@@ -102,16 +128,26 @@ typedef enum
 typedef struct
 {
     ImuInt_BinKind kind;
-    uint32         index;        /**< valid only when kind == IMUINT_BIN_INDEX */
-    boolean        justCentered; /**< TRUE exactly once: the caller must zero
-                                   *   the 32 histogram bins this one time     */
+    uint32         index;         /**< valid only when kind == IMUINT_BIN_INDEX */
+    boolean        justCentered;  /**< TRUE exactly once: the caller must zero
+                                    *   the 32 histogram bins this one time     */
+    boolean        windowComplete;/**< TRUE exactly on the interval that closes
+                                    *   a mean window: windowSum/windowCount
+                                    *   below are the values to publish       */
+    uint32         windowSum;     /**< valid only when windowComplete==TRUE;
+                                    *   captured BEFORE state resets for the
+                                    *   next window, so the caller never has
+                                    *   to race a read against that reset     */
+    uint32         windowCount;   /**< valid only when windowComplete==TRUE;
+                                    *   == IMUINT_MEAN_WINDOW_EDGES           */
 } ImuInt_BinResult;
 
 /** Pure update: discards the first IMUINT_WARMUP_EDGES intervals outright
- *  (state->{dtMin,dtMax,dtSum,histBase} untouched -- see IMUINT_WARMUP_EDGES
- *  for why), then folds \p dt into state->{dtMin,dtMax,dtSum}, centres
- *  state->histBase on the FIRST post-warm-up interval's own \p dt, and
- *  classifies \p dt against the (by then always-centred) window.
+ *  (state->{dtMin,dtMax,windowSum,windowCount,histBase} untouched -- see
+ *  IMUINT_WARMUP_EDGES for why), then folds \p dt into
+ *  state->{dtMin,dtMax,windowSum,windowCount}, centres state->histBase on
+ *  the FIRST post-warm-up interval's own \p dt, and classifies \p dt
+ *  against the (by then always-centred) window.
  *
  * Anchoring on a single post-warm-up sample, not a running dtMin, is a
  * deliberate choice over "centre on the median/mode of the steady
@@ -135,20 +171,40 @@ static inline ImuInt_BinResult ImuInt_accumulate(ImuInt_State *state, uint32 dt)
 {
     ImuInt_BinResult result;
 
-    result.kind         = IMUINT_BIN_NONE;
-    result.index        = 0u;
-    result.justCentered = FALSE;
+    result.kind           = IMUINT_BIN_NONE;
+    result.index          = 0u;
+    result.justCentered   = FALSE;
+    result.windowComplete = FALSE;
+    result.windowSum      = 0u;
+    result.windowCount    = 0u;
 
     if (state->warmupRemaining > 0u)
     {
         state->warmupRemaining--;
-        return result;   /* discarded: dtMin/dtMax/dtSum/histBase untouched */
+        return result;   /* discarded: dtMin/dtMax/windowSum/histBase untouched */
     }
 
     state->dtCount++;
     if (dt < state->dtMin) { state->dtMin = dt; }
     if (dt > state->dtMax) { state->dtMax = dt; }
-    state->dtSum += (uint64)dt;
+
+    /* Mean window (IMUINT_MEAN_WINDOW_EDGES, see its comment): a uint32
+     * running sum that is read out and reset every window, instead of a
+     * uint64 grand total that only ever grows -- overflow becomes
+     * structurally impossible rather than merely 43 s away. */
+    state->windowSum += dt;
+    state->windowCount++;
+    if (state->windowCount >= IMUINT_MEAN_WINDOW_EDGES)
+    {
+        /* Capture into the result FIRST -- the caller reads these from
+         * `result`, never from `state`, so there is no window where the
+         * completed values exist only in state right before being zeroed. */
+        result.windowComplete = TRUE;
+        result.windowSum      = state->windowSum;
+        result.windowCount    = state->windowCount;
+        state->windowSum      = 0u;
+        state->windowCount    = 0u;
+    }
 
     if (state->histCentered == FALSE)
     {
