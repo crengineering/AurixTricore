@@ -180,63 +180,65 @@ static inline ImuInt_BinResult ImuInt_accumulate(ImuInt_State *state, uint32 dt)
 
     if (state->warmupRemaining > 0u)
     {
+        /* discarded: dtMin/dtMax/windowSum/histBase untouched */
         state->warmupRemaining--;
-        return result;   /* discarded: dtMin/dtMax/windowSum/histBase untouched */
     }
-
-    state->dtCount++;
-    if (dt < state->dtMin) { state->dtMin = dt; }
-    if (dt > state->dtMax) { state->dtMax = dt; }
-
-    /* Mean window (IMUINT_MEAN_WINDOW_EDGES, see its comment): a uint32
-     * running sum that is read out and reset every window, instead of a
-     * uint64 grand total that only ever grows -- overflow becomes
-     * structurally impossible rather than merely 43 s away. */
-    state->windowSum += dt;
-    state->windowCount++;
-    if (state->windowCount >= IMUINT_MEAN_WINDOW_EDGES)
+    else
     {
-        /* Capture into the result FIRST -- the caller reads these from
-         * `result`, never from `state`, so there is no window where the
-         * completed values exist only in state right before being zeroed. */
-        result.windowComplete = TRUE;
-        result.windowSum      = state->windowSum;
-        result.windowCount    = state->windowCount;
-        state->windowSum      = 0u;
-        state->windowCount    = 0u;
-    }
+        state->dtCount++;
+        if (dt < state->dtMin) { state->dtMin = dt; }
+        if (dt > state->dtMax) { state->dtMax = dt; }
 
-    if (state->histCentered == FALSE)
-    {
-        /* This is necessarily the first post-warm-up interval (dtCount just
-         * became 1): centre once, here, on dt itself -- see the function
-         * comment for why a single sample, not a running dtMin. */
-        const uint32 margin = IMUINT_HIST_MARGIN_BINS * IMUINT_HIST_BIN_TICKS;
-
-        state->histBase     = (dt > margin) ? (dt - margin) : 0u;
-        state->histCentered = TRUE;
-        result.justCentered = TRUE;
-    }
-
-    if (state->histCentered != FALSE)
-    {
-        if (dt < state->histBase)
+        /* Mean window (IMUINT_MEAN_WINDOW_EDGES, see its comment): a uint32
+         * running sum that is read out and reset every window, instead of a
+         * uint64 grand total that only ever grows -- overflow becomes
+         * structurally impossible rather than merely 43 s away. */
+        state->windowSum += dt;
+        state->windowCount++;
+        if (state->windowCount >= IMUINT_MEAN_WINDOW_EDGES)
         {
-            result.kind = IMUINT_BIN_UNDER;
+            /* Capture into the result FIRST -- the caller reads these from
+             * `result`, never from `state`, so there is no window where the
+             * completed values exist only in state right before being zeroed. */
+            result.windowComplete = TRUE;
+            result.windowSum      = state->windowSum;
+            result.windowCount    = state->windowCount;
+            state->windowSum      = 0u;
+            state->windowCount    = 0u;
         }
-        else
-        {
-            const uint32 binWidth = IMUINT_HIST_BINS * IMUINT_HIST_BIN_TICKS;
-            const uint32 offset   = dt - state->histBase;
 
-            if (offset >= binWidth)
+        if (state->histCentered == FALSE)
+        {
+            /* This is necessarily the first post-warm-up interval (dtCount just
+             * became 1): centre once, here, on dt itself -- see the function
+             * comment for why a single sample, not a running dtMin. */
+            const uint32 margin = IMUINT_HIST_MARGIN_BINS * IMUINT_HIST_BIN_TICKS;
+
+            state->histBase     = (dt > margin) ? (dt - margin) : 0u;
+            state->histCentered = TRUE;
+            result.justCentered = TRUE;
+        }
+
+        if (state->histCentered != FALSE)
+        {
+            if (dt < state->histBase)
             {
-                result.kind = IMUINT_BIN_OVER;
+                result.kind = IMUINT_BIN_UNDER;
             }
             else
             {
-                result.kind  = IMUINT_BIN_INDEX;
-                result.index = offset / IMUINT_HIST_BIN_TICKS;
+                const uint32 binWidth = IMUINT_HIST_BINS * IMUINT_HIST_BIN_TICKS;
+                const uint32 offset   = dt - state->histBase;
+
+                if (offset >= binWidth)
+                {
+                    result.kind = IMUINT_BIN_OVER;
+                }
+                else
+                {
+                    result.kind  = IMUINT_BIN_INDEX;
+                    result.index = offset / IMUINT_HIST_BIN_TICKS;
+                }
             }
         }
     }

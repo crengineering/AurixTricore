@@ -24,17 +24,11 @@ volatile Xcp_Data g_xcpData __at(XCP_DATA_ADDR);
 
 /* The navigation state lives in its own block at the next free 256-byte slot,
  * because Xcp_Data has 8 bytes left before Xcp_Cal and this needs 180. Putting
- * it here rather than growing Xcp_Data means no existing address moves. */
-/* cppcheck-suppress misra-c2012-8.2 ; deviation: false positive, not a
- * declaration in non-prototype form. tools/misra_check.py does not preprocess
- * the TASKING __at() storage-placement extension away (DEFINES carries only
- * DEVICE_TC39XB and __TASKING__), so cppcheck parses "__at(ADDR)" as an
- * old-style function declarator. It tolerates the FIRST such definition in a
- * translation unit -- which is why the four other __at blocks, each alone in
- * its own file, are clean -- and trips on the second. The general fix is to
- * add -D__at(x)= to DEFINES; that is deliberately not done here because it
- * changes parsing for every file at once and belongs in its own change. */
-volatile Xcp_Fusion g_xcpFusion __at(XCP_FUSION_ADDR);
+ * it here rather than growing Xcp_Data means no existing address moves.
+ * g_xcpFusion's own `__at()` definition now lives in XcpFusionPlace.c, not
+ * here -- a second `__at()` in this file trips misra-c2012-8.2/8.5 the same
+ * way it does everywhere else in this tree (SharedRam.h); this file reaches
+ * it through the `extern` declaration in Measurements.h, as before. */
 
 void measurementsInit(void)
 {

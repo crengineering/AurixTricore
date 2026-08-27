@@ -227,12 +227,18 @@ AhrsLatchPlace.c), each in its own translation unit per SharedRam.h's
 cppcheck constraint. No separate tasking_shim.h wiring needed here: both
 land in the `estimator` target below, which already applies
 `-include tasking_shim.h` to every one of its sources.
+
+FusionLatchPlace.c later split further into FusionLatchPlace.c (g_baroLatch
+only) + GnssLatchPlace.c (g_gnssLatch) -- CI MISRA run 33090973650 found a
+second `__at()` in one TU (misra-c2012-8.5); both still need to be built into
+`estimator`, just from two files instead of one.
 ]]
 add_library(estimator STATIC
     ${BSW}/fusion.c
     ${BSW}/Ahrs.c
     ${BSW}/FusionCal.c
     ${BSW}/FusionLatchPlace.c
+    ${BSW}/GnssLatchPlace.c
     ${BSW}/AhrsLatchPlace.c
     fakes/Nvm.c
 )

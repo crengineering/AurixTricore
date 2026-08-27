@@ -57,8 +57,9 @@ typedef struct
     uint32  dupesCount;    /**< cumulative fixes seen again (same iTOW)      */
 } GnssLatch_t;
 
-/** Defined (with __at()) in FusionLatchPlace.c -- see that file and
- *  SharedRam.h for why a second/third __at() object needs its own TU. */
+/** g_baroLatch defined (with __at()) in FusionLatchPlace.c, g_gnssLatch in
+ *  GnssLatchPlace.c -- see those files and SharedRam.h for why each __at()
+ *  object needs its own TU. */
 extern volatile BaroLatch_t g_baroLatch;
 extern volatile GnssLatch_t g_gnssLatch;
 
