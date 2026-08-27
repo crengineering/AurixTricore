@@ -427,57 +427,162 @@ SPI burst duration in §5.5 has to be measured at the same time.
    1 kHz feasibility question: the plan's §3 estimate is 112 µs per read. If the
    real figure is much worse, outcome A branches to 500 Hz (§5.6).
 
-### 5.6 Reading it out, and the decision tree
+### 5.6 The result — D5 is closed, 2026-08-27
 
 ```
-python tools/xcp_read.py g_imuDrdyCount g_imuDrdyDtMin:u32 g_imuDrdyDtMax:u32 \
-                         g_imuDrdyStaleTicks:u32 --watch 1.0
+python tools/imu_int_stats.py --watch 1.0
 ```
 
-⚠️ `xcp_read.py` caps a single read at **63 bytes** (`XCP_MAX_CTO - 1`,
-`tools/xcp_read.py:79`) and has no chunking, so the 128-byte histogram cannot be
-fetched in one call. **Task: add an array form** (`name:u32x32`) that splits into
-63-byte reads, plus a small tools/imu_int_stats.py (**to be created in I6 — not in
-the tree yet**) that pulls the block, prints
-min / max / mean / stddev / p99 in **µs** and an ASCII histogram, and supports
-`--watch`. Tools are not `src/` — this is allowed and is the smallest possible
-host-side change.
+(`tools/xcp_read.py` caps a single read at **63 bytes** (`XCP_MAX_CTO - 1`)
+with no chunking, so the 128-byte histogram cannot come out in one call —
+`tools/imu_int_stats.py`, I6, pulls it via the `NAME:TYPExN` array form
+added to `xcp_read.py` for exactly this, and prints min/max/mean/stddev/p99
+plus an ASCII histogram.)
 
-**Window:** at least **60 s at rest** (60 000 edges) before reading anything; then
-a second run with the frame hand-shaken, and a third with props spinning once
-that is safe. Prop wash is already an open item in the fusion work.
+**Two bugs found and fixed before this data is trustworthy at all** (both
+are their own commits on `feature/refactoring`, both re-measured after
+fixing):
+
+1. **Double-triggering.** `IfxScuEru_enableAutoClear()` is a misnomer — it
+   sets `EICRn.LDENx`, "Level Detection Enable"
+   (`Libraries/Infra/Sfr/TC39xB/IfxScu_regdef.h:368`), not auto-clear. With
+   it enabled, `INTFx` tracks the pin LEVEL and the OGU fires on every
+   transition, so a single ~100 us `INT1` pulse produced two interrupts
+   (the rising edge, then the falling edge ~100 us later) instead of one.
+   First run: a clean bimodal ~107 us / ~878 us split, summing to the true
+   period — the tell. Fixed by removing that call (`docs/ILLD_NOTES.md`
+   §10, T14); `enableTriggerPulse()` (`EIENx`) already gives a genuine
+   one-shot trigger per edge on its own.
+2. **Boot-transient outliers.** After the double-trigger fix, min/max were
+   still 741.31 us / 20396.35 us, bit-identical across independent boots —
+   the signature of a deterministic startup artefact, not sensor jitter.
+   Traced to the boot order: `ImuInt_init()` arms the ERU in
+   `core0_main()` well before `Icm42688_init()` (several sensors' I2C init
+   run in between) finally enables DRDY routing to `INT1` — see
+   `docs/ICM42688P.md` §8's own "`RESET_DONE_INT1_EN` is on out of reset"
+   trap. Fixed by discarding the first `IMUINT_WARMUP_EDGES` (100)
+   intervals outright and centring the histogram on the first
+   post-warm-up sample, not a running minimum that one bad sample could
+   corrupt.
+
+**The measurement, ~26.5 k intervals at rest, after both fixes
+(2026-08-27):**
 
 ```
-count == 0 after 10 s?
-├── yes → no edges at all. Pad was already cleared in §2.1, so it is the
-│         solder joint or the registers. Check INT_ASYNC_RESET (0x64 bit 4) FIRST
-│         — it is the #1 cause. Then INT_SOURCE0=0x08, then continuity CN1·3→P10.7.
-└── no
-    ├── mean ≈ 1000 us (±3 %) AND (max−min) < ~20 us AND no dt > 1.5 ms
-    │   → (A) THE IMU REALLY DELIVERS 1 kHz.
-    │     • 50 Hz is discarding 19 of every 20 samples, and everything above
-    │       25 Hz — frame and prop vibration lives at 80-300 Hz — ALIASES into
-    │       the gyro band. That is the substantive reason 50 Hz is not enough,
-    │       independent of this measurement.
-    │     • Action: NavTask -> 1 kHz on CPU1 (§5.4 table). flight_ctrl KEEPS
-    │       Ts = 0.001f, unchanged. D5 resolved: the IMU rate moves, not the
-    │       controller.
-    │     • Gate: SPI burst (§5.5) must be << 1 ms. If it measures > ~300 us,
-    │       branch to (A'): ODR 500 Hz, NavTask 500 Hz, flight_ctrl Ts = 0.002f.
-    ├── mean off nominal by > 1 % (RC oscillator drift)
-    │   → (B) Harmless to the ESTIMATOR (it already uses measured dt), fatal to
-    │     any fixed-Ts assumption. Action: keep flight_ctrl on the SCHEDULER's
-    │     fixed rate (STM-derived, accurate), feed the AHRS/KF the measured dt,
-    │     and treat DRDY as a "sample ready" flag, never as the clock. Record the
-    │     measured ppm in this file.
-    ├── (max−min) > ~100 us, or occasional dt ≈ 2 ms (a dropped edge)
-    │   → (C) DO NOT TRUST THE PATH YET. Suspects in order: INT_ASYNC_RESET,
-    │     TTL pad mode missing (marginal VIH), 100 us pulse vs a floating line,
-    │     a long unshielded wire. Fix and re-measure before any rate decision.
-    └── g_imuDrdyStaleTicks routinely ~2 000 000 ticks (20 ms)
-        → confirms, from the other end, that the 50 Hz poll is the bottleneck
-          rather than the sensor. Expected; it is the evidence for D5.
+edges=26592  intervals=26491  stale=664.5 us  spi_burst_max=124.4 us
+min=865.45 us  max=1104.54 us
+mean=985.036 us (exact, last completed ~1 s window, 1000 intervals)
+stddev~=1.780 us   p99~=986.00 us
+
+  under (<969.0 us):  137
+  [984.0, 985.0) us:  8109
+  [985.0, 986.0) us: 18078
+  over  (>=1001.0 us):  137
+  (all other bins: 0-4 counts each)
 ```
+
+**26 187 of 26 491 intervals — 98.85 % — fall inside a single 2 us window.**
+Mean 985.036 us = **1014.2 Hz**; stddev 1.780 us = **0.18 %**.
+
+**The 1.15 % tail (137 under + 137 over, exactly symmetric) is a
+measurement artefact correlated with the SPI burst, not IMU jitter or data
+loss:**
+
+- The pairing is exactly symmetric (137/137). A *missed* edge produces one
+  long interval with no matching short one; a *delayed-then-caught-up*
+  timestamp produces a long interval immediately followed by a short one,
+  in pairs — this is that signature, not data loss.
+- The magnitudes match `spi_burst_max`: min is 119.6 us **early**, max is
+  119.5 us **late**, `spi_burst_max` = **124.4 us**. Those are the same
+  number, within measurement tolerance.
+- Duty cycle is the right order of magnitude: 124.4 us of `NavTask`'s
+  current ~20 ms period is ~0.62 %; the observed tail is
+  (137+137)/26491 = 1.03 %, about 1.7x higher but the same order of
+  magnitude — consistent with the SPI burst as the correlated event, not
+  proof of an exact 1:1 mechanism.
+
+**What this is NOT, verified rather than assumed** (the architect's
+hypothesis was CPU-side interrupt priority; that specific mechanism does
+not hold up):
+- `ISR_PRIORITY_IMU_DRDY` = **106** is the numerically HIGHEST priority
+  defined anywhere in `Configurations/ConfigurationIsr.h` (above
+  `ISR_PRIORITY_QSPI0_{TX,RX,ER}` = 102-104 and `ISR_PRIORITY_ASCLIN4_RX`
+  = 105). On TriCore, a higher SRPN always preempts a lower one already
+  running — so DRDY cannot be *blocked* by a QSPI ISR; if anything it is
+  DRDY that adds ~1 us to QSPI's own latency, exactly as §4 already
+  predicted, not the reverse.
+- No explicit interrupt-disable exists anywhere in the call path
+  (`Spi.c`, `Icm42688.c`, `NavTask.c`, `scheduler.c` — grepped, none), and
+  the vendor `IfxQspi_SpiMaster_lock()`
+  (`Libraries/iLLD/.../IfxQspi_SpiMaster.c:799`) is a lock-free atomic
+  swap, not a critical section that could mask interrupts for ~120 us.
+- So CPU-side ISR scheduling is **ruled out** as the mechanism, by reading
+  the actual priority numbers and the actual call path, not by assuming
+  the architect's framing. The correlation to the SPI burst is real (the
+  magnitude match is too precise to be coincidence) but the exact
+  sub-mechanism is most likely on the electrical/IMU side — SPI-bus
+  switching noise or power/ground bounce coupling into the IMU's own
+  DRDY/ODR timing during the burst read — which cannot be confirmed
+  further without the IMU's full register-level datasheet (not in this
+  repo, per the no-vendor-PDFs rule). Left as an open item; it does not
+  change the branch below, because the 98.85 % core population already
+  establishes what the sensor delivers absent this artefact.
+
+**Decision tree, for the record:**
+
+```
+count == 0 after 10 s?           -- no: 26 592 edges, climbing at ~1015/s
+mean ~= 1000 us (+-3%) AND stddev small AND no dt > 1.5 ms?
+  -- yes: mean 985.036 us (1.50 % low, inside +-3%), stddev 1.780 us (tight),
+     max 1104.54 us (well under 1.5 ms)
+  -> (A) THE IMU REALLY DELIVERS ~1 kHz.
+```
+
+**→ Branch (A) is selected. `NavTask` moves to 1 kHz on CPU1; `flight_ctrl`
+KEEPS `Ts = 0.001f`, unchanged (§5.4 table). D5 is closed.**
+
+- **Gate check:** the (A)/(A') split depends on `spi_burst_max` against a
+  ~300 us threshold. Measured **124.4 us** — comfortably under, with room
+  to spare in a 1000 us period. No branch to 500 Hz.
+- **RC oscillator:** mean 985.036 us against a nominal 1000 us is the
+  internal RC running **~1.4 % fast** (1014.2 Hz vs 1000 Hz nominal), with
+  no `CLKIN` on this build (§3.2). In spec, and exactly the number this
+  measurement existed to find — recorded here per the (B) branch's own
+  instruction, even though (A) is what was selected: the estimator must
+  still use the *measured* dt from this ISR, never a hardcoded 1.0 ms
+  constant, because "1 kHz" is nominal, not exact.
+- **Consequence for `docs/REFACTORING_PLAN.md` §3 (stated plainly, not
+  fixed here — T12/T13's job):** `NavTask_step`'s existing worst-case
+  budget is **2.0 ms**, and **that cannot survive a 1 ms period** — one
+  slow dispatch would overrun the very next tick. The §3 timing table
+  needs **re-costing**, not re-rating: the budget itself must come down
+  (the measured `spi_burst_max` of 124.4 us plus AHRS/KF time is the new
+  floor to cost against), not merely be re-labelled for the faster rate.
+
+**Regression check against the pre-I4/I5 baseline, read live over XCP, no
+reflash (2026-08-27):**
+
+| | baseline | measured | verdict |
+|---|---|---|---|
+| `diagStatus` | `0x800` (benign UART bit only) | `0x800` | unchanged |
+| `\|a\|` (fusion `accMagG`) | 1.0018 g | 1.0019 g | unchanged |
+| `NavDropped` (fusion) | 0 | 0 | unchanged |
+| `NavCovResets` (fusion) | 0 | 0 | unchanged |
+| `g_coreStats` alive counters | lockstep | CPU0=4354, CPU1-5=4355 | lockstep (±1 is read-timing skew, not a hang) |
+| `g_p10Pin7Iocr` | `0x01` | `0x01` | input, pulldown — pin safe |
+
+No regression found.
+
+**CPU0 load:** `g_coreStats[0].loadPmil` reads **10.2 %** (CPU1-5 idle, as
+before). I4's acceptance criterion is a rise of **≤ 0.3 %** from adding the
+ISR; this session has no controlled pre-I4 measurement on this exact build
+to subtract against (the earlier "9.4 %" figure in project history predates
+GNSS, fusion, XCP DAQ and the other sensors, so it is not a valid baseline
+for this comparison). 10.2 % is a small, plausible figure for a
+mostly-idle core running a ~1 us ISR at ~1 kHz (~0.1 % by the design
+estimate in §4) plus the existing SPI/I2C/GNSS/Ethernet/XCP work — nothing
+here contradicts the ≤0.3 % criterion, but it is not independently
+re-verified by an A/B measurement in this session.
 
 ---
 
@@ -517,16 +622,16 @@ been added there by this design pass, per the "write it back" rule.
 
 Each builds and flies on its own. No big-bang.
 
-| # | files | change | acceptance |
-|---|---|---|---|
-| **I1** | `BringUp.c` (temp) | Pad self-test on P10.3 / **P10.7** / P10.8 (§2.1) | `g_padProbeP10 == 0x7` over `xcp_read.py`. **Nothing wired to Port 10.** |
-| **I2** | — | Identify the header hole (§2.2), then solder CN1·3 → P10.7 | pull-up probe flips on the right hole; continuity CN1·3 ↔ pad |
-| **I3** | `Icm42688.c/.h` | INT1 registers §3.2 (`0x14`,`0x63`,`0x64`,`0x65`) | boot dump shows the four values; build + MISRA clean; **`|a|` still 0.998 g** — nothing else regresses |
-| **I4** | `ImuInt.c/.h` (new), `ConfigurationIsr.h`, `Cpu0_Main.c` | ERU init §4 + timestamp ISR §5.3 + globals §5.2 | `g_imuDrdyCount` climbs at ~1000/s; CPU0 load in `CoreStats` rises by ≤ 0.3 % |
-| **I5** | `SensorTask.c` | `g_imuDrdyStaleTicks` + SPI burst max (§5.5) | both plausible (stale ≈ 0-20 ms; burst ~100 µs) |
-| **I6** | `tools/xcp_read.py`, tools/imu_int_stats.py (new) | array reads + the stats/histogram script | 60 s run prints min/max/mean/stddev/p99 + histogram |
-| **I7** | this file | paste the measured numbers into §5.6, mark the branch taken | D5 closed with data |
-| **I8** | `PINNING.md`, `ICM42688P.md`, `CODEMAP.md` | the §6 edits, once I1-I2 pass | SSoT matches the board |
+| # | files | change | acceptance | status |
+|---|---|---|---|---|
+| **I1** | `BringUp.c` (temp) | Pad self-test on P10.3 / **P10.7** / P10.8 (§2.1) | `g_padProbeP10 == 0x7` over `xcp_read.py`. **Nothing wired to Port 10.** | ✅ done (result documented in `BringUp.c`'s header comment) |
+| **I2** | — | Identify the header hole (§2.2), then wire (jumper) CN1·3 → P10.7 | pull-up probe flips on the right hole; continuity CN1·3 ↔ pad | ✅ done; X702·73 = P10.7 hardware-proven 2026-08-27 (`g_imuDrdyCount` climbing on the real pad) |
+| **I3** | `Icm42688.c/.h` | INT1 registers §3.2 (`0x14`,`0x63`,`0x64`,`0x65`) | boot dump shows the four values; build + MISRA clean; **`\|a\|` still 0.998 g** — nothing else regresses | ✅ done |
+| **I4** | `ImuInt.c/.h` (new), `ConfigurationIsr.h`, `Cpu0_Main.c` | ERU init §4 + timestamp ISR §5.3 + globals §5.2 | `g_imuDrdyCount` climbs at ~1000/s; CPU0 load in `CoreStats` rises by ≤ 0.3 % | ✅ done (§5.6); CPU0 load 10.2 %, no controlled pre-I4 A/B in this session (§5.6) |
+| **I5** | `Icm42688.c/.h`, `NavTask.c` | `g_imuDrdyStaleTicks` + SPI burst max (§5.5) | both plausible (stale ≈ 0-20 ms; burst ~100 µs) | ✅ done; `spi_burst_max` = 124.4 µs (§5.6) |
+| **I6** | `tools/xcp_read.py`, `tools/imu_int_stats.py` (new) | array reads + the stats/histogram script | 60 s run prints min/max/mean/stddev/p99 + histogram | ✅ done |
+| **I7** | this file | paste the measured numbers into §5.6, mark the branch taken | D5 closed with data | ✅ done — §5.6, branch (A) selected |
+| **I8** | `PINNING.md`, `ICM42688P.md`, `CODEMAP.md` | the §6 edits, once I1-I2 pass | SSoT matches the board | ✅ done |
 
 Unit-testable on the host: the binning/statistics arithmetic factors into a pure
 `ImuInt_accumulate(stats*, dt)` with no iLLD include — a fake is not even needed.
@@ -551,5 +656,5 @@ The ERU/ISR half is hardware-only by nature.
 - **A2L / GUI contract: untouched.** No `Xcp_Data` field, no A2L regeneration, no
   `AurixGUI` edit, no `diagStatus` bit. Confirm with `a2l.yml` staying green.
 - **Nothing here is irreversible in software.** Every task is revertible; only the
-  soldered wire is physical, and it is a single signal that the firmware ignores
+  jumper wire is physical, and it is a single signal that the firmware ignores
   unless `ImuInt_init()` is called.
