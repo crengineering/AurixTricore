@@ -675,6 +675,27 @@ rate would confirm SRI contention; an unchanged rate points at the sensor's
 own DRDY generation jitter instead (`docs/IMU_INTERRUPT.md` §5.6's still-open
 item).
 
+**Experiment run 2026-08-27 on v1.19.13. Result: contention is a contributor,
+not the cause.** Board left completely untouched for 600 s — one reading before,
+one after, no polling in between:
+
+| | polled (1/min, v1.19.12) | untouched (v1.19.13) |
+|---|---|---|
+| `missedEdges` rate | ~1.7 / min | **1.2 / min** (12 in 600 s) |
+| as a fraction of ~1014 edges/s | 28 ppm | **20 ppm** (0.0020 %) |
+
+Removing all XCP traffic cut the rate by roughly a third, so CPU0's polling of
+the same LMU bank does cost something — but ~70 % of the residual survives with
+nothing touching the bus. That is consistent with `IMU_INTERRUPT.md` §5.6's
+open item (the sensor's own DRDY generation, or the correlated SPI-burst slip)
+and **not** with contention as the mechanism. No further action: 20 ppm sits
+**25x inside** the 0.05 % bound set above.
+
+Same reading confirmed `NavCovResets = 0`, `NavDropped = 0`, `diagStatus =
+0x800`, `|a| = 1.00192 g`, `execMaxUs[1] = 171 µs` unchanged, `loadPmil[1]`
+155-158 — and `missedEdges = 0` at boot, confirming the T17 baseline-seeding
+fix on hardware.
+
 ## 4. Interfaces
 
 New or changed headers. Nothing in `Measurements.h`, `Diagnostics.h` or `Nvm.h`
