@@ -59,10 +59,29 @@ void spiIsrError(void);
 
 /* cppcheck-suppress-begin misra-c2012-17.3 ; deviation: IFX_INTERRUPT is an
  * iLLD macro that emits the vector-table entry; the handlers themselves are
- * prototyped immediately above. */
-IFX_INTERRUPT(spiIsrTransmit, 0, ISR_PRIORITY_QSPI0_TX);
-IFX_INTERRUPT(spiIsrReceive,  0, ISR_PRIORITY_QSPI0_RX);
-IFX_INTERRUPT(spiIsrError,    0, ISR_PRIORITY_QSPI0_ER);
+ * prototyped immediately above.
+ *
+ * ⚠️ vectabNum (2nd argument) is NOT the same thing as isrProvider/`.TOS`
+ * below, and the first T12 build shipped with them disagreeing -- CPU1 hung
+ * forever, never reaching Scheduler_init, the moment Icm42688_init()
+ * completed its first QSPI0 transfer. IFX_INTERRUPT expands to
+ * `__vector_table(vectabNum)` (CompilerTasking.h): a LINK-TIME placement of
+ * the handler into vector table `vectabNum` -- `int_tab_tc0`.."tc5" in
+ * Lcf_Tasking_Tricore_Tc.lsl:807-833, one physical table per core
+ * (`__INTTAB_CPU0`.."CPU1"... same file). `isrProvider` (IfxSrc's `.TOS`) is
+ * a RUN-TIME SCU field selecting which core's interrupt controller the
+ * request signals. Nothing checks the two agree: with
+ * `isrProvider = IfxSrc_Tos_cpu1` and `vectabNum = 0`, CPU1 gets a real
+ * interrupt request but its OWN table (int_tab_tc1) has no entry at that
+ * SRPN -- CPU0's table does, uselessly -- so CPU1 traps into whatever the
+ * linker left in that empty slot and never returns. The SPI_XFER_DEADLINE_MS
+ * software timeout in Spi_transfer() never gets a chance to fire: a hardware
+ * trap does not unwind through a C busy-wait loop. See docs/ILLD_NOTES.md
+ * for the general form of this trap: vectabNum must equal the core number
+ * named in isrProvider, always, for every ISR moved to a non-CPU0 core. */
+IFX_INTERRUPT(spiIsrTransmit, 1, ISR_PRIORITY_QSPI0_TX);
+IFX_INTERRUPT(spiIsrReceive,  1, ISR_PRIORITY_QSPI0_RX);
+IFX_INTERRUPT(spiIsrError,    1, ISR_PRIORITY_QSPI0_ER);
 /* cppcheck-suppress-end misra-c2012-17.3 */
 
 /* cppcheck-suppress misra-c2012-8.7 ; deviation: referenced by the interrupt
@@ -106,11 +125,11 @@ void Spi_init(void)
     cfg.erPriority      = ISR_PRIORITY_QSPI0_ER;
     /* T12 (docs/REFACTORING_PLAN.md 2.4/Risk 3): Spi_init() itself now runs
      * on CPU1 (core1_main), so the three QSPI0 interrupts that complete a
-     * transfer must be serviced there too. Leaving this at cpu0 would still
-     * "work" -- the IMU keeps reading -- but Spi_transfer()'s busy-wait on
-     * CPU1 would then depend on CPU0's interrupt latency, a silent jitter
-     * source that announces itself only as noise in NavTask_step's timing,
-     * never as a build or boot failure. */
+     * transfer must be serviced there too. This alone is NOT "silent jitter
+     * and nothing worse" the way Risk 3 originally framed it: it is a hard
+     * hang unless the IFX_INTERRUPT vectabNum above is ALSO 1, not 0 -- see
+     * the comment there, and docs/ILLD_NOTES.md, for the trap this shipped
+     * as once already. */
     cfg.isrProvider     = IfxSrc_Tos_cpu1;
     cfg.maximumBaudrate = SPI_BAUDRATE_HZ;
     cfg.pins                 = &pins;

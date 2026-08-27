@@ -29,6 +29,7 @@ Each of these cost real debugging time on this project. They are not in the vend
 | T12 | ScuEru | The **input** channel is fixed by the pad (`req->channelId`); `initReqPin` also sets the input mux. |
 | T13 | ScuEru | The glitch filter (`SCU_EIFILT`) is **global to all ERU inputs**, not per channel. |
 | T14 | Cpu | `Ifx__dsync` is **undefined for TASKING** in this tree — see §3. |
+| T15 | Cpu | `IFX_INTERRUPT`'s `vectabNum` and `IfxSrc_init`'s/`isrProvider`'s target core are **two independent settings nothing cross-checks** — see §3. |
 
 ---
 
@@ -154,6 +155,44 @@ missing header:
 A missing barrier here is **silent**: it does not fail the build, it fails as
 a rare torn cross-core snapshot under load. Never trust "it compiled" for this
 one — inspect the generated `.src` for the actual `DSYNC` instruction.
+
+### T15 — moving an interrupt to another core is TWO settings, not one
+
+Found retargeting the QSPI0 ISRs to CPU1 (`Spi.c`, T12,
+`docs/REFACTORING_PLAN.md`): CPU1 hung forever, never reaching
+`Scheduler_init`, the first time `Icm42688_init()` completed a transfer.
+
+Two settings decide which core services an interrupt, and **nothing in the
+iLLD checks that they agree**:
+
+1. **Run-time**: `IfxSrc_init(&src, IfxSrc_Tos_cpuN, prio)` (or, for a
+   pre-configured driver like `IfxQspi_SpiMaster`, `cfg.isrProvider =
+   IfxSrc_Tos_cpuN`) sets the SRC's `.TOS` field — which CPU's interrupt
+   controller the service request signals.
+2. **Link-time**: `IFX_INTERRUPT(isr, vectabNum, prio)` expands to
+   `void __interrupt(prio) __vector_table(vectabNum) isr(void)`
+   (`CompilerTasking.h`) — which physical vector table the handler CODE gets
+   placed into. `Lcf_Tasking_Tricore_Tc.lsl:807-833` provisions one such
+   table per core, `int_tab_tc0` through `int_tab_tc5`
+   (`__INTTAB_CPU0`..`__INTTAB_CPU5`), and `vectabNum` selects among them.
+
+Change #1 without #2 (or vice versa): the SRC signals CPUn, CPUn takes the
+trap using **its own** `BIV` + vector table, finds no entry at that SRPN
+(CPU0's table has it, uselessly), and vectors into whatever the linker left
+in the empty slot. That is not a graceful failure — it is a hardware trap,
+and it does **not** unwind through a C-level bounded wait (e.g.
+`SPI_XFER_DEADLINE_MS` in `Spi.c`): the trap hijacks the core before the
+timeout loop ever gets a chance to notice anything is wrong. The three other
+symptoms that make this look like something else at first: (a) the OTHER five
+cores are completely unaffected and keep incrementing their alive counters,
+because each core's vector table is a separate memory region; (b) the stuck
+core does not reset and retry, because `IfxScuWdt_disableCpuWatchdog()` runs
+before the trap, same as every core's boot sequence; (c) there is no build or
+link error — both settings are individually valid, just for different cores.
+
+**Rule: `vectabNum` must always equal the core number named in
+`isrProvider`/`.TOS`.** Whenever an ISR's target core changes, grep for its
+`IFX_INTERRUPT(...)` line in the same file and change both numbers together.
 
 ---
 
