@@ -1,5 +1,6 @@
 #include "unity.h"
 #include "fakes/Ifx_Types.h"
+#include "fakes/IfxStm.h"        /* FakeStm_* -- T16 baseline-seeding tests */
 #include "../src/bsw/NavTask.c"   /* pulls in navTask_dtValid, which is static
                                    * and otherwise unreachable -- same reason
                                    * test_GnssM9N.c #includes GnssM9N.c */
@@ -135,6 +136,67 @@ void test_all_three_conditions_required(void)
     TEST_ASSERT_EQUAL(TRUE,  NavTask_inputValid(0.02f, TRUE, (uint8)AHRS_RUNNING));
 }
 
+/* --- T16: g_imuDrdyMissedEdges must not count the sensor's own bring-up
+ * window (docs/REFACTORING_PLAN.md §3.6, missedEdges investigation) ---
+ *
+ * Cpu1_Main.c calls Icm42688_init()/BringUp_dumpImu() -- which pulses DRDY
+ * for real, advancing g_imuEdge.seq -- BEFORE NavTask_init()/NavTask_step()
+ * ever run. Seeding s_lastEdgeSeq/s_lastEdgeTicks at 0 (the pre-T16 code)
+ * made NavTask_step's first dispatch see that whole bring-up advance as
+ * edges it "missed", even though no task existed yet to consume them. These
+ * tests simulate that ordering directly: poke g_imuEdge (as the ISR would
+ * have, same technique test_imuedge.c uses), THEN call NavTask_init(), THEN
+ * NavTask_step(), and check what the counter reports. */
+
+void test_init_seeds_baseline_without_counting_bringup_edges(void)
+{
+    g_imuDrdyMissedEdges = 0u;
+    FakeStm_reset();
+
+    /* Simulate 30 edges having already happened during bring-up, well
+     * before NavTask_init() ever runs. */
+    FakeStm_setTicks(900000u);
+    g_imuEdge.seq   = 30u;
+    g_imuEdge.ticks = 900000u;
+
+    NavTask_init();
+    TEST_ASSERT_EQUAL_UINT32(0u, g_imuDrdyMissedEdges);
+
+    /* One genuine new edge after init, 985 us later (98500 STM ticks @
+     * 100 MHz) -- comfortably inside NAVTASK_DT_MIN_S/MAX_S. A delta of
+     * exactly 1 against the seeded baseline must not be flagged. */
+    FakeStm_setTicks(998500u);
+    g_imuEdge.seq   = 31u;
+    g_imuEdge.ticks = 998500u;
+
+    NavTask_step();
+    TEST_ASSERT_EQUAL_UINT32(0u, g_imuDrdyMissedEdges);
+}
+
+void test_step_still_counts_genuine_multi_edge_gaps(void)
+{
+    /* Regression for the counting logic itself, unaffected by T16: once the
+     * baseline is seeded, a dispatch that observes the sequence jump by more
+     * than 1 must still report the difference. */
+    g_imuDrdyMissedEdges = 0u;
+    FakeStm_reset();
+
+    FakeStm_setTicks(0u);
+    g_imuEdge.seq   = 0u;
+    g_imuEdge.ticks = 0u;
+    NavTask_init();
+    TEST_ASSERT_EQUAL_UINT32(0u, g_imuDrdyMissedEdges);
+
+    /* Three edges' worth of ticks (295500 = 3 * 98500), seq advanced by 3 --
+     * two genuine edges never individually consumed. */
+    FakeStm_setTicks(295500u);
+    g_imuEdge.seq   = 3u;
+    g_imuEdge.ticks = 295500u;
+
+    NavTask_step();
+    TEST_ASSERT_EQUAL_UINT32(2u, g_imuDrdyMissedEdges);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -148,5 +210,7 @@ int main(void)
     RUN_TEST(test_ahrs_not_running_is_rejected);
     RUN_TEST(test_imu_absent_is_rejected);
     RUN_TEST(test_all_three_conditions_required);
+    RUN_TEST(test_init_seeds_baseline_without_counting_bringup_edges);
+    RUN_TEST(test_step_still_counts_genuine_multi_edge_gaps);
     return UNITY_END();
 }

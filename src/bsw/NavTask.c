@@ -92,6 +92,14 @@ boolean NavTask_inputValid(float32 dtS, boolean imuPresent, uint8 ahrsState)
  * static. */
 static float32 s_imuLivenessAccum;
 
+/* CPU1-side record of the last edge this task actually consumed -- never
+ * written to g_imuEdge, matching NavState_get()'s "the reader never writes
+ * shared state" rule. File-scope (not NavTask_step-local) since T16:
+ * NavTask_init() must seed these from the CURRENT g_imuEdge, not from 0 --
+ * see NavTask_init() for why. */
+static uint32 s_lastEdgeSeq;
+static uint32 s_lastEdgeTicks;
+
 void NavTask_init(void)
 {
     NavState_init();        /* the publish target, before anything publishes */
@@ -99,6 +107,18 @@ void NavTask_init(void)
     Ahrs_init();              /* start the gyro-bias calibration; hold still  */
     Fusion_init();            /* zero every channel state and covariance      */
     s_imuLivenessAccum = 0.0f;
+
+    /* T16 (docs/REFACTORING_PLAN.md §3.6, missedEdges investigation): seed
+     * the baseline from whatever the ISR has already produced during
+     * Icm42688_init()/BringUp_dumpImu()'s bring-up window (Cpu1_Main.c),
+     * not from 0. Those edges were never polled for -- no task existed yet
+     * to consume them -- so starting the diff at 0 counted every one of
+     * them as "missed" on NavTask_step's very first dispatch: a single,
+     * deterministic, boot-time jump in g_imuDrdyMissedEdges indistinguishable,
+     * in the published counter, from genuine in-flight loss. Seeding here
+     * instead means the counter only ever reports edges missed AFTER this
+     * task started actually looking for them. */
+    ImuEdge_snapshot(&s_lastEdgeSeq, &s_lastEdgeTicks);
 }
 
 /* T15 (docs/REFACTORING_PLAN.md §3.6): registered at SCHED_US(500), a 2 kHz
@@ -107,12 +127,6 @@ void NavTask_init(void)
  * period) is the real clock. See the body below for the gate. */
 void NavTask_step(void)
 {
-    /* CPU1-side record of the last edge this task actually consumed --
-     * never written to g_imuEdge, matching NavState_get()'s "the reader never
-     * writes shared state" rule. */
-    static uint32 s_lastEdgeSeq   = 0u;
-    static uint32 s_lastEdgeTicks = 0u;
-
     uint32  edgeSeq;
     uint32  edgeTicks;
     boolean newSample;

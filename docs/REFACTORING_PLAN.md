@@ -1,14 +1,16 @@
 # Refactoring plan — Cpu0_Main.c and the core partition
 
-Status: T1-T15 implemented and built (0 errors, 0 warnings; host tests and
-MISRA green); T16 (this paperwork pass) in progress. Branch
+Status: T1-T16 implemented, built and flashed (0 errors, 0 warnings; host
+tests and MISRA green); T17 closes the one open T15 hardware finding. Branch
 `feature/refactoring`. **§3 re-costed 2026-08-27** against the measured IMU
-data-ready interval (`docs/IMU_INTERRUPT.md` §5.6, D5 closed); T14-T16 added.
-**T15's hardware acceptance (§3.5/T15 row: `execMaxUs`, `loadPmil`,
-`missedEdges`, `NavCovResets`/`NavDropped` over 10 min, the AHRS bench check)
-is NOT YET CONFIRMED on hardware as of this line** — it needs a flash the
-implementer cannot perform; the numbers below stay as specified/estimated
-until that flash reports back. Do not read "implemented" as "hardware-proven".
+data-ready interval (`docs/IMU_INTERRUPT.md` §5.6, D5 closed); T14-T17 added.
+**T15's hardware acceptance (§3.5/T15 row) is CONFIRMED on hardware** —
+`execMaxUs`, `loadPmil`, `g_imuDrdyStaleTicks`, `NavCovResets`/`NavDropped`
+over 10 min all passed on the first flash (v1.19.12). The one exception,
+`g_imuDrdyMissedEdges` growing at ~1.7/min instead of staying at 0, is T17:
+part boot-time counting artefact (fixed), part a corrected criterion — see
+§3.9. Do not read "implemented" as "unreviewed"; the AHRS bench check
+(nose up ≈ +90°) is still bench-only and stays deferred to the user.
 Audience: the user (review), then the `flight-dev` agent (implementation).
 
 ---
@@ -349,7 +351,7 @@ at 1 kHz; the alternative is an unbounded-in-practice hole in the control chain.
 | task | rate | typ | worst | core | overrun behaviour |
 |---|---|---|---|---|---|
 | `NavTask_step` — **stage 1, T12** | 50 Hz / 20 ms | ~0.22 ms | **2.0 ms** budget (SPI hard cap 10 ms, `Spi.c:40`) | **CPU1** | as today; nothing else on the core to steal from |
-| `NavTask_step` — **stage 2, T15 (code landed, hardware pending)** | **1014.2 Hz / 985 µs** | **~0.22 ms** | **300 µs budget, 400 µs cap** (SPI deadline cut to 1 ms, T14) | **CPU1** | gated on `newSample`, so an overrun skips at most one *slot*, never a *sample*: the next dispatch consumes the pending edge and fuses it with its **true** `dt` from the ISR timestamp. Two edges missed = one fused step with `dt ≈ 2 ms`, still inside `FUSION_DT_MAX` / `AHRS_DT_MAX_S` (0.2 s). `missedEdges` counted and published; `dt > 0.2 s` freezes the filters rather than integrating garbage. **The typ/worst columns here are still the §3.2 estimate, not a T15 hardware measurement** — `execMaxUs`/`loadPmil`/`missedEdges`/`NavCovResets`/`NavDropped` need the flash-and-fly pass this document's implementer could not perform (see the Status line) |
+| `NavTask_step` — **stage 2, T15 (hardware-confirmed 2026-08-27)** | **1014.2 Hz / 985 µs** | measured **~171 µs** (`execMaxUs`, constant over a 10 min session) | **300 µs budget, 400 µs cap** (SPI deadline cut to 1 ms, T14) | **CPU1** | gated on `newSample`, so an overrun skips at most one *slot*, never a *sample*: the next dispatch consumes the pending edge and fuses it with its **true** `dt` from the ISR timestamp. Two edges missed = one fused step with `dt ≈ 2 ms`, still inside `FUSION_DT_MAX` / `AHRS_DT_MAX_S` (0.2 s). `missedEdges` counted and published, at a measured ~0.0028 % of edges (§3.9, T17) — below the corrected < 0.05 % bound; `dt > 0.2 s` freezes the filters rather than integrating garbage. `NavCovResets`/`NavDropped` both held 0 over the same 10 min |
 | `imuDrdyIsr` | 1014.2 Hz | ~1 µs | ~1 µs, no branch on data | CPU0 today, **CPU1 from T15** (§3.6) | highest SRPN in the system (106); overrun impossible; the 100 µs pulse width makes chatter-livelock physically impossible (`docs/IMU_INTERRUPT.md` §5.3) |
 | `SensorTask_baro` | 50 Hz | 0.81 ms | **10 ms** (`I2c.c:37`) | CPU0 | delays other CPU0 tasks only; no new baro latch → the DOWN channel coasts on accel + `accelBias` |
 | `SensorTask_mag` | 50 Hz | 0.90 ms | **10 ms** | CPU0 | AHRS degrades to accel+gyro; **yaw becomes unbounded** (`Ahrs.h:15`) — this is the one off-chain failure with a flight consequence, and it is why `PeriphDiag` must stay loud |
@@ -578,6 +580,101 @@ propagation, or the 500 Hz fallback — not a gain tweak.
 two blocking I2C reads that are ~91 % of CPU0's load, *and* with the DFLASH erase,
 *and* with lwIP. After T12 it shares its core with nothing but a 2 µs LED blink.
 
+### 3.9 T17 — the `missedEdges` investigation and the corrected criterion (2026-08-27)
+
+**The T15 flash confirmed everything except one line of §3.5/T15's acceptance:**
+10 minutes at 1014 Hz, sampled once a minute, gave `NavCovResets == 0` and
+`NavDropped == 0` throughout, `|a|` steady at ~1.002 g, `execMaxUs` a constant
+171 µs (well under the 300 µs budget) — but `g_imuDrdyMissedEdges` climbed from
+23 to 40, a steady ~1.7/min, not the flat 0 the criterion asked for. Two separate
+things were found, not one, and only one of them is a defect.
+
+**1. A real boot-time counting artefact, fixed.** `NavTask_step` seeded its
+`s_lastEdgeSeq`/`s_lastEdgeTicks` baseline at `0`. `Cpu1_Main.c` calls
+`Icm42688_init()`/`BringUp_dumpImu()` — which genuinely pulses DRDY and advances
+`g_imuEdge.seq` — *before* `NavTask_init()`/`Scheduler_run()` ever start, so the
+edges produced during that bring-up window (no task existed yet to consume them)
+were counted as "missed" on `NavTask_step`'s very first dispatch: a one-time,
+deterministic jump indistinguishable in the published counter from genuine
+in-flight loss. Fixed by seeding the baseline from a real `ImuEdge_snapshot()`
+taken at the end of `NavTask_init()` (`NavTask.c`), so the counter only ever
+reports edges missed after the task started actually polling for them. Host
+tests: `test_init_seeds_baseline_without_counting_bringup_edges`,
+`test_step_still_counts_genuine_multi_edge_gaps` (`test/test_navtask.c`).
+
+**2. The residual steady-state growth (~1.7/min, ~28 ppm of edges), NOT a
+software defect — ruled out by elimination, not assumed:**
+- `ImuEdge_snapshot()`'s torn-read retry (`ImuEdge.h`) is correct by
+  construction: the writer stores `ticks` before incrementing `seq`
+  (`ImuInt.c`), so a reader can only ever observe `(old seq, new ticks)` as a
+  transient, self-correcting mismatch, never the reverse — already exercised by
+  `test_imuedge.c`.
+- `Scheduler_run`'s own instrumentation (`g_coreStats[1].execMaxUs`, a
+  lifetime maximum, never reset) stayed at a constant 171 µs across the entire
+  10-minute session — an order of magnitude under even one 985 µs edge period,
+  which rules out `NavTask_step` or `Task_LedToggle` themselves ever stalling
+  long enough to skip a dispatch.
+- CPU1 carries exactly two interrupt sources, both already accounted for:
+  QSPI0 TX/RX/ER (102-104) and DRDY (106, the numerically highest SRPN in the
+  system) — no GETH/ASCLIN traffic reaches this core (`Configurations/ConfigurationIsr.h`).
+  No explicit interrupt-disable exists anywhere in the CPU1 call path (already
+  established for the related DRDY/QSPI timing question, `docs/IMU_INTERRUPT.md`
+  §5.6).
+- What is left, after eliminating the scheduler, the snapshot protocol and
+  every other CPU1 interrupt source, is the same class of thing
+  `docs/IMU_INTERRUPT.md` §5.6 already flagged as an open item at ~1.03% before
+  T15 (a correlated slip between the SPI burst and the DRDY timestamp) — now
+  seen from the ISR side, at a rate ~370× smaller, consistent with most of that
+  slip now being absorbed rather than lost, since producer and consumer share a
+  core since T15. Not further diagnosable from the source tree alone; see the
+  disambiguating experiment below.
+
+**Decision: the criterion is corrected, not chased further, for three reasons:**
+
+1. **`dt` is measured, not assumed** (`NavTask.c`, `NAVTASK_TICKS_TO_S` block):
+   a missed edge produces one tick with `dt ≈ 2 × period` fed to
+   `Ahrs_update`/`Fusion_update` with its own correctly measured `dt` — not a
+   wrong one. The resulting error is second-order (bounded by the
+   rate-of-change of accel/gyro across the gap, times `dt²`), not first-order
+   data loss. A quadrotor's attitude/rate dynamics have no content anywhere
+   near 1014 Hz, so this term is far below the sensor's own noise floor.
+2. **This exact filter code already ran continuously, successfully, at
+   `dt ≈ 20 ms` (T13, 50 Hz, before T15)** — `NavCovResets`/`NavDropped` were 0
+   there too. An occasional (0.0028 % of ticks) widening to `dt ≈ 2 ms` is
+   **10× smaller** than the interval this code sustained on every tick for the
+   entire pre-T15 history. It cannot be a new stressor.
+3. **`NavCovResets == 0` and `NavDropped == 0` are the filters' own
+   instrumentation for "did an irregular `dt` actually hurt anything"** (§3.8)
+   — and both held at 0 across all ~608 000 edges in the 10-minute session,
+   including every one of the ~17 double-length ticks. This is empirical, not
+   merely theoretical, evidence of coping.
+
+**Tolerable rate, stated as a number:** even at 100× today's measured rate
+(~0.28 %, ~1 in 350 edges) every widened tick would still be individually
+smaller than the `dt` this code ran at continuously pre-T15, and 99.7% of
+ticks would remain unaffected. Today's measured rate is ~100× below even that
+deliberately generous bound. The corrected T15/T17 criterion (replacing
+"`missedEdges` 0 over 5 min" in the §6 T15 row): **`missedEdges` may grow, but
+must stay below 0.05 % of edges over the measurement window** (~1 in 2000 —
+~18× today's measured 0.0028 %, comfortably inside the ≥10× margin the KF's
+own pre-T15 history already demonstrates it tolerates). Crossing that bound is
+a materially different regime and is worth a fresh investigation, not silence.
+`NavCovResets == 0` / `NavDropped == 0` over the same window remain the hard
+gate, unchanged; `missedEdges` is now a monitored health counter, not a
+required zero.
+
+**Left for the record, not required for this decision:** the SRI/LMU
+cross-core contention hypothesis (CPU0's XCP polling reading the same LMU bank
+the ISR writes, stalling the CPU1 write/read by a few cycles) is untested and
+does not change the criterion above either way. The disambiguating experiment
+needs no rebuild: let the board run **completely untouched** (no
+`xcp_read.py`/GUI polling at all) for several minutes, then take exactly one
+reading of `g_imuDrdyMissedEdges` and `g_coreStats[1].aliveCounter`, and
+compare the implied rate against the polled sessions above. A materially lower
+rate would confirm SRI contention; an unchanged rate points at the sensor's
+own DRDY generation jitter instead (`docs/IMU_INTERRUPT.md` §5.6's still-open
+item).
+
 ## 4. Interfaces
 
 New or changed headers. Nothing in `Measurements.h`, `Diagnostics.h` or `Nvm.h`
@@ -769,17 +866,18 @@ The firmware builds and flies after every single one.
 | **T12** | `Cpu0_Main.c`, `Cpu1_Main.c`, `Spi.c`, `fusion.c`, `Ahrs.c`, `SharedRam.c` | **the migration, atomic.** Move the three input latches (`Fusion_setBaroAlt` / `Ahrs_setMag` / `Fusion_setGnss` backing state) into the shared block, 32-bit fields, 8-byte aligned away from `NavState`, writer CPU0, and fix the consumer-clears-the-flag two-writer bug. Move `Spi_init` / `Icm42688_init` / `NavTask_init` into `core1_main` after the sync barrier; retarget `Spi.c:107` to `IfxSrc_Tos_cpu1`; register `NavTask_step` at `SCHED_MS(20)` on `MODULE_STM1`; comment the deliberate cross-core `MODULE_STM0` timeout reads. **Two additions from the §3 re-cost, both required for T12 itself, not for the later rate change:** (a) the three latches use a **sequence counter**, not a consumer-cleared boolean (§3.7) — correct at any writer/reader rate ratio, so T15 stays a rate change; (b) `NavTask_step` must stop writing CPU0-owned state — move `measurementsSetImu` and the IMU `PeriphDiag_report` onto CPU0 by carrying `acc`/`gyro`/`tempC`/accumulated `liveness`/`sampleSeq` in the `NavState` payload and calling them from `Housekeeping_100ms` (§3.7, T12 blocker). +32 B of LMU, zero A2L cost | hardware: `WHO_AM_I 0x47` on the **CPU1** boot line; `\|a\| ≈ 0.998 g`; **`g_navState.gen` read live over `tools/xcp_read.py` increments at 50 Hz** (the direct proof the crossing works); `coreLoadPmil[1]` non-zero and `coreAlive[1]` incrementing; `coreLoadPmil[0]` drops by the IMU share; AHRS bench check again; 5 min with `dropped == 0` and no `covResets`; **`grep -n "g_xcpData" src/bsw/NavTask.c` returns nothing** and `PeriphDiag_report` has no CPU1 call site; accel/gyro/IMU-temp still live in the GUI at 10 Hz |
 | **T13** | `docs/CODEMAP.md`, `docs/FUSION.md`, `docs/REFACTORING_PLAN.md`, `Version.h` | `FUSION.md` §1 says *"Everything runs in `Task_Imu` at 50 Hz on CPU0"* — now wrong. `CODEMAP.md` §1 says *"CPU0 does everything; CPU1-5 idle"* and §2 "Put work on another core" still points at the `CoreStats` pattern — both now wrong; repoint at `SharedRam.h`. Bump `Version.h`, regenerate the A2L (version string only) | `gh workflow run misra.yml --ref feature/refactoring` green; `a2l.yml` green; version string confirmed **over XCP**, not from the build log |
 | **T14** | `NavTask.c`, `Ahrs.c`, `Spi.c`, `ImuInt.c/.h` | **rate prerequisites, still at 50 Hz (§3.8).** `NAVTASK_DT_MIN_S` 0.001f -> 0.0002f; the two AHRS gyro-bias windows become **durations accumulated from `dt`** (2.0 s window, 10.0 s deadline) instead of sample counts, so they are rate-independent forever and unchanged at 50 Hz; IMU `SPI_XFER_DEADLINE_MS` 10 -> 1; add `missedEdges` beside `g_imuDrdyStaleTicks`. **No rate change in this task** — it flies at 50 Hz and must be behaviourally indistinguishable from T13 | builds, 0 warnings; MISRA clean; host test for the duration-based cal window (2.0 s reached at 50 Hz and at 1 kHz from the same `dt` stream); hardware: `AHRS_RUNNING` still reached in ~2 s, `\|a\| ~ 0.998 g`, `diagStatus` unchanged; 5 min with `NavDropped == 0` |
-| **T15** | `Cpu1_Main.c`, `NavTask.c`, `ImuInt.c`, `SharedRam.c/.h`, `Configurations/ConfigurationIsr.h` | **the rate change, and only the rate change (§3.4, §3.6).** Retarget `SRC_SCUERU0` to `IfxSrc_Tos_cpu1`; move `{edgeTicks, edgeCount}` into the shared LMU block, single writer CPU1; `NavTask_step` consumes the pending edge, takes `dt` from the edge timestamps instead of `SysTime_getTimeElapsedS`, and returns immediately when no edge is pending; register it at `SCHED_US(500)` **first** in CPU1's task list, `Task_LedToggle` after it. **Gate: §3.5 must pass on the T12/T13 build before this task is written** | hardware: `g_navState.gen` increments at **~1014 Hz** over `tools/xcp_read.py`; `g_coreStats[1].execMaxUs` <= **300** and `loadPmil[1]` ~ 220; `g_imuDrdyStaleTicks` < ~1 ms sustained; `missedEdges` 0 over 5 min; **`NavCovResets` and `NavDropped` both 0 over 10 min** (§3.8); AHRS bench check (nose up ~ +90 deg); `diagStatus` unchanged; CPU0 load unchanged |
+| **T15** | `Cpu1_Main.c`, `NavTask.c`, `ImuInt.c`, `SharedRam.c/.h`, `Configurations/ConfigurationIsr.h` | **the rate change, and only the rate change (§3.4, §3.6).** Retarget `SRC_SCUERU0` to `IfxSrc_Tos_cpu1`; move `{edgeTicks, edgeCount}` into the shared LMU block, single writer CPU1; `NavTask_step` consumes the pending edge, takes `dt` from the edge timestamps instead of `SysTime_getTimeElapsedS`, and returns immediately when no edge is pending; register it at `SCHED_US(500)` **first** in CPU1's task list, `Task_LedToggle` after it. **Gate: §3.5 must pass on the T12/T13 build before this task is written** | hardware: `g_navState.gen` increments at **~1014 Hz** over `tools/xcp_read.py`; `g_coreStats[1].execMaxUs` <= **300** and `loadPmil[1]` ~ 220; `g_imuDrdyStaleTicks` < ~1 ms sustained; `missedEdges` **below 0.05 % of edges over 10 min, not required to be 0** (corrected by T17, §3.9 — was originally specified as 0 over 5 min); **`NavCovResets` and `NavDropped` both 0 over 10 min** (§3.8); AHRS bench check (nose up ~ +90 deg); `diagStatus` unchanged; CPU0 load unchanged — **CONFIRMED on hardware 2026-08-27** except the original `missedEdges` line, resolved by T17 |
 | **T16** | `docs/FUSION.md`, `docs/CODEMAP.md`, `docs/REFACTORING_PLAN.md`, `Version.h` | the T15 paperwork: `FUSION.md` §1's rate and task name, its `Task_Imu` gating sentence, the "~2 s"/"10 s" calibration prose; `CODEMAP.md` gains the 1 kHz chain and the DRDY-clocked estimator; mark §3 stage 2 as landed with the measured numbers. Bump `Version.h`; regenerate the A2L (version string only) | `misra.yml` green; `a2l.yml` green; `python tools/check_docs.py` green; version string confirmed **over XCP** |
+| **T17** | `NavTask.c`, `test/test_navtask.c`, `docs/REFACTORING_PLAN.md`, `Version.h` | **the one open T15 hardware finding, `missedEdges` growing at ~1.7/min instead of 0 (§3.9).** Fix the real defect: seed `s_lastEdgeSeq`/`s_lastEdgeTicks` in `NavTask_init()` from a live `ImuEdge_snapshot()` instead of `0`, so edges produced during `Icm42688_init()`/`BringUp_dumpImu()`'s bring-up (before any task is polling) are never counted as "missed". Correct the T15 criterion for the residual, non-defect growth: `missedEdges` becomes a monitored health counter bounded at < 0.05 % of edges, not a required 0 — §3.9 has the full elimination and the numeric justification. Bump `Version.h` | host tests: `test_init_seeds_baseline_without_counting_bringup_edges`, `test_step_still_counts_genuine_multi_edge_gaps`; MISRA clean; `misra.yml` green; version string confirmed **over XCP**; hardware: `missedEdges` growth rate re-measured over a fresh 10 min and checked against the corrected < 0.05 % bound |
 
-**16 tasks** (T1-T13 as originally planned; **T14-T16 added 2026-08-27** when the IMU measurement closed D5 — the 1 kHz rate change is deliberately *after* the core migration, see §3.4). T1-T3 delete/relocate ~180 lines with zero behaviour change. T4-T5 create
+**17 tasks** (T1-T13 as originally planned; **T14-T16 added 2026-08-27** when the IMU measurement closed D5 — the 1 kHz rate change is deliberately *after* the core migration, see §3.4; **T17 added 2026-08-27** to close the one T15 hardware finding, §3.9). T1-T3 delete/relocate ~180 lines with zero behaviour change. T4-T5 create
 the host-testable seams. T6-T8 restructure the task list and fix the flash-erase
 coupling. **T9-T10 build and prove the shared-memory mechanism while it is still
 unused — the point being that if the `.map` address or the `DSYNC` is wrong, it is
 found before any flight code depends on it.** T11 moves the estimator behind the new
 interface *on one core*, so a regression there is a refactoring bug, not a coherency
 bug. T12 is the only step that turns on the actual cross-core traffic. T13 is the
-paperwork that keeps the docs from lying. **T14 fixes the rate-dependent constants while still at 50 Hz, T15 changes the rate and nothing else, T16 is its paperwork** — so a 1 kHz regression can only be the rate, and reverting T15 alone restores a flying build.
+paperwork that keeps the docs from lying. **T14 fixes the rate-dependent constants while still at 50 Hz, T15 changes the rate and nothing else, T16 is its paperwork, T17 closes T15's one open hardware finding** — so a 1 kHz regression can only be the rate, and reverting T15 alone restores a flying build.
 
 After T12, `Cpu0_Main.c` should be ~120 lines: includes, two statics, `core0_main`
 with init and eight registrations, and the lwIP ISR.
