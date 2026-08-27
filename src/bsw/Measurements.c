@@ -107,9 +107,17 @@ void measurementsSetSystemLoad(void)
 
     for (i = 0u; i < CORESTATS_NUM_CORES; i++)
     {
+        /* coreLoadPmil/coreAlive stay uint16 in Xcp_Data -- this block is
+         * plain CPU0 DSPR, not the LMU, so the T9 no-sub-word rule (32-bit
+         * fields only in CoreStats_t, SharedRam.h) does not apply here, and
+         * widening the XCP-visible copies would cost 24 bytes this block
+         * cannot spare (docs/REFACTORING_PLAN.md §2.4, T9 acceptance) for no
+         * benefit: loadPmil never exceeds 1000 and aliveCounter already
+         * wrapped at 65536 before this change. Explicit casts, not implicit
+         * narrowing (MISRA 10.3/10.8). */
         g_xcpData.coreExecUs[i]   = g_coreStats[i].execUs;
-        g_xcpData.coreLoadPmil[i] = g_coreStats[i].loadPmil;
-        g_xcpData.coreAlive[i]    = g_coreStats[i].aliveCounter;
+        g_xcpData.coreLoadPmil[i] = (uint16)g_coreStats[i].loadPmil;
+        g_xcpData.coreAlive[i]    = (uint16)g_coreStats[i].aliveCounter;
     }
 
     EthStats_update();

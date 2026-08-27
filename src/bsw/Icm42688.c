@@ -22,11 +22,15 @@
 
 /* --- Register map (bank 0) --- */
 #define ICM42688_REG_DEVICE_CONFIG   (0x11u)
+#define ICM42688_REG_INT_CONFIG      (0x14u)
 #define ICM42688_REG_TEMP_DATA1      (0x1Du)   /* 0x1D..0x2A: temp(2) accel(6) gyro(6) */
 #define ICM42688_REG_INT_STATUS      (0x2Du)
 #define ICM42688_REG_PWR_MGMT0       (0x4Eu)
 #define ICM42688_REG_GYRO_CONFIG0    (0x4Fu)
 #define ICM42688_REG_ACCEL_CONFIG0   (0x50u)
+#define ICM42688_REG_INT_CONFIG0     (0x63u)
+#define ICM42688_REG_INT_CONFIG1     (0x64u)
+#define ICM42688_REG_INT_SOURCE0     (0x65u)
 #define ICM42688_REG_WHO_AM_I        (0x75u)
 
 #define ICM42688_BURST_LEN           (14u)     /* temp(2) + accel(6) + gyro(6) */
@@ -55,6 +59,21 @@
  * leaves headroom to raise the task rate later. */
 #define ICM42688_ACCEL_CONFIG0_VAL   (0x06u)
 #define ICM42688_ACCEL_FULLSCALE_G   (16.0f)
+
+/* INT1 data-ready registers (docs/ICM42688P.md 8.2, verified against the
+ * datasheet, DS-000347 rev 1.2). These are written as plain values, never as
+ * a read-modify-write: INT_CONFIG1 resets to 0x10 and INT_SOURCE0 resets to
+ * 0x10, not 0x00 (8.3), so preserving "defaults" would silently keep
+ * INT_ASYNC_RESET at 1 -- the documented #1 cause of an interrupt that never
+ * fires, looking exactly like a bad solder joint. Push-pull (not open-drain)
+ * is a safety choice: open-drain needs a pull-up, and the only rail at the
+ * P10.7 pad is 5 V, which would exceed INT1's VDDIO+0.3 V absolute maximum
+ * (docs/IMU_INTERRUPT.md). SPI-side only -- no GPIO/ERU wiring here; that is
+ * I4, out of scope for this change. */
+#define ICM42688_INT_CONFIG_VAL      (0x03u)   /* INT1: active high, push-pull, pulsed */
+#define ICM42688_INT_CONFIG0_VAL     (0x00u)   /* latched-mode clear opts; no-op here */
+#define ICM42688_INT_CONFIG1_VAL     (0x00u)   /* INT_ASYNC_RESET -> 0 (was 1); 100us pulse */
+#define ICM42688_INT_SOURCE0_VAL     (0x08u)   /* UI_DRDY_INT1_EN only */
 
 #define ICM42688_COUNTS_FULLSCALE    (32768.0f)
 #define ICM42688_GYRO_SCALE   (ICM42688_GYRO_FULLSCALE_DPS / ICM42688_COUNTS_FULLSCALE)
@@ -189,6 +208,26 @@ boolean Icm42688_init(void)
         ok = Icm42688_writeReg(ICM42688_REG_ACCEL_CONFIG0, ICM42688_ACCEL_CONFIG0_VAL);
     }
 
+    /* INT1 data-ready configuration (docs/ICM42688P.md 8.2). SPI-side only:
+     * no ERU/ISR wiring here, that is a separate task (I4). Written as plain
+     * values, never read-modify-write -- see the constants above for why. */
+    if (ok != FALSE)
+    {
+        ok = Icm42688_writeReg(ICM42688_REG_INT_CONFIG, ICM42688_INT_CONFIG_VAL);
+    }
+    if (ok != FALSE)
+    {
+        ok = Icm42688_writeReg(ICM42688_REG_INT_CONFIG0, ICM42688_INT_CONFIG0_VAL);
+    }
+    if (ok != FALSE)
+    {
+        ok = Icm42688_writeReg(ICM42688_REG_INT_CONFIG1, ICM42688_INT_CONFIG1_VAL);
+    }
+    if (ok != FALSE)
+    {
+        ok = Icm42688_writeReg(ICM42688_REG_INT_SOURCE0, ICM42688_INT_SOURCE0_VAL);
+    }
+
     s_icm42688Present = ok;
     return ok;
 }
@@ -259,6 +298,24 @@ boolean Icm42688_read(Icm42688_Sample *sample)
     return ok;
 }
 
+boolean Icm42688_plausible(const Icm42688_Sample *sample, float32 *liveness)
+{
+    const float32 accMagSq = (sample->acc[0] * sample->acc[0])
+                           + (sample->acc[1] * sample->acc[1])
+                           + (sample->acc[2] * sample->acc[2]);
+    boolean plausible = FALSE;
+
+    if ((accMagSq > 0.0025f) && (accMagSq < 289.0f)
+        && (sample->tempC > -40.0f) && (sample->tempC < 105.0f))
+    {
+        plausible = TRUE;
+    }
+    *liveness = sample->acc[0] + sample->acc[1] + sample->acc[2]
+              + sample->gyro[0] + sample->gyro[1] + sample->gyro[2]
+              + sample->tempC;
+    return plausible;
+}
+
 boolean Icm42688_debugDump(uint8 cfg[ICM42688_DUMP_CFG_LEN], uint8 raw[14])
 {
     /* Block scope (MISRA 8.9): the order here is the order documented for
@@ -269,7 +326,11 @@ boolean Icm42688_debugDump(uint8 cfg[ICM42688_DUMP_CFG_LEN], uint8 raw[14])
         ICM42688_REG_PWR_MGMT0,
         ICM42688_REG_GYRO_CONFIG0,
         ICM42688_REG_ACCEL_CONFIG0,
-        ICM42688_REG_INT_STATUS
+        ICM42688_REG_INT_STATUS,
+        ICM42688_REG_INT_CONFIG,
+        ICM42688_REG_INT_CONFIG0,
+        ICM42688_REG_INT_CONFIG1,
+        ICM42688_REG_INT_SOURCE0
     };
 
     boolean ok = TRUE;

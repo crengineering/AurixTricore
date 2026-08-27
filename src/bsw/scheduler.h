@@ -23,7 +23,7 @@
 #define SCHED_US(us)   ((uint32)((us) * 100UL))
 
 #ifndef SCHEDULER_MAX_TASKS
-#define SCHEDULER_MAX_TASKS  8u
+#define SCHEDULER_MAX_TASKS  12u
 #endif
 
 typedef void (*Scheduler_TaskFn_t)(void);

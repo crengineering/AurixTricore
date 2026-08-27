@@ -62,11 +62,13 @@ boolean Icm42688_readWhoAmI(uint8 *whoAmI);
 boolean Icm42688_read(Icm42688_Sample *sample);
 
 /** Number of registers Icm42688_debugDump() returns in \p cfg. */
-#define ICM42688_DUMP_CFG_LEN   (5u)
+#define ICM42688_DUMP_CFG_LEN   (9u)
 
 /** One-shot bring-up dump. Fills \p cfg in this order:
  *      [0] WHO_AM_I 0x75   [1] PWR_MGMT0 0x4E   [2] GYRO_CONFIG0 0x4F
  *      [3] ACCEL_CONFIG0 0x50   [4] INT_STATUS 0x2D
+ *      [5] INT_CONFIG 0x14   [6] INT_CONFIG0 0x63
+ *      [7] INT_CONFIG1 0x64   [8] INT_SOURCE0 0x65
  *  What to look for:
  *      WHO_AM_I = 0x47 -> everything below is meaningful. Anything else and
  *          the problem is wiring, CS or SPI mode, not configuration.
@@ -75,8 +77,22 @@ boolean Icm42688_read(Icm42688_Sample *sample);
  *      PWR_MGMT0 = 0x0F -> gyro and accel both in low-noise mode. 0x00 means
  *          the part is still asleep and every sample will read zero.
  *      GYRO_CONFIG0 / ACCEL_CONFIG0 = 0x06 -> full scale and 1 kHz ODR.
+ *      INT_CONFIG/INT_CONFIG0/INT_CONFIG1/INT_SOURCE0 = 0x03/0x00/0x00/0x08 ->
+ *          INT1 data-ready, active high, push-pull, pulsed, INT_ASYNC_RESET
+ *          cleared (docs/ICM42688P.md 8). A 0x64 that still reads 0x10 means
+ *          the write did not take -- INT1 will never fire.
  *  \p raw receives the 14-byte measurement block at 0x1D (temp, accel, gyro).
  *  \return FALSE on a bus error (outputs undefined). */
 boolean Icm42688_debugDump(uint8 cfg[ICM42688_DUMP_CFG_LEN], uint8 raw[14]);
+
+/** Plausibility band. |a| must stay inside the configured +/-16 g full
+ *  scale; a sustained 0 g means a dead element rather than free fall, which
+ *  never lasts seconds on the bench. \p liveness receives the sum of every
+ *  axis (accel, gyro, temperature) — it only freezes if the whole sample
+ *  block stops updating, exactly the failure that hid for days on the
+ *  MPU-6050 while the bus and the presence flag both looked healthy.
+ *  Pure (no bus access): host-testable.
+ *  \return TRUE if |a|^2 and the die temperature both fall inside band. */
+boolean Icm42688_plausible(const Icm42688_Sample *sample, float32 *liveness);
 
 #endif /* ICM42688_H */

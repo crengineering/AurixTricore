@@ -100,4 +100,13 @@ boolean Bmp581_read(float32 *pressurePa, float32 *temperatureC);
  *  \return FALSE on a bus error (outputs undefined). */
 boolean Bmp581_debugDump(uint8 cfg[BMP581_DUMP_CFG_LEN], uint8 *osrEff, uint8 raw[6]);
 
+/** Plausibility band, the sensor's physical envelope rather than a tuning
+ *  parameter: 300..1200 hPa spans sea level to well above any altitude this
+ *  airframe reaches, and the BMP581 is specified from -40 to +85 degC.
+ *  \p liveness receives pressPa + tempC — it moves with sensor noise on every
+ *  sample, so a frozen value is a real fault rather than a quiet signal.
+ *  Pure (no bus access): host-testable.
+ *  \return TRUE if both readings fall inside their band. */
+boolean Bmp581_plausible(float32 pressPa, float32 tempC, float32 *liveness);
+
 #endif /* BMP581_H */

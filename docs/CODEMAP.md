@@ -155,10 +155,22 @@ wrong. See `docs/FUSION.md` §8 for the case where this bit.
 | `Xcp_Gpio` | `0x70030300` | RAM only | `gpio.h` |
 | `I2c_Debug` | `0x70030400` | RAM only | `I2c.h` |
 | `Xcp_Fusion` | `0x70030500` | RAM only | `Measurements.h` |
+| `SharedRam` (LMU, non-XCP) | `0xB00F0000` | LMU, non-cached alias | `SharedRam.c`/`.h` |
 
 Blocks are 256 bytes apart. `Xcp_Data` is **full** — its last field ends within
 8 bytes of the 256-byte boundary, so the next appended measurement collides
 with `Xcp_Cal`.
+
+**`SharedRam` is not an XCP block** — it is the cross-core (CPU-to-CPU) shared
+block introduced in T9 (`docs/REFACTORING_PLAN.md` §2.4), separate from the
+`0x700300xx` XCP series above and not reachable by SHORT_UPLOAD. It sits in the
+top 64 K of `lmuram` (768 K total) at the **non-cached** alias so no coherency
+handling is needed on either side of a crossing; the cached alias of the same
+physical RAM is `0x90040000`-`0x900FFFFF`. Every object placed there gets its
+own `.c` file with a single `__at()` definition (cppcheck cannot parse a
+second one in the same translation unit — see `SharedRam.h`). First and only
+occupant so far: `g_coreStats` (`CoreStats.h`), at the base of the block,
+96 bytes. `NavState` (T10) is the next occupant, at `0xB00F0060`.
 
 **When a block fills, take the next free slot rather than re-spacing the map.**
 That is what `Xcp_Fusion` did on 2026-08-26: the navigation state needed 188

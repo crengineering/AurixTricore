@@ -35,11 +35,6 @@ extern IfxCpu_syncEvent cpuSyncEvent;
 
 static Scheduler_t g_sched;
 
-static void Task_App10ms(void)
-{
-    /* TODO: add CPU2 application logic here */
-}
-
 void core2_main(void)
 {
     IfxCpu_enableInterrupts();
@@ -57,7 +52,6 @@ void core2_main(void)
      * CPU0 keeps D306; see docs/PINNING.md 1.1 and 2.2. */
 
     Scheduler_init(&g_sched, &MODULE_STM2, 2u);
-    Scheduler_addTask(&g_sched, Task_App10ms,   SCHED_MS(10u));
 
     while (TRUE)
     {

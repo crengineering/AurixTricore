@@ -42,11 +42,6 @@ static void Task_LedToggle(void)
     Led_toggle(&g_led);
 }
 
-static void Task_App10ms(void)
-{
-    /* TODO: add CPU1 application logic here */
-}
-
 void core1_main(void)
 {
     IfxCpu_enableInterrupts();
@@ -61,7 +56,6 @@ void core1_main(void)
 
     Scheduler_init(&g_sched, &MODULE_STM1, 1u);
     Scheduler_addTask(&g_sched, Task_LedToggle, SCHED_MS(500u));
-    Scheduler_addTask(&g_sched, Task_App10ms,   SCHED_MS(10u));
 
     while (TRUE)
     {

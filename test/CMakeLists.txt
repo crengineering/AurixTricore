@@ -37,11 +37,23 @@ target_link_libraries(test_harness PRIVATE unity test_common)
 add_test(NAME harness COMMAND test_harness)
 
 #[[
-CoreStats: braucht nur den Ifx_Types-Shim, keinen Fake.
+SharedRam.c (T9, docs/REFACTORING_PLAN.md §2.4): a single __at() line that
+places g_coreStats in the LMU shared block. __at() is a TASKING extension
+GCC does not know, so this one source file needs the same tasking_shim.h
+-include the estimator sources use further down -- on the host it expands to
+nothing and the array simply lands in .bss.
+]]
+set_source_files_properties(${BSW}/SharedRam.c PROPERTIES
+    COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/fakes/tasking_shim.h")
+
+#[[
+CoreStats: braucht nur den Ifx_Types-Shim, keinen Fake. g_coreStats selbst
+kommt seit T9 aus SharedRam.c, nicht mehr aus CoreStats.c.
 ]]
 add_executable(test_corestats
     test_corestats.c
     ${BSW}/CoreStats.c
+    ${BSW}/SharedRam.c
 )
 target_link_libraries(test_corestats PRIVATE unity test_common)
 add_test(NAME corestats COMMAND test_corestats)
@@ -65,14 +77,98 @@ target_link_libraries(test_GnssM9N PRIVATE unity test_common)
 add_test(NAME GnssM9N COMMAND test_GnssM9N)
 
 #[[
+Atmosphere: pure ISA formula + QNH clamp, no iLLD, no fake needed.
+]]
+add_executable(test_atmosphere
+    test_atmosphere.c
+    ${BSW}/Atmosphere.c
+)
+target_link_libraries(test_atmosphere PRIVATE unity test_common m)
+add_test(NAME atmosphere COMMAND test_atmosphere)
+
+#[[
+Sensor plausibility bands: Bmp581_plausible/Mmc5983_plausible/Icm42688_plausible
+(T5, docs/REFACTORING_PLAN.md). Each driver .c still pulls I2c.h/Spi.h (and
+Mmc5983/Icm42688 additionally IfxStm.h for their init delay) even though the
+plausibility test never reaches the bus -- fakes/I2c.c, fakes/Spi.c and the
+IfxStm_waitTicks stub in fakes/IfxStm.c exist purely to satisfy the linker.
+]]
+add_executable(test_bmp581
+    test_bmp581.c
+    ${BSW}/Bmp581.c
+    fakes/I2c.c
+)
+target_link_libraries(test_bmp581 PRIVATE unity test_common m)
+add_test(NAME bmp581 COMMAND test_bmp581)
+
+add_executable(test_mmc5983
+    test_mmc5983.c
+    ${BSW}/Mmc5983.c
+    fakes/I2c.c
+    fakes/IfxStm.c
+)
+target_link_libraries(test_mmc5983 PRIVATE unity test_common m)
+add_test(NAME mmc5983 COMMAND test_mmc5983)
+
+add_executable(test_icm42688
+    test_icm42688.c
+    ${BSW}/Icm42688.c
+    fakes/Spi.c
+    fakes/IfxStm.c
+)
+target_link_libraries(test_icm42688 PRIVATE unity test_common m)
+add_test(NAME icm42688 COMMAND test_icm42688)
+
+#[[
+NavState (T10, docs/REFACTORING_PLAN.md §2.4/§4): the generation-counter
+publish/get protocol, still unwired to anything real. NavState.c uses BOTH
+TASKING extensions -- __at() for its own object AND, via SharedRam.h,
+Ifx__dsync() -- so it needs the tasking_shim.h -include too; on the host
+both expand to nothing (SharedRam.h's #ifndef guard on Ifx__dsync is what
+makes this possible without editing SharedRam.h for the host).
+]]
+set_source_files_properties(${BSW}/NavState.c PROPERTIES
+    COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/fakes/tasking_shim.h")
+
+add_executable(test_navstate
+    test_navstate.c
+    ${BSW}/NavState.c
+)
+target_link_libraries(test_navstate PRIVATE unity test_common)
+add_test(NAME navstate COMMAND test_navstate)
+
+#[[
+NavTask (T11, docs/REFACTORING_PLAN.md §4): NavTask_inputValid, the dt/NaN/
+AHRS_RUNNING/present gate -- the one piece of NavTask_step worth a host test.
+test_navtask.c #includes NavTask.c directly to reach navTask_dtValid (static),
+same reason test_GnssM9N.c #includes GnssM9N.c. That still means every symbol
+NavTask_init/NavTask_step reference must link even though this test never
+calls them: `estimator` supplies the real FusionCal/Ahrs/fusion, NavState.c
+and SysTime.c are the real (iLLD-free) implementations, fakes/IfxStm.c
+satisfies SysTime.c's own dependency -- only the genuinely target-only calls
+(IMU bus read, XCP publish, peripheral diagnostics) are stubbed inside
+test_navtask.c itself, purely to satisfy the linker.
+]]
+add_executable(test_navtask
+    test_navtask.c
+    ${BSW}/NavState.c
+    ${BSW}/SysTime.c
+    fakes/IfxStm.c
+)
+target_link_libraries(test_navtask PRIVATE unity test_common estimator)
+add_test(NAME navtask COMMAND test_navtask)
+
+#[[
 Scheduler: erster echter Fake. fakes/IfxStm.c ersetzt die Hardware-Uhr,
 sodass der Test die Zeit steuert - Voraussetzung fuer den Wraparound-Test.
-CoreStats.c muss mit, weil Scheduler_run() nach g_coreStats schreibt.
+CoreStats.c + SharedRam.c muessen mit, weil Scheduler_run() nach g_coreStats
+schreibt (Speicher seit T9 in SharedRam.c, siehe oben).
 ]]
 add_executable(test_scheduler
     test_scheduler.c
     ${BSW}/scheduler.c
     ${BSW}/CoreStats.c
+    ${BSW}/SharedRam.c
     fakes/IfxStm.c
 )
 target_link_libraries(test_scheduler PRIVATE unity test_common)

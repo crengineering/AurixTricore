@@ -35,11 +35,6 @@ extern IfxCpu_syncEvent cpuSyncEvent;
 
 static Scheduler_t g_sched;
 
-static void Task_App10ms(void)
-{
-    /* TODO: add CPU5 application logic here */
-}
-
 void core5_main(void)
 {
     IfxCpu_enableInterrupts();
@@ -51,7 +46,6 @@ void core5_main(void)
     Uart_println("CPU5 started");
 
     Scheduler_init(&g_sched, &MODULE_STM5, 5u);
-    Scheduler_addTask(&g_sched, Task_App10ms, SCHED_MS(10u));
 
     while (TRUE)
     {

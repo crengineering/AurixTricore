@@ -1,10 +1,11 @@
 /**********************************************************************************************************************
  * \file CoreStats.c
  * \brief Per-core execution-time accounting — see CoreStats.h.
+ *
+ * g_coreStats itself is defined in SharedRam.c (LMU shared block, __at()) --
+ * not here. This file only owns the logic that touches it.
  *********************************************************************************************************************/
 #include "CoreStats.h"
-
-volatile CoreStats_t g_coreStats[CORESTATS_NUM_CORES];
 
 void CoreStats_init(uint8 coreId)
 {

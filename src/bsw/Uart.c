@@ -65,6 +65,16 @@ void Uart_print(const char *str)
     IfxCpu_releaseMutex((IfxCpu_mutexLock *)&g_uartMutex);
 }
 
+void Uart_printHexByte(uint8 v)
+{
+    static const char hexDigits[] = "0123456789ABCDEF";
+    char buf[3];
+    buf[0] = hexDigits[(v >> 4) & 0x0Fu];
+    buf[1] = hexDigits[v & 0x0Fu];
+    buf[2] = '\0';
+    Uart_print(buf);
+}
+
 boolean Uart_heartbeatReceived(void)
 {
     boolean received = FALSE;
