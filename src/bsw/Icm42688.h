@@ -95,4 +95,10 @@ boolean Icm42688_debugDump(uint8 cfg[ICM42688_DUMP_CFG_LEN], uint8 raw[14]);
  *  \return TRUE if |a|^2 and the die temperature both fall inside band. */
 boolean Icm42688_plausible(const Icm42688_Sample *sample, float32 *liveness);
 
+/** I5, docs/IMU_INTERRUPT.md 5.5: duration of the TEMP_DATA1..GYRO burst read
+ *  inside Icm42688_read(), and the running max since reset. Read live with
+ *  tools/xcp_read.py; not wired to Xcp_Data, the A2L or the GUI. */
+extern volatile uint32 g_imuSpiBurstTicks;
+extern volatile uint32 g_imuSpiBurstMaxTicks;
+
 #endif /* ICM42688_H */

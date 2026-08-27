@@ -19,6 +19,7 @@
 #include "Icm42688.h"
 #include "Spi.h"
 #include "IfxStm.h"
+#include "SysTime.h"
 
 /* --- Register map (bank 0) --- */
 #define ICM42688_REG_DEVICE_CONFIG   (0x11u)
@@ -96,6 +97,18 @@
 #define ICM42688_RECOVERY_PERIOD     (50u)     /* ~1 s */
 
 static boolean s_icm42688Present = FALSE;
+
+/* I5, docs/IMU_INTERRUPT.md 5.5: duration of the TEMP_DATA1..GYRO burst read
+ * below, the input to the 1 kHz feasibility question in that document's
+ * SS5.6 decision tree. Non-static so tools/xcp_read.py can read them --
+ * zero cost to Xcp_Data/A2L/GUI, same reasoning as ImuInt.c. Declared in
+ * Icm42688.h (MISRA 8.4). */
+/* cppcheck-suppress-begin misra-c2012-8.7 ; deviation: read over XCP
+ * SHORT_UPLOAD by raw address (tools/xcp_read.py), never referenced by C
+ * code outside this file -- same class of deviation as ImuInt.c's globals. */
+volatile uint32 g_imuSpiBurstTicks;      /**< last burst duration, STM0 ticks */
+volatile uint32 g_imuSpiBurstMaxTicks;   /**< running max since reset         */
+/* cppcheck-suppress-end misra-c2012-8.7 */
 
 static void Icm42688_delayMs(uint32 ms)
 {
@@ -272,7 +285,18 @@ boolean Icm42688_read(Icm42688_Sample *sample)
     }
     else
     {
+        /* I5: bracket exactly the SPI transfer, not the recovery branch above
+         * or the axis-scaling below -- see docs/IMU_INTERRUPT.md 5.5. */
+        const uint32 burstStartTicks = (uint32)SysTime_getTicks();
+
         ok = Icm42688_readRegs(ICM42688_REG_TEMP_DATA1, raw, ICM42688_BURST_LEN);
+
+        g_imuSpiBurstTicks = (uint32)SysTime_getTicks() - burstStartTicks;
+        if (g_imuSpiBurstTicks > g_imuSpiBurstMaxTicks)
+        {
+            g_imuSpiBurstMaxTicks = g_imuSpiBurstTicks;
+        }
+
         if (ok == FALSE)
         {
             /* Lost it. Drop presence so the branch above starts probing

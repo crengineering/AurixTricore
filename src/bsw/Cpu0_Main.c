@@ -27,6 +27,7 @@
 #include "SharedRam.h"
 #include "CoreStats.h"
 #include "BringUp.h"
+#include "ImuInt.h"
 #include "SensorTask.h"
 #include "NavTask.h"
 #include "Housekeeping.h"
@@ -120,6 +121,13 @@ int core0_main(void)
      * board (g_padProbeP10 == 0x7) drove it as an output and has been
      * removed now that the INT1 wire is the intended use -- see BringUp.h. */
     BringUp_initImuIntPinSafe();
+
+    /* ERU wiring for the same pin (docs/IMU_INTERRUPT.md 4): additive only --
+     * IfxScuEru_initReqPin() never configures a pin as anything but an input,
+     * so this cannot undo the safety state BringUp_initImuIntPinSafe() just
+     * established. Timestamps INT1 edges; does not touch the IMU over SPI
+     * and does not change NavTask_step's schedule (measurement only). */
+    ImuInt_init();
 
     /* init LED toggle for task*/
     Led_init(&g_led, &MODULE_P20, 11u);

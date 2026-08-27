@@ -110,14 +110,33 @@ add_executable(test_mmc5983
 target_link_libraries(test_mmc5983 PRIVATE unity test_common m)
 add_test(NAME mmc5983 COMMAND test_mmc5983)
 
+#[[
+Icm42688.c gained a SysTime_getTicks() call in I5 (docs/IMU_INTERRUPT.md) to
+time the SPI burst, so this target now needs the real (iLLD-free) SysTime.c
+plus its own fakes/IfxStm.c dependency, same pairing as test_GnssM9N above.
+]]
 add_executable(test_icm42688
     test_icm42688.c
     ${BSW}/Icm42688.c
+    ${BSW}/SysTime.c
     fakes/Spi.c
     fakes/IfxStm.c
 )
 target_link_libraries(test_icm42688 PRIVATE unity test_common m)
 add_test(NAME icm42688 COMMAND test_icm42688)
+
+#[[
+I4, docs/IMU_INTERRUPT.md §5.2/§7: ImuInt_accumulate() is a pure, header-only
+(static inline) function with no iLLD include -- the ISR wrapper around it in
+ImuInt.c (volatile globals, IFX_INTERRUPT vector entry, ERU/SRC calls) is
+hardware-only and not built here. No fake needed, unlike every other target
+above.
+]]
+add_executable(test_imuint
+    test_imuint.c
+)
+target_link_libraries(test_imuint PRIVATE unity test_common)
+add_test(NAME imuint COMMAND test_imuint)
 
 #[[
 NavState (T10, docs/REFACTORING_PLAN.md §2.4/§4): the generation-counter
@@ -150,7 +169,12 @@ calls them: `estimator` supplies the real FusionCal/Ahrs/fusion, NavState.c
 and SysTime.c are the real (iLLD-free) implementations, fakes/IfxStm.c
 satisfies SysTime.c's own dependency -- only the genuinely target-only calls
 (IMU bus read, XCP publish, peripheral diagnostics) are stubbed inside
-test_navtask.c itself, purely to satisfy the linker.
+test_navtask.c itself, purely to satisfy the linker. NavTask.c gained a
+g_imuDrdyStaleTicks/g_imuDrdyLastTicks reference in I5 (docs/IMU_INTERRUPT.md)
+-- ImuInt.h's declarations are iLLD-free and included fine, but the real
+storage is in ImuInt.c, which pulls in ERU/SRC/Port headers with no host
+fakes, so those two globals are stubbed directly in test_navtask.c instead,
+same treatment as the other target-only symbols there.
 ]]
 add_executable(test_navtask
     test_navtask.c

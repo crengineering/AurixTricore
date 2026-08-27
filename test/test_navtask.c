@@ -44,6 +44,13 @@ void measurementsSetImu(boolean present, const float32 acc[3], const float32 gyr
     (void)temperatureC;
 }
 
+/* I5, docs/IMU_INTERRUPT.md 5.5: NavTask_step now reads/writes these two.
+ * Their real storage is in ImuInt.c, which pulls in ERU/SRC/Port headers
+ * with no host fakes -- stubbed here like every other target-only symbol
+ * above, purely to satisfy the linker. Never read by this test. */
+volatile uint32 g_imuDrdyStaleTicks;
+volatile uint32 g_imuDrdyLastTicks;
+
 void PeriphDiag_report(PeriphDiag_Id id, boolean readOk, boolean plausible, float32 liveness)
 {
     (void)id;

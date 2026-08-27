@@ -11,6 +11,7 @@
 #include "Measurements.h"
 #include "PeriphDiag.h"
 #include "SysTime.h"
+#include "ImuInt.h"
 
 /* Same window as the original Task_Imu (Cpu0_Main.c, pre-T11): below
  * NAVTASK_DT_MIN_S the tick fired twice inside one STM period (nothing to
@@ -74,6 +75,15 @@ void NavTask_step(void)
     FusionValues    fusion;
     Ahrs_Values     ahrs;
     float32         elapsedTime;
+
+    /* I5, docs/IMU_INTERRUPT.md 5.5: how stale is the sample this task is
+     * about to fetch, measured against the last INT1 edge the ISR saw. At
+     * today's 50 Hz this settles at up to ~20 ms on its own -- that number,
+     * not an opinion, is the evidence for D5. Read before the SPI burst so it
+     * reflects the wait, not the transfer time. g_imuDrdyLastTicks starts at
+     * 0 and only updates once ImuInt_init() has seen a real edge; a giant
+     * value before the wire/ISR are alive is expected, not a fault. */
+    g_imuDrdyStaleTicks = (uint32)SysTime_getTicks() - g_imuDrdyLastTicks;
 
     /* Called unconditionally, like the other sensor tasks: Icm42688_read()
      * owns the presence state and uses these calls to probe for a reconnected

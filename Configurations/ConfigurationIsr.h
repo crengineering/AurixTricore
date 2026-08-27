@@ -38,5 +38,6 @@
 #define ISR_PRIORITY_QSPI0_RX       103                         /* QSPI0 master receive                             */
 #define ISR_PRIORITY_QSPI0_ER       104                         /* QSPI0 master error                               */
 #define ISR_PRIORITY_ASCLIN4_RX     105                         /* ASCLIN4 receive                                  */
+#define ISR_PRIORITY_IMU_DRDY       106                         /* ERU/OGU0, ICM-42688-P INT1 data-ready (P10.7)    */
 
 #endif
