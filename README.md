@@ -8,7 +8,7 @@ A flight-controller platform: an Ethernet-attached measurement and calibration
 target that reads inertial, barometric, magnetic and GNSS sensors, monitors its
 own health, and exposes all of it live over **XCP-on-UDP** to a PC GUI.
 
-**Firmware version: v1.19.10** (`src/bsw/Version.h`) · Hardware-validated on the
+**Firmware version: v1.19.11** (`src/bsw/Version.h`) · Hardware-validated on the
 bench.
 
 ### Companion repositories
@@ -79,8 +79,9 @@ either file reopens as a diagram.
 | Host unit tests + MISRA gate in CI | ✅ |
 | DShot ESC output, CAN, EVADC | 📋 planned — `docs/PINNING.md`, `docs/CAN_ADC_PLAN.md` |
 
-⚠️ **CPU1–CPU5 are essentially idle (0.00 % load); CPU0 does everything.**
-Distributing work is the main open architectural item — see [Status](#status).
+**CPU1 is the dedicated flight core** (`NavTask_step`: IMU read → AHRS →
+fusion, ~0.7 % load, 50 Hz today) — CPU0 keeps comms, sensors and
+housekeeping at ~9.4 %; CPU2–CPU5 remain idle. See [Status](#status).
 
 ---
 
@@ -164,8 +165,8 @@ meaningful. Controller design, tuning and the MiL/SiL verification live there.
 
 | Core | Role | LED |
 |---|---|---|
-| CPU0 | Ethernet/lwIP, XCP, all sensors, diagnostics, NVM | D306 (P20.11) |
-| CPU1 | sync + 10 ms idle task | D307 (P20.12) |
+| CPU0 | Ethernet/lwIP, XCP, sensors, diagnostics, NVM, housekeeping | D306 (P20.11) |
+| CPU1 | **flight core** — `NavTask_step` (IMU → AHRS → fusion), nothing else but the LED | D307 (P20.12) |
 | CPU2 | sync + 10 ms idle task | — (D308's pin is now QSPI0 SCLK) |
 | CPU3 | sync + 10 ms idle task | D309 (P20.14) |
 | CPU4/5 | sync + 10 ms idle task | — |
@@ -174,9 +175,12 @@ Every `coreN_main` **must** call `IfxCpu_emitEvent` *and* `IfxCpu_waitEvent`
 before any application code — skipping either on any core causes a watchdog
 reset. Each core uses its own STM module (`MODULE_STM0` → CPU0, …).
 
-Cross-core data follows one pattern, documented in `CoreStats.h`: **single writer
-per slot, no locks, cross-core DSPR reads bypass the cache.** Reuse it rather
-than inventing a second scheme.
+Cross-core data follows one pattern, documented in `SharedRam.h`: shared
+objects live in the LMU at a **non-cached alias**, `volatile`, all-32-bit,
+**single writer**, publish ordered by *payload → barrier → generation
+counter*, reader retries once on a torn read. Reuse it rather than inventing a
+second scheme — see `docs/CODEMAP.md` §3. `CoreStats.h` is diagnostic
+counters only, tolerant of a torn read, not this pattern.
 
 ### Fixed XCP memory map
 
@@ -247,7 +251,8 @@ barometer + GNSS ─────────────────────
                                         position, velocity, accel bias, meas bias
 ```
 
-Everything runs in the 50 Hz IMU task on CPU0 and costs about 0.7 % of it.
+Everything runs in `NavTask_step` at 50 Hz on **CPU1**, the dedicated flight
+core, and costs about 0.7 % of it — see `docs/FUSION.md` §1.
 Frame is NED throughout, so **`d` is positive downward**.
 
 Why a cascade and not one 15-state EKF: attitude converges in seconds from two
@@ -375,8 +380,12 @@ reproduces locally with one command.
 - [x] 6-core boot with a full sync barrier; both watchdogs handled correctly
 - [x] Cooperative scheduler per core (`SCHED_MS(n)`, 8 tasks/core) — no RTOS
 - [x] PLL init via SSW, STM at ~100 MHz, one STM module per core
-- [x] Lock-free cross-core data pattern (single writer per slot, cache-bypassing
-      DSPR reads), documented once in `CoreStats.h` and reused
+- [x] Lock-free cross-core data pattern — non-cached LMU alias, single writer,
+      generation-counter publish/retry — documented once in `SharedRam.h` and
+      reused for the flight core's nav-state and sensor-latch crossings
+- [x] **CPU1 split off as the dedicated flight core** (`NavTask_step`: IMU
+      read → AHRS → fusion), so the estimator no longer shares a core with
+      blocking I2C reads or a DFLASH erase — `docs/REFACTORING_PLAN.md` T12
 
 **Communication**
 
@@ -443,9 +452,11 @@ reproduces locally with one command.
       firmware, A2L and GUI (`docs/CODEMAP.md`).
 - [ ] **Diagnostic bit word is full.** All 32 bits are allocated (bit 31 is
       `DIAG_CAL_INVALID`). A fifth peripheral needs a second bitmask word.
-- [ ] **CPU1–CPU5 idle at 0.00 %** while CPU0 carries the entire load. Moving the
-      sensor and fusion chain off CPU0 is the main open architectural item; the
-      pattern to extend already exists in `CoreStats.h`.
+- [ ] **CPU2–CPU5 still idle.** CPU1 now carries the flight chain (~0.7 %
+      load); the rest of CPU0's load — I2C sensors, GNSS, NVM, comms — is
+      deliberately unmoved (`docs/REFACTORING_PLAN.md` §2.2, D1). Next up:
+      raising `NavTask_step` from 50 Hz to the IMU's measured 1014.2 Hz
+      (`docs/REFACTORING_PLAN.md` T14–T16), not yet done.
 - [ ] **DShot ESC output** — bidirectional DShot300 on GTM ATOM0/TIM, with RPM
       feedback for a notch filter. Pins allocated in `docs/PINNING.md`, driver
       not yet written.

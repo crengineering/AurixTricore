@@ -28,10 +28,18 @@ where it enters.
                                        measurement bias
 ```
 
-Everything runs in `Task_Imu` at 50 Hz on CPU0. The barometer, magnetometer and
-GNSS tasks **latch** their samples (`Fusion_setBaroAlt`, `Ahrs_setMag`,
-`Fusion_setGnss`) and the IMU tick consumes whatever has arrived. That keeps a
-single writer per state and needs no locking.
+Everything runs in `NavTask_step` at 50 Hz on **CPU1**, the dedicated flight
+core (`docs/REFACTORING_PLAN.md` T12) — nothing else is registered on that
+core but a 2 µs LED blink. The barometer, magnetometer and GNSS tasks run on
+CPU0 and **latch** their samples into the shared LMU block
+(`Fusion_setBaroAlt`, `Ahrs_setMag`, `Fusion_setGnss`; backing state in
+`FusionLatch.h`/`AhrsLatch.h`, see `docs/CODEMAP.md` §3); `NavTask_step`
+consumes whatever has arrived and publishes the result via `NavState_publish`
+for CPU0 to read with `NavState_get`. That keeps a single writer per state and
+needs no locking. **50 Hz is today's rate, not the final one** — the IMU
+delivers a measured 1014.2 Hz DRDY edge (`docs/IMU_INTERRUPT.md` §5.6) and
+`docs/REFACTORING_PLAN.md` T14/T15 raise `NavTask_step` to that rate in a
+later, separate step; do not describe the rate as 1 kHz until T15 has flown.
 
 ### Why a cascade rather than one big EKF
 

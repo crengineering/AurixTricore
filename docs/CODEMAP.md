@@ -16,7 +16,7 @@ Verify before relying on a claim here. If you find drift, fix the line.
 
 | Subsystem | Files | Notes |
 |---|---|---|
-| Core entry | `Cpu0_Main.c` … `Cpu5_Main.c` | CPU0 does everything; **CPU1–5 idle at 0.00%** |
+| Core entry | `Cpu0_Main.c` … `Cpu5_Main.c` | **CPU1 is the flight core** (`NavTask_step`, T12); CPU0 does comms + sensors + housekeeping; **CPU2–5 idle** |
 | Scheduling | `scheduler.c/.h` | cooperative, `SCHEDULER_MAX_TASKS 8` per core |
 | Timing | `SysTime.c` | BSW time service (ASW must use this, not iLLD) |
 | XCP slave | `Xcp.c` | UDP 5555: poll, cal writes, DAQ |
@@ -32,7 +32,8 @@ Verify before relying on a claim here. If you find drift, fix the line.
 | Navigation | `fusion.c/.h` | three 4-state KF channels (down/north/east) + **`Xcp_Fusion` @ `0x70030500`** |
 | GPIO / PWM | `gpio.c`, `gpio_cfg.h`, `led.c` | per-pin config; GTM TOM PWM |
 | Networking | `Echo.c`, `UdpEcho.c`, `EthStats.c` | TCP+UDP echo port 7 |
-| Per-core stats | `CoreStats.c/.h` | **the inter-core pattern to copy** — single writer/slot, no locks |
+| Per-core stats | `CoreStats.c/.h` | diagnostic counters, tolerant of a torn read — **not** the cross-core pattern; see `SharedRam.h` |
+| Cross-core shared state | `SharedRam.c/.h`, `NavState.c/.h`, `*Latch*.c/.h` | **the inter-core pattern to copy** — non-cached LMU alias, single writer, generation counter |
 | ASW | `src/asw/flight_ctrl.c`, `CtrlReplay.c` | calls BSW only, never iLLD |
 
 Reference docs: `ILLD_NOTES.md` (vendor driver traps), `PINNING.md` (pin SSoT),
@@ -112,10 +113,16 @@ core hung.
 
 ### Put work on another core
 
-`CoreStats.h` documents the working pattern — single writer per slot, no locks,
-cross-core DSPR reads bypass the cache. **Reuse it, don't reinvent.** Every
-`coreN_main` must still call `IfxCpu_emitEvent` + `IfxCpu_waitEvent` before
-application code, or the watchdog resets the board.
+`SharedRam.h` documents the sanctioned pattern (`docs/REFACTORING_PLAN.md`
+§2.4): shared objects live in the LMU at the non-cached alias
+(`0xB00F0000` upward, see §3 below), every field `volatile` and 32-bit,
+exactly one writer per object, publish ordered as *payload → `Ifx__dsync()` →
+`gen++`*, reader does *read `gen` → copy → re-read `gen`*, one retry, then
+keep the previous snapshot. **Reuse it, don't reinvent.** `CoreStats.h` is
+diagnostics only now — tolerant of a torn read, not a template for a new
+crossing (`docs/REFACTORING_PLAN.md` D6). Every `coreN_main` must still call
+`IfxCpu_emitEvent` + `IfxCpu_waitEvent` before application code, or the
+watchdog resets the board.
 
 ### Release
 
