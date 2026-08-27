@@ -188,10 +188,29 @@ def compute_stats(s):
     return result
 
 
+# Absolute thresholds, not percentages of spread: a rare few-percent tail of
+# measurement artefacts (SPI-burst-correlated, docs/IMU_INTERRUPT.md SS5.6)
+# must not by itself flip a genuinely tight 1 kHz source to "do not trust".
+STDDEV_TRUST_US    = 20.0   # (A) requires jitter this tight or better
+STDDEV_DISTRUST_US = 100.0  # above this, the CORE distribution is noisy,
+                             # not just its tails -- (C)
+DROPOUT_RATIO      = 2.0    # max_us >= this * mean_us is a genuine missed
+                             # edge, not an artefact -- flagged on its own,
+                             # regardless of how tight everything else is
+
+
 def classify(stats):
     """Mirrors the decision tree in docs/IMU_INTERRUPT.md SS5.6. An automatic
     hint only -- always cross-check against the real numbers and the tree
-    itself before recording a branch in that document (I7). """
+    itself before recording a branch in that document (I7).
+
+    Classifies on stddev (the CORE distribution's tightness), not raw
+    max-min spread: a real run found spread swamped by a small (~1 %),
+    SPI-burst-correlated measurement-artefact tail -- 98.85 % of samples
+    inside a 2 us band, but spread alone (239 us) said "do not trust",
+    which was simply wrong. A genuine dropout (one edge actually missed)
+    is checked separately, by ratio to the mean, so it is never hidden by
+    a good stddev the way it would be if folded into the same threshold. """
     if stats["count"] <= 1:
         return ("NO EDGES", "count stayed 0 -- check INT_ASYNC_RESET (0x64 bit 4) "
                 "first (the #1 cause), then INT_SOURCE0=0x08, then continuity "
@@ -205,16 +224,29 @@ def classify(stats):
                 f"(~1 s at ~1 kHz) -- no exact mean to classify against. "
                 f"Re-read shortly.")
 
-    mean_us, min_us, max_us = stats["mean_us"], stats["min_us"], stats["max_us"]
-    spread_us = max_us - min_us
+    mean_us, max_us = stats["mean_us"], stats["max_us"]
     dev_pct = abs(mean_us - NOMINAL_US) / NOMINAL_US * 100.0
 
-    if spread_us > 100.0 or max_us > 1500.0:
+    if max_us >= (DROPOUT_RATIO * mean_us):
+        return ("(!) DROPPED EDGE",
+                f"max {max_us:.1f} us is >= {DROPOUT_RATIO:.0f}x the mean "
+                f"({mean_us:.1f} us) -- a genuine missed sample, not the "
+                f"SPI-burst-correlated tail (that tail tops out near "
+                f"spi_burst_max, well under this ratio). Investigate before "
+                f"trusting this run for a rate decision.")
+
+    if "stddev_us" not in stats:
+        return ("INCONCLUSIVE", "no stddev yet -- needs at least one "
+                "completed window (~1 s); re-read.")
+
+    stddev_us = stats["stddev_us"]
+
+    if stddev_us > STDDEV_DISTRUST_US:
         return ("(C) DO NOT TRUST THE PATH YET",
-                f"spread {spread_us:.1f} us or a dt > 1.5 ms seen -- check "
-                f"INT_ASYNC_RESET, TTL pad mode, pulse width vs a floating "
-                f"line, wire length.")
-    if dev_pct <= 3.0 and spread_us < 20.0:
+                f"stddev {stddev_us:.1f} us -- the CORE distribution itself "
+                f"is noisy, not just a small tail. Check INT_ASYNC_RESET, "
+                f"TTL pad mode, pulse width vs a floating line, wire length.")
+    if dev_pct <= 3.0 and stddev_us < STDDEV_TRUST_US:
         return ("(A) THE IMU REALLY DELIVERS 1 kHz",
                 "NavTask -> 1 kHz on CPU1, flight_ctrl keeps Ts = 0.001f -- "
                 "gate: SPI burst max must be << 1 ms (see the burst_max_us "
