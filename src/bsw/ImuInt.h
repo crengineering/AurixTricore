@@ -28,13 +28,20 @@
 #include "Ifx_Types.h"
 
 /** 1 us-wide bins (STM0 @ 100 MHz = 100 ticks/us); 32 bins = a 32 us window
- *  around the observed minimum -- docs/IMU_INTERRUPT.md SS5.2. */
+ *  around the first post-warm-up sample -- docs/IMU_INTERRUPT.md SS5.2/SS5.6. */
 #define IMUINT_HIST_BINS          (32u)
 #define IMUINT_HIST_BIN_TICKS     (100u)
-/** Number of accumulated intervals below which the histogram window has not
- *  been centred yet (g_imuDrdyHistBase stays 0, meaning "not yet"). */
-#define IMUINT_HIST_CENTER_EDGE   (100u)
-/** Bins below the observed minimum the centred base is set to. */
+/** Intervals discarded before anything (min/max/sum/histogram) starts
+ *  accumulating. First hardware run (docs/IMU_INTERRUPT.md SS5.6) found
+ *  identical, boot-only outliers -- a short one (~741 us) and a long one
+ *  (~20.4 ms) -- traced to the pin-arm/register-config boot sequence (ERU
+ *  armed in core0_main() well before Icm42688_init() finally enables DRDY
+ *  routing to INT1, itself after several other sensors' I2C init; see
+ *  Cpu0_Main.c call order and docs/ICM42688P.md SS8's own "RESET_DONE_INT1_EN
+ *  is on out of reset" trap). 100 intervals is ~100 ms at 1 kHz, generously
+ *  past any boot transient, and cheap to discard. */
+#define IMUINT_WARMUP_EDGES       (100u)
+/** Bins below the anchor sample the centred base is set to. */
 #define IMUINT_HIST_MARGIN_BINS   (16u)
 
 /* --- edges since reset / most recent interval -------------------------- */
@@ -72,7 +79,10 @@ void ImuInt_init(void);
  *  of scalars plus one histogram bin, never the whole array. */
 typedef struct
 {
-    uint32  dtCount;       /**< intervals accumulated so far (edges - 1)     */
+    uint32  warmupRemaining; /**< counts down from IMUINT_WARMUP_EDGES; while
+                               *   nonzero, every interval is discarded      */
+    uint32  dtCount;         /**< intervals accumulated POST-warm-up (was
+                               *   "edges - 1"; now "edges - 1 - warm-up")   */
     uint32  dtMin;
     uint32  dtMax;
     uint64  dtSum;
@@ -83,7 +93,7 @@ typedef struct
 /** What ImuInt_accumulate() found for one interval, once state is updated. */
 typedef enum
 {
-    IMUINT_BIN_NONE,     /**< histogram not centred yet -- no bin touched   */
+    IMUINT_BIN_NONE,     /**< still discarding warm-up intervals -- no bin touched */
     IMUINT_BIN_UNDER,    /**< dt fell below the centred window              */
     IMUINT_BIN_INDEX,    /**< dt fell in \p index                            */
     IMUINT_BIN_OVER      /**< dt fell above the centred window              */
@@ -97,9 +107,23 @@ typedef struct
                                    *   the 32 histogram bins this one time     */
 } ImuInt_BinResult;
 
-/** Pure update: folds \p dt into state->{dtMin,dtMax,dtSum}, centres
- *  state->histBase on the IMUINT_HIST_CENTER_EDGE-th interval, and
- *  classifies \p dt against the (possibly just-centred) window.
+/** Pure update: discards the first IMUINT_WARMUP_EDGES intervals outright
+ *  (state->{dtMin,dtMax,dtSum,histBase} untouched -- see IMUINT_WARMUP_EDGES
+ *  for why), then folds \p dt into state->{dtMin,dtMax,dtSum}, centres
+ *  state->histBase on the FIRST post-warm-up interval's own \p dt, and
+ *  classifies \p dt against the (by then always-centred) window.
+ *
+ * Anchoring on a single post-warm-up sample, not a running dtMin, is a
+ * deliberate choice over "centre on the median/mode of the steady
+ * population": a true median/mode needs either a sort (unbounded cost) or a
+ * histogram that is itself already centred to bin into (the chicken-and-egg
+ * this design avoids). A single sample, taken only after the boot transient
+ * IMUINT_WARMUP_EDGES is sized to clear, is O(1) and bounded, and is a good
+ * enough anchor for a distribution this tight (single-population, low-jitter
+ * once past boot -- docs/IMU_INTERRUPT.md SS5.6) that IMUINT_HIST_MARGIN_BINS
+ * of headroom below it comfortably covers the spread. A running dtMin was the
+ * previous (wrong) choice: it let exactly one boot-transient outlier corrupt
+ * the anchor for the whole run, which is the bug this replaces.
  *
  * `static inline`, defined here rather than in ImuInt.c, and on purpose: this
  * header includes nothing but Ifx_Types.h, so a host test can reach the real
@@ -115,16 +139,25 @@ static inline ImuInt_BinResult ImuInt_accumulate(ImuInt_State *state, uint32 dt)
     result.index        = 0u;
     result.justCentered = FALSE;
 
+    if (state->warmupRemaining > 0u)
+    {
+        state->warmupRemaining--;
+        return result;   /* discarded: dtMin/dtMax/dtSum/histBase untouched */
+    }
+
     state->dtCount++;
     if (dt < state->dtMin) { state->dtMin = dt; }
     if (dt > state->dtMax) { state->dtMax = dt; }
     state->dtSum += (uint64)dt;
 
-    if ((state->histCentered == FALSE) && (state->dtCount >= IMUINT_HIST_CENTER_EDGE))
+    if (state->histCentered == FALSE)
     {
+        /* This is necessarily the first post-warm-up interval (dtCount just
+         * became 1): centre once, here, on dt itself -- see the function
+         * comment for why a single sample, not a running dtMin. */
         const uint32 margin = IMUINT_HIST_MARGIN_BINS * IMUINT_HIST_BIN_TICKS;
 
-        state->histBase     = (state->dtMin > margin) ? (state->dtMin - margin) : 0u;
+        state->histBase     = (dt > margin) ? (dt - margin) : 0u;
         state->histCentered = TRUE;
         result.justCentered = TRUE;
     }

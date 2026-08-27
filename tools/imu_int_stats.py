@@ -46,7 +46,8 @@ from xcp_read import (  # noqa: E402
 # Must match src/bsw/ImuInt.h exactly.
 HIST_BINS = 32
 HIST_BIN_TICKS = 100          # 1 us at STM0 @ 100 MHz
-HIST_CENTER_EDGE = 100        # intervals needed before the ISR centres it
+WARMUP_EDGES = 100            # intervals discarded before anything counts
+                               # (boot transient -- ImuInt.h IMUINT_WARMUP_EDGES)
 TICKS_PER_US = 100.0
 NOMINAL_US = 1000.0           # current ODR, Icm42688.c GYRO/ACCEL_CONFIG0
 
@@ -108,9 +109,15 @@ def ticks_to_us(ticks):
 
 def compute_stats(s):
     """-> dict with n, mean_us, min_us, max_us, stddev_us (approx or None),
-    p99_us (approx or None, may carry a note), centred (bool)."""
-    n = max(0, s["count"] - 1)   # first edge has no dt (ImuInt.c: `if count > 1u`)
-    result = {"n": n, "centred": n >= HIST_CENTER_EDGE}
+    p99_us (approx or None, may carry a note), centred (bool).
+
+    n excludes both the first edge (no dt: ImuInt.c `if count > 1u`) AND the
+    first WARMUP_EDGES intervals after it -- the firmware discards those
+    outright (ImuInt.h IMUINT_WARMUP_EDGES) and never publishes dt_min/max/
+    sum/hist_base for them, so counting them here would divide the
+    (post-warm-up-only) dt_sum by too large a denominator."""
+    n = max(0, s["count"] - 1 - WARMUP_EDGES)
+    result = {"n": n, "centred": n >= 1, "count": s["count"]}
 
     if n == 0:
         return result
@@ -165,13 +172,13 @@ def classify(stats):
     """Mirrors the decision tree in docs/IMU_INTERRUPT.md SS5.6. An automatic
     hint only -- always cross-check against the real numbers and the tree
     itself before recording a branch in that document (I7). """
-    if stats["n"] == 0:
+    if stats["count"] <= 1:
         return ("NO EDGES", "count stayed 0 -- check INT_ASYNC_RESET (0x64 bit 4) "
                 "first (the #1 cause), then INT_SOURCE0=0x08, then continuity "
                 "CN1.3 -> P10.7.")
     if not stats["centred"]:
-        return ("WARMING UP", f"only {stats['n']} interval(s) so far -- the "
-                f"histogram centres at {HIST_CENTER_EDGE}; re-read shortly.")
+        return ("WARMING UP", "still inside the first "
+                f"{WARMUP_EDGES} discarded intervals; re-read shortly.")
 
     mean_us, min_us, max_us = stats["mean_us"], stats["min_us"], stats["max_us"]
     spread_us = max_us - min_us

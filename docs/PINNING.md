@@ -120,7 +120,7 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 | P22.10 | MTSR (MOSI) | `IfxQspi0_MTSR_P22_10_OUT` | — | **impl, HW-verified** |
 | P22.11 | CS (SLSO10) | `IfxQspi0_SLSO10_P22_11_OUT` | — | **impl, HW-verified** |
 | ~~P22.7~~ | ~~INT1~~ | — | — | ⚠️ **UNUSABLE, see below** |
-| **P10.7** | **INT1 (data-ready)** | `IfxScu_REQ0C_P10_7_IN` (ERU ch0 → OGU0 → SRC_SCUERU0) | X702·73 ⚠️ **hole→pad mapping unverified** | **impl, HW verification pending** |
+| **P10.7** | **INT1 (data-ready)** | `IfxScu_REQ0C_P10_7_IN` (ERU ch0 → OGU0 → SRC_SCUERU0) | **X702·73 — hardware-proven 2026-08-27** | **impl, HW-verified** |
 
 > ⚠️ **P22.7 and P22.8 are UNUSABLE on this TriBoard — hardware-proven
 > 2026-08-01.** Driven as plain GPIO with **nothing attached** they read back
@@ -131,18 +131,17 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 > That pad was **D308, CPU2's core-health LED**, so `Cpu2_Main.c` no longer
 > drives it and CPU2 runs without an LED (CPU0 keeps D306 — see §1.1).
 > `INT1` was left unwired at first; the driver polled at 50 Hz and did not use
-> it. **That has changed** — a jumper wire now connects `INT1` to header hole
-> **X702·73**, which this table claims is **P10.7**; firmware is configured
-> for P10.7 via the SCU's ERU (a different pad from P22.7 above), purely to
-> measure the real edge-interval distribution and settle whether the poll
-> rate should change. ⚠️ **The X702·73 → P10.7 mapping is not yet
-> independently confirmed** — the wire went into 73 *because* this table said
-> so, which is not confirmation, only this table read back to itself. The
-> real proof is `g_imuDrdyCount` climbing at ~1000/s on the real pad; until
-> that is observed, "unverified" stays in the Header·pin column above. See
-> `docs/IMU_INTERRUPT.md` for the pin choice, the wiring/electrical detail and
-> the measurement itself. `NavTask` still polls on its own schedule — the ISR
-> only timestamps, it does not drive the control loop (design doc §5.4).
+> it. **That has changed** — a jumper wire connects `INT1` to header hole
+> **X702·73**, wired to P10.7 via the SCU's ERU (a different pad from P22.7
+> above), to measure the real edge-interval distribution and settle whether
+> the poll rate should change. **X702·73 → P10.7 is now hardware-proven,
+> 2026-08-27**: `g_imuDrdyCount` climbs at the expected ~1 kHz on the real
+> pad once flashed — the real proof this table promised, not the table read
+> back to itself. See `docs/IMU_INTERRUPT.md` for the pin choice, the
+> wiring/electrical detail and the measurement itself (including a
+> double-triggering ERU bug found and fixed on the first run — §5.6).
+> `NavTask` still polls on its own schedule — the ISR only timestamps, it
+> does not drive the control loop (design doc §5.4).
 > The **pad self-test** in `Cpu0_Main.c` (`padSelfTestPort()`) is how this was
 > found — drive a pin and read its own pad back via `IfxPort_getPinState()`,
 > always with unwired pins on the same port as a control group. Verified

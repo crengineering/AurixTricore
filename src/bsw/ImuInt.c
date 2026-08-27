@@ -85,10 +85,20 @@ void imuDrdyIsr(void)
         g_imuDrdyDtTicks = dt;
         bin = ImuInt_accumulate(&s_imuIntState, dt);
 
-        g_imuDrdyDtMin    = s_imuIntState.dtMin;
-        g_imuDrdyDtMax    = s_imuIntState.dtMax;
-        g_imuDrdyDtSum    = s_imuIntState.dtSum;
-        g_imuDrdyHistBase = s_imuIntState.histBase;
+        /* Only publish once warm-up (IMUINT_WARMUP_EDGES) is behind us --
+         * before that, ImuInt_accumulate() left dtMin/dtMax/dtSum/histBase
+         * untouched, and copying them out would publish stale sentinel/zero
+         * values instead of leaving the previous (also stale, but at least
+         * not misleadingly "final-looking") ones. g_imuDrdyDtTicks above is
+         * still published every edge, warm-up included -- it is the one raw,
+         * unfiltered number, on purpose. */
+        if (s_imuIntState.warmupRemaining == 0u)
+        {
+            g_imuDrdyDtMin    = s_imuIntState.dtMin;
+            g_imuDrdyDtMax    = s_imuIntState.dtMax;
+            g_imuDrdyDtSum    = s_imuIntState.dtSum;
+            g_imuDrdyHistBase = s_imuIntState.histBase;
+        }
 
         if (bin.justCentered != FALSE)
         {
@@ -119,12 +129,13 @@ void imuDrdyIsr(void)
 
 void ImuInt_init(void)
 {
-    s_imuIntState.dtCount      = 0u;
-    s_imuIntState.dtMin        = 0xFFFFFFFFu;
-    s_imuIntState.dtMax        = 0u;
-    s_imuIntState.dtSum        = 0u;
-    s_imuIntState.histBase     = 0u;
-    s_imuIntState.histCentered = FALSE;
+    s_imuIntState.warmupRemaining = IMUINT_WARMUP_EDGES;
+    s_imuIntState.dtCount         = 0u;
+    s_imuIntState.dtMin           = 0xFFFFFFFFu;
+    s_imuIntState.dtMax           = 0u;
+    s_imuIntState.dtSum           = 0u;
+    s_imuIntState.histBase        = 0u;
+    s_imuIntState.histCentered    = FALSE;
 
     /* ERU wiring, docs/IMU_INTERRUPT.md SS4. IfxScuEru_initReqPin() only ever
      * sets a pin to INPUT (see IfxScuEru.h) -- additive to, never a
