@@ -46,17 +46,24 @@
 #define AHRS_MAG_MIN_G        (0.15f)
 #define AHRS_MAG_MAX_G        (2.0f)
 
-/* Gyro-bias calibration: samples to average, and the motion gate. 100 samples
- * is ~2 s at the 50 Hz IMU task.
+/* Gyro-bias calibration: a still-window DURATION to average over, and the
+ * motion gate. T14 (docs/REFACTORING_PLAN.md §3.8): this used to be a sample
+ * COUNT ("100 samples is ~2 s at the 50 Hz IMU task"), which silently became
+ * ~0.1 s of averaging the moment the task moved to 1014 Hz -- 20x less noise
+ * rejection on the one number the whole attitude solution rests on, with no
+ * error anywhere. Accumulating `dt` instead of counting calls makes the
+ * window mean the same thing at any rate, forever.
  *
  * The gate measures the SPREAD (max - min) across the window, NOT the absolute
  * rate — a large constant offset is precisely the thing being measured, so an
  * absolute threshold would read "moving" forever and calibration would never
  * finish. Motion restarts the window, because a biased bias is worse than none. */
-#define AHRS_CAL_SAMPLES      (100u)
+#define AHRS_CAL_WINDOW_S     (2.0f)
 #define AHRS_CAL_SPREAD_DPS   (3.0f)
 
-/* ...but give up after this many samples and go anyway (10 s at 50 Hz).
+/* ...but give up after this DURATION and go anyway (was "500 samples, 10 s at
+ * 50 Hz" -- same T14 fix, same reason: a sample count silently changes
+ * meaning with the task rate, a duration does not).
  *
  * Without a bound this never finishes on a board that is powered on while
  * moving -- in a vehicle, on a vibrating bench, in someone's hand. Every
@@ -71,7 +78,7 @@
  * and magnetometer start correcting. The degraded result is flagged rather than
  * hidden: Ahrs_Values.biasDegraded says the boot calibration was taken while
  * the board was moving. */
-#define AHRS_CAL_MAX_SAMPLES  (500u)
+#define AHRS_CAL_DEADLINE_S   (10.0f)
 
 /* Sanity bounds on dt [s]. The IMU task runs at 50 Hz; the upper bound matters
  * at boot, where the first measured interval is whatever the STM counter held. */
@@ -166,8 +173,14 @@ static float32 s_bias[3];          /* boot gyro bias, body frame [deg/s]      */
 static float32 s_calSum[3];
 static float32 s_calMin[3];
 static float32 s_calMax[3];
-static uint16  s_calCount;
-static uint16  s_calTotal;      /* samples since calibration started */
+static uint16  s_calCount;      /* samples in the CURRENT window -- only ever
+                                  * used to divide s_calSum; the window's PASS
+                                  * condition is s_calWindowS, not this */
+static float32 s_calWindowS;    /* elapsed dt in the current window [s];
+                                  * reset to 0 whenever motion restarts it */
+static float32 s_calElapsedS;   /* elapsed dt since calibration STARTED [s];
+                                  * NEVER reset by motion -- this is what the
+                                  * AHRS_CAL_DEADLINE_S gate is measured against */
 static boolean s_biasDegraded;  /* deadline hit before a clean window */
 
 /* Named s_ahrsState rather than the obvious s_state: MISRA 5.9 wants
@@ -273,7 +286,8 @@ void Ahrs_init(void)
     }
 
     s_calCount     = 0u;
-    s_calTotal     = 0u;
+    s_calWindowS   = 0.0f;
+    s_calElapsedS  = 0.0f;
     s_biasDegraded = FALSE;
     s_ahrsState    = AHRS_CALIBRATING;
     s_magNorm  = 0.0f;
@@ -295,8 +309,12 @@ void Ahrs_init(void)
     g_magLatch.gen      = 0u;
 }
 
-/* Average the gyro while the board is still; motion restarts the window. */
-static boolean ahrs_calibrate(const float32 gyroBody[3])
+/* Average the gyro while the board is still; motion restarts the window.
+ * T14: the window is now a DURATION (s_calWindowS/s_calElapsedS, accumulated
+ * from dt) rather than a sample count -- see AHRS_CAL_WINDOW_S's comment.
+ * s_calCount still counts samples, but only to divide s_calSum; it plays no
+ * part in deciding when the window is done. */
+static boolean ahrs_calibrate(const float32 gyroBody[3], float32 dt)
 {
     boolean done   = FALSE;
     boolean moving = FALSE;
@@ -344,28 +362,35 @@ static boolean ahrs_calibrate(const float32 gyroBody[3])
 
     s_calCount++;
 
-    s_calTotal++;
+    s_calWindowS  += dt;
+    s_calElapsedS += dt;
 
-    if ((moving != FALSE) && (s_calTotal < AHRS_CAL_MAX_SAMPLES))
+    if ((moving != FALSE) && (s_calElapsedS < AHRS_CAL_DEADLINE_S))
     {
-        /* Throw the window away rather than bake the motion into the bias. */
+        /* Throw the window away rather than bake the motion into the bias.
+         * s_calElapsedS is NOT reset here -- the deadline is measured against
+         * the whole calibration attempt, not against the current window, or a
+         * board that never sits still for AHRS_CAL_WINDOW_S would restart the
+         * deadline every time and never give up. */
         for (i = 0u; i < 3u; i++)
         {
             s_calSum[i] = 0.0f;
         }
-        s_calCount = 0u;
+        s_calCount   = 0u;
+        s_calWindowS = 0.0f;
     }
-    else if ((s_calCount >= AHRS_CAL_SAMPLES)
-             || (s_calTotal >= AHRS_CAL_MAX_SAMPLES))
+    else if ((s_calWindowS >= AHRS_CAL_WINDOW_S)
+             || (s_calElapsedS >= AHRS_CAL_DEADLINE_S))
     {
         /* Either a clean window completed, or the deadline expired and this is
          * the best that is going to be available. Divide by what was actually
-         * accumulated, not by the nominal count -- at the deadline the window
-         * is usually partial, and dividing by 100 regardless would scale the
-         * bias down toward zero and look deceptively small. */
+         * accumulated, not by a nominal count -- at the deadline the window
+         * is usually partial, and dividing by the nominal sample count
+         * regardless would scale the bias down toward zero and look
+         * deceptively small. */
         const uint16 n = (s_calCount > 0u) ? s_calCount : 1u;
 
-        if (s_calCount < AHRS_CAL_SAMPLES)
+        if (s_calWindowS < AHRS_CAL_WINDOW_S)
         {
             s_biasDegraded = TRUE;
         }
@@ -635,7 +660,7 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
 
         if (s_ahrsState == AHRS_CALIBRATING)
         {
-            if (ahrs_calibrate(gyroBody) != FALSE)
+            if (ahrs_calibrate(gyroBody, dt) != FALSE)
             {
                 s_ahrsState = AHRS_ALIGNING;
             }

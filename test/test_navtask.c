@@ -66,12 +66,23 @@ void test_dt_window_accepts_typical_50hz_period(void)
 
 void test_dt_window_rejects_below_minimum(void)
 {
-    TEST_ASSERT_EQUAL(FALSE, NavTask_inputValid(0.0009f, TRUE, (uint8)AHRS_RUNNING));
+    TEST_ASSERT_EQUAL(FALSE, NavTask_inputValid(0.00019f, TRUE, (uint8)AHRS_RUNNING));
 }
 
 void test_dt_window_accepts_at_minimum_boundary(void)
 {
-    TEST_ASSERT_EQUAL(TRUE, NavTask_inputValid(0.001f, TRUE, (uint8)AHRS_RUNNING));
+    /* T14 (docs/REFACTORING_PLAN.md §3.8): NAVTASK_DT_MIN_S 0.001f -> 0.0002f
+     * -- 0.001f used to be the boundary and is now comfortably inside the
+     * window, which is the point: the measured 985 us IMU period must clear
+     * it, and 0.001f > 0.000985f is exactly the margin check. */
+    TEST_ASSERT_EQUAL(TRUE, NavTask_inputValid(0.0002f, TRUE, (uint8)AHRS_RUNNING));
+}
+
+void test_dt_window_accepts_measured_imu_period(void)
+{
+    /* The number this whole change exists for: docs/IMU_INTERRUPT.md §5.6's
+     * measured 985.036 us mean interval must be accepted, not merely 1 ms. */
+    TEST_ASSERT_EQUAL(TRUE, NavTask_inputValid(0.000985f, TRUE, (uint8)AHRS_RUNNING));
 }
 
 void test_dt_window_rejects_above_maximum(void)
@@ -123,6 +134,7 @@ int main(void)
     RUN_TEST(test_dt_window_accepts_typical_50hz_period);
     RUN_TEST(test_dt_window_rejects_below_minimum);
     RUN_TEST(test_dt_window_accepts_at_minimum_boundary);
+    RUN_TEST(test_dt_window_accepts_measured_imu_period);
     RUN_TEST(test_dt_window_rejects_above_maximum);
     RUN_TEST(test_dt_window_accepts_at_maximum_boundary);
     RUN_TEST(test_dt_nan_is_rejected);

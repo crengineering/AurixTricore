@@ -267,6 +267,87 @@ void test_mounting_transform_is_a_proper_rotation(void)
 }
 
 /* ==========================================================================
+ * T14 (docs/REFACTORING_PLAN.md §3.8) -- the gyro-bias calibration window is
+ * a DURATION accumulated from dt, not a sample count, so it means the same
+ * ~2.0 s wall-clock window whether NavTask_step calls Ahrs_update at 50 Hz
+ * or at the measured ~1014.2 Hz. This is the one piece of §3.8 that a host
+ * test can actually see -- the rate itself is not observable here, only that
+ * the SAME dt stream produces the SAME elapsed time to leave CALIBRATING.
+ * ======================================================================== */
+
+void test_calibration_window_is_a_duration_not_a_sample_count(void)
+{
+    /* 50 Hz (the rate this flies at through T14) and the measured IMU period
+     * (~1014.2 Hz, docs/IMU_INTERRUPT.md §5.6) -- both must leave
+     * AHRS_CALIBRATING at ~2.0 s of accumulated dt, not at a fixed tick count. */
+    static const float rates[] = { 0.02f, 0.0009855f };
+    unsigned r;
+
+    for (r = 0u; r < sizeof rates / sizeof rates[0]; ++r)
+    {
+        const float32 dt = rates[r];
+        const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
+        const float32 gyro[3]     = { 0.0f, 0.0f, 0.0f };  /* perfectly still */
+        Ahrs_Values v;
+        int ticks = 0;
+        const int limit = (int)(20.0f / dt) + 10;   /* generous, still bounded */
+        float elapsed;
+        char msg[160];
+
+        memset(&v, 0, sizeof v);
+        Ahrs_init();
+
+        while ((v.state == AHRS_CALIBRATING) && (ticks < limit))
+        {
+            Ahrs_update(&v, accLevel, gyro, dt, TRUE);
+            ticks++;
+        }
+
+        elapsed = (float)ticks * dt;
+        (void)snprintf(msg, sizeof msg,
+            "dt=%.6f s: left CALIBRATING after %d ticks = %.4f s, expected ~2.0 s",
+            (double)dt, ticks, (double)elapsed);
+        TEST_ASSERT_TRUE_MESSAGE(ticks < limit, msg);
+        TEST_ASSERT_FLOAT_WITHIN_MESSAGE(3.0f * dt, 2.0f, elapsed, msg);
+        TEST_ASSERT_EQUAL_MESSAGE(0u, v.biasDegraded, msg);
+    }
+}
+
+void test_calibration_deadline_is_a_duration_and_flags_degraded(void)
+{
+    /* A board that never sits still never completes a clean window; the
+     * AHRS_CAL_DEADLINE_S = 10.0 s deadline must still fire, at 10.0 s of
+     * accumulated dt regardless of rate, and flag biasDegraded (Ahrs.h). */
+    const float32 dt = 0.02f;    /* 50 Hz is enough ticks to reach it quickly */
+    const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
+    Ahrs_Values v;
+    Rng r;
+    int ticks = 0;
+    const int limit = 2000;      /* 40 s of ticks -- generously bounded */
+    float elapsed;
+    char msg[160];
+
+    memset(&v, 0, sizeof v);
+    Ahrs_init();
+    rngSeed(&r, 0xC001C0DEu);
+
+    while ((v.state == AHRS_CALIBRATING) && (ticks < limit))
+    {
+        const float32 gyro[3] = { rngN(&r) * 50.0f, rngN(&r) * 50.0f, rngN(&r) * 50.0f };
+        Ahrs_update(&v, accLevel, gyro, dt, TRUE);
+        ticks++;
+    }
+
+    elapsed = (float)ticks * dt;
+    (void)snprintf(msg, sizeof msg,
+        "left CALIBRATING after %.3f s while continuously moving, expected ~10.0 s deadline",
+        (double)elapsed);
+    TEST_ASSERT_TRUE_MESSAGE(ticks < limit, msg);
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(3.0f * dt, 10.0f, elapsed, msg);
+    TEST_ASSERT_EQUAL_MESSAGE(1u, v.biasDegraded, msg);
+}
+
+/* ==========================================================================
  * Spec 3.1 -- analytic attitudes
  *
  * The sensor-frame reading for a wanted BODY-frame specific force is
@@ -511,6 +592,8 @@ int main(void)
     RUN_TEST(test_rotation_preserves_magnitude);
     RUN_TEST(test_body_ned_round_trip);
     RUN_TEST(test_mounting_transform_is_a_proper_rotation);
+    RUN_TEST(test_calibration_window_is_a_duration_not_a_sample_count);
+    RUN_TEST(test_calibration_deadline_is_a_duration_and_flags_degraded);
     RUN_TEST(test_level_board_reads_zero_roll_and_pitch);
     RUN_TEST(test_nose_up_reads_pitch_plus_90);
     RUN_TEST(test_right_wing_down_reads_roll_plus_90);

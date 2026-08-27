@@ -42,6 +42,7 @@ volatile uint32 g_imuDrdyHistBase;
 volatile uint32 g_imuDrdyUnder;
 volatile uint32 g_imuDrdyOver;
 volatile uint32 g_imuDrdyStaleTicks;   /* written by NavTask.c, not here */
+volatile uint32 g_imuDrdyMissedEdges;  /* T14: reserved, wired in T15 -- see ImuInt.h */
 /* cppcheck-suppress-end misra-c2012-8.7 */
 
 /* Non-volatile shadow of the running accumulator (dtMin/dtMax/windowSum/
@@ -148,6 +149,8 @@ void ImuInt_init(void)
     s_imuIntState.windowCount     = 0u;
     s_imuIntState.histBase        = 0u;
     s_imuIntState.histCentered    = FALSE;
+
+    g_imuDrdyMissedEdges = 0u;
 
     /* ERU wiring, docs/IMU_INTERRUPT.md SS4. IfxScuEru_initReqPin() only ever
      * sets a pin to INPUT (see IfxScuEru.h) -- additive to, never a

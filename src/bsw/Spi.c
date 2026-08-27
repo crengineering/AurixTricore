@@ -33,11 +33,17 @@
 /* One data item = one byte. */
 #define SPI_DATA_WIDTH_BITS     (8u)
 
-/* Transfer deadline. STM0 runs at ~100 MHz, so 10 ms is 1 000 000 ticks —
- * three orders of magnitude more than the longest transfer this bus performs,
- * so it only ever fires on a genuine fault. */
+/* Transfer deadline. STM0 runs at ~100 MHz, so 1 ms is 100 000 ticks —
+ * still 8x the measured 124.4 us IMU burst (docs/IMU_INTERRUPT.md §5.6), so it
+ * only ever fires on a genuine fault.
+ *
+ * T14 (docs/REFACTORING_PLAN.md §3.2/§3.8): was 10 ms, sized against the
+ * 20 ms task period this bus is read from. At the 985 us period a wedged
+ * transfer would cost TEN consecutive ticks instead of one — ten slots is
+ * most of the control chain's budget for one fault. 1 ms bounds a wedge to a
+ * single missed tick at any rate this task runs at. */
 #define SPI_STM_TICKS_PER_MS    (100000u)
-#define SPI_XFER_DEADLINE_MS    (10u)
+#define SPI_XFER_DEADLINE_MS    (1u)
 
 static IfxQspi_SpiMaster         s_spiMaster;
 static IfxQspi_SpiMaster_Channel s_spiImuChannel;

@@ -11,12 +11,19 @@
 #include "SysTime.h"
 #include "ImuInt.h"
 
-/* Same window as the original Task_Imu (Cpu0_Main.c, pre-T11): below
- * NAVTASK_DT_MIN_S the tick fired twice inside one STM period (nothing to
- * integrate), above NAVTASK_DT_MAX_S the previous tick was so late that
+/* Below NAVTASK_DT_MIN_S the tick fired twice inside one STM period (nothing
+ * to integrate), above NAVTASK_DT_MAX_S the previous tick was so late that
  * integrating the gap would put a real offset into attitude/position rather
- * than a measurement. */
-#define NAVTASK_DT_MIN_S   (0.001f)
+ * than a measurement.
+ *
+ * T14 (docs/REFACTORING_PLAN.md §3.8, Risk 10): NAVTASK_DT_MIN_S was 0.001f,
+ * sized against the 50 Hz task period -- and a SILENT KILLER at the measured
+ * 985 us IMU interval, because 985 us < 1 ms rejects EVERY tick, permanently
+ * FALSE-ing ahrsInputOk/fusionInputOk with no error anywhere: the estimator
+ * just stops. 0.0002f (200 us) still catches a genuine double dispatch and
+ * clears the measured 985 us period by 5x, at any rate this task ever runs
+ * at. */
+#define NAVTASK_DT_MIN_S   (0.0002f)
 #define NAVTASK_DT_MAX_S   (0.2f)
 
 /* NaN-safe by construction: written as "is dtS INSIDE the window", not "is

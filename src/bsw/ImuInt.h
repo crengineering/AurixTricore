@@ -84,8 +84,22 @@ extern volatile uint32 g_imuDrdyHistBase;     /**< ticks; bin i covers
 extern volatile uint32 g_imuDrdyUnder;        /**< dt below the histogram window    */
 extern volatile uint32 g_imuDrdyOver;         /**< dt above the histogram window    */
 
-/* --- I5: DRDY -> read staleness, written by NavTask.c, not by the ISR --- */
+/* --- I5: DRDY -> read staleness, written by NavTask.c, not by the ISR ---
+ * T14 (docs/REFACTORING_PLAN.md §3.8): I5 measured this to prove D5 (0-20 ms
+ * against the 50 Hz task, evidence the 1 kHz rate change needed) -- that job
+ * is done. From T15 on this is a LIVE latency monitor instead: it should read
+ * under ~1 ms sustained, and a rising trend means NavTask_step is falling
+ * behind the sensor, not that anything is being proven. */
 extern volatile uint32 g_imuDrdyStaleTicks;   /**< edge -> Task read latency, ticks */
+
+/* Reserved for T15: the count of DRDY edges NavTask_step's newSample gate saw
+ * arrive without being consumed before the next one overwrote them (missed
+ * entirely, not merely late -- g_imuDrdyStaleTicks already covers "late").
+ * Declared now, at 0 and never incremented, so T15's edge-consumption change
+ * is a pure logic change with no header/link-time surprise: the symbol
+ * already exists in the map and any XCP/tool wiring against it can start
+ * before the wiring itself does anything. */
+extern volatile uint32 g_imuDrdyMissedEdges;
 
 /** ERU + interrupt setup for P10.7 (docs/IMU_INTERRUPT.md SS4), plus zeroing
  *  the accumulator state. Call once from core0_main, AFTER
