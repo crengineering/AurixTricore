@@ -121,18 +121,21 @@ add_test(NAME icm42688 COMMAND test_icm42688)
 
 #[[
 NavState (T10, docs/REFACTORING_PLAN.md §2.4/§4): the generation-counter
-publish/get protocol, still unwired to anything real. NavState.c uses BOTH
-TASKING extensions -- __at() for its own object AND, via SharedRam.h,
-Ifx__dsync() -- so it needs the tasking_shim.h -include too; on the host
-both expand to nothing (SharedRam.h's #ifndef guard on Ifx__dsync is what
-makes this possible without editing SharedRam.h for the host).
+publish/get protocol, still unwired to anything real. g_navState's __at()
+placement now lives in its own translation unit, NavStatePlace.c (split out
+after the MISRA gate found mixing __at() with this file's logic broke
+cppcheck's symbol table for every g_navState.field access -- see that file).
+NavState.c itself only needs Ifx__dsync() (via SharedRam.h) faked away;
+NavStatePlace.c only needs __at() faked away -- both need the same
+tasking_shim.h -include, harmlessly providing the macro the other doesn't use.
 ]]
-set_source_files_properties(${BSW}/NavState.c PROPERTIES
+set_source_files_properties(${BSW}/NavState.c ${BSW}/NavStatePlace.c PROPERTIES
     COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/fakes/tasking_shim.h")
 
 add_executable(test_navstate
     test_navstate.c
     ${BSW}/NavState.c
+    ${BSW}/NavStatePlace.c
 )
 target_link_libraries(test_navstate PRIVATE unity test_common)
 add_test(NAME navstate COMMAND test_navstate)
@@ -152,6 +155,7 @@ test_navtask.c itself, purely to satisfy the linker.
 add_executable(test_navtask
     test_navtask.c
     ${BSW}/NavState.c
+    ${BSW}/NavStatePlace.c
     ${BSW}/SysTime.c
     fakes/IfxStm.c
 )

@@ -39,6 +39,11 @@ typedef struct
     uint32       imuPresent;   /**< was uint8 + reserved[3]; see file header */
 } NavState_t;
 
+/** Defined (with __at()) in NavStatePlace.c, not here -- see SharedRam.h and
+ *  that file's header comment for why a second LMU __at() object needs its
+ *  own translation unit. */
+extern volatile NavState_t g_navState;
+
 /** Zero the block. CPU1 only, once at boot -- __at() storage is not
  *  guaranteed pre-zeroed the way ordinary .bss is (Measurements.c's
  *  g_xcpData needs the same explicit init, for the same reason). */

@@ -69,6 +69,12 @@
 
 /* top 64 K of lmuram (768 K total): 0xB00F0000 .. 0xB00FFFFF, non-cached
  * alias. Cached alias of the same physical RAM is 0x90040000-0x900FFFFF. */
+/* cppcheck-suppress misra-c2012-2.5 ; deviation: this IS used -- as the
+ * __at() address for g_coreStats (SharedRam.c) -- but cppcheck's fragile
+ * __at() parse tolerance (below) does not track a reference used only as a
+ * macro's argument, so its unused-macro checker sees none. Every other
+ * __at() site in this tree (NavStatePlace.c, Measurements.c) uses a bare
+ * literal instead of composing one from this macro, for the same reason. */
 #define SHARED_LMU_ADDR   0xB00F0000u
 
 /* Ifx__dsync is NOT defined for TASKING in this iLLD tree -- it exists only

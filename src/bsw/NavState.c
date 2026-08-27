@@ -2,24 +2,14 @@
  * \file NavState.c
  * \brief NavState publish/get protocol -- see NavState.h.
  *
- * Placement: g_navState is the second object in the LMU shared block
- * (SharedRam.h), immediately after g_coreStats (SharedRam.c, 96 bytes,
- * 0xB00F0000-0xB00F005F). 0x60 is 8-byte aligned, so this object never
- * shares a physical 64-bit line with g_coreStats -- a different object
- * written by different core(s) entirely.
- *
- * This file mixes the __at() placement with the publish/get logic, unlike
- * SharedRam.c (which is placement ONLY). That is the same pattern
- * Measurements.c already uses for the XCP blocks -- one __at() definition in
- * a file is what cppcheck tolerates; it only trips on a SECOND one in the
- * same translation unit (Measurements.c:28-36).
+ * g_navState itself is defined (with __at()) in NavStatePlace.c, not here --
+ * see that file for why mixing the placement with this file's logic broke
+ * cppcheck's misra addon for every g_navState.field access below. This file
+ * only ever sees g_navState through NavState.h's plain `extern` declaration,
+ * so its symbol table is exactly as ordinary as any other BSW file's.
  *********************************************************************************************************************/
 #include "NavState.h"
 #include "SharedRam.h"
-
-#define NAVSTATE_LMU_ADDR   (SHARED_LMU_ADDR + 0x60u)
-
-volatile NavState_t g_navState __at(NAVSTATE_LMU_ADDR);
 
 void NavState_init(void)
 {
@@ -34,6 +24,10 @@ void NavState_init(void)
     g_navState.fusion     = s_zeroFusion;
     g_navState.dtS        = 0.0f;
     g_navState.imuPresent = 0u;
+    /* cppcheck-suppress misra-c2012-17.3 ; deviation: Ifx__dsync() wraps
+     * TASKING's __dsync() intrinsic, which has no declaration anywhere
+     * cppcheck can see (SharedRam.h) -- same root cause as the grandfathered
+     * instance in Cpu0_Main.c. */
     Ifx__dsync();
     g_navState.gen        = 0u;
 }
@@ -50,6 +44,7 @@ void NavState_publish(const Ahrs_Values *ahrs, const FusionValues *fusion,
     g_navState.dtS        = dtS;
     g_navState.imuPresent = (imuPresent != FALSE) ? 1u : 0u;
 
+    /* cppcheck-suppress misra-c2012-17.3 ; deviation: see NavState_init. */
     Ifx__dsync();
 
     g_navState.gen = g_navState.gen + 1u;

@@ -152,7 +152,10 @@ void BringUp_dumpSensors(void)
  * (never pull-up -- the internal pull-up returns to the 5 V rail and would
  * fight the IMU's 3.3 V push-pull driver) plus TTL pad mode (the pad's
  * default CMOS threshold is ~3.5 V and would never register the IMU's 3.3 V
- * high) -- docs/IMU_INTERRUPT.md 1/3.3. */
+ * high) -- docs/IMU_INTERRUPT.md 1/3.3. Declared in BringUp.h (MISRA 8.4). */
+/* cppcheck-suppress misra-c2012-8.7 ; deviation: read over XCP SHORT_UPLOAD
+ * by raw address (tools/xcp_read.py), never referenced by C code outside
+ * this file -- same class of deviation as ImuInt.c's globals. */
 volatile uint32 g_p10Pin7Iocr;   /* silicon read-back proof, see below */
 
 void BringUp_initImuIntPinSafe(void)

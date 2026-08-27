@@ -86,7 +86,16 @@ void NavTask_step(void)
      * exist yet at this point, so this first gate is dt+presence only --
      * NavTask_inputValid's AHRS_RUNNING check applies below, once ahrs.state
      * is an output rather than an unknown. */
-    ahrsInputOk = (navTask_dtValid(elapsedTime) != FALSE) && (present != FALSE);
+    /* Written as an if/else into a boolean local, not a direct `&&`
+     * assignment: cppcheck's MISRA 10.3 does not recognise `boolean` as an
+     * essentially-Boolean type, so it flags a `&&`/comparison result stored
+     * straight into one as a different essential type category. Same idiom
+     * as navTask_dtValid()/NavTask_inputValid() just above and below. */
+    ahrsInputOk = FALSE;
+    if ((navTask_dtValid(elapsedTime) != FALSE) && (present != FALSE))
+    {
+        ahrsInputOk = TRUE;
+    }
     Ahrs_update(&ahrs, sample.acc, sample.gyro, elapsedTime, ahrsInputOk);
 
     /* Gate the navigation filter on the attitude being usable, not merely on

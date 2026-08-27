@@ -10,6 +10,8 @@
 #ifndef BRINGUP_H
 #define BRINGUP_H
 
+#include "Ifx_Types.h"
+
 /** Dump the BMP581, MMC5983MA and ICM-42688-P configuration/status registers
  *  plus one raw measurement burst each, over Uart_print/Uart_println. Call
  *  once at boot, after each sensor's init has run — see the per-device
@@ -29,5 +31,10 @@ void BringUp_dumpSensors(void);
  *  pin as an output and has been removed rather than left dormant. Call
  *  once at boot, before anything else touches Port 10. */
 void BringUp_initImuIntPinSafe(void);
+
+/** Silicon read-back of P10.7's IOCR4.PC7 field, set by
+ *  BringUp_initImuIntPinSafe() -- see its comment above. Read live with
+ *  tools/xcp_read.py; expect 1 (input, pulldown). */
+extern volatile uint32 g_p10Pin7Iocr;
 
 #endif /* BRINGUP_H */

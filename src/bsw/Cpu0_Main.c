@@ -109,6 +109,9 @@ int core0_main(void)
      * this build, only a later cross-core snapshot under load -- so it is
      * exercised here and confirmed in Cpu0_Main.src rather than trusted
      * because the build succeeded. See docs/REFACTORING_PLAN.md §2.4/Risk 2. */
+    /* cppcheck-suppress misra-c2012-17.3 ; deviation: Ifx__dsync() wraps
+     * TASKING's __dsync() intrinsic, which has no declaration anywhere
+     * cppcheck can see (SharedRam.h). */
     Ifx__dsync();
 
     /* P10.7 (ICM-42688-P INT1 candidate, docs/IMU_INTERRUPT.md): permanent
