@@ -316,6 +316,55 @@ Quick health read, in order of what to distrust first:
 | `velD` | `0x58` | ≈ 0 at rest |
 | `varD` | `0x68` | bounded, ≈ 0.4 m² |
 
+### 6.1 Roll and yaw are meaningless near pitch = ±90° — this is not a bug
+
+**Measured 2026-08-27 on v1.19.13.** Pitching the board nose-up through 90°
+makes `rollDeg` leap tens or hundreds of degrees and slam between +180 and
+−180. It looks alarming on a plot and it is **not** a filter fault. Do not
+re-investigate this; the evidence is below.
+
+`rollDeg` is a projection of the quaternion, `Ahrs.c:818`:
+
+```c
+out->rollRad = atan2f(2.0f * ((q0*q1) + (q2*q3)),
+                      1.0f - (2.0f * ((q1*q1) + (q2*q2))));
+```
+
+At pitch → ±90° **both arguments approach zero**, so the value is
+`atan2f(0, 0)` — mathematically undefined, and arbitrarily small noise picks a
+different answer each tick. The two triples (roll 0°, pitch 90°, yaw ψ) and
+(roll 180°, pitch 90°, yaw ψ+180°) describe **the same physical orientation**;
+the filter is free to report either. This is gimbal lock, inherent to any
+three-angle representation, not something this code introduced.
+
+The measurement that settles it — one sample step at pitch ≈ 87-89°:
+
+| | roll [deg] | q0 | q1 | q2 | q3 |
+|---|---|---|---|---|---|
+| t | **6.08** | 0.6587 | −0.2835 | 0.6251 | 0.3084 |
+| t+1 | **62.53** | 0.6453 | −0.2842 | 0.6446 | 0.2954 |
+
+`|Δq| = 0.0270`, i.e. a **2.94° physical rotation**, while the reported roll
+changed **56.5°**. The quaternion — which *is* the filter state — stayed
+continuous through the whole event, and so did `pitchDeg` (86.6 → 89.1 → 88.7
+→ 87.7). Only the Euler projection blew up.
+
+**What follows from this:**
+
+- **The Euler triple is telemetry. `q[4]` (offset `0x14`) is the state.** When
+  an attitude looks wrong above ~80° of pitch, read the quaternion before
+  suspecting the filter. It is already published, so no firmware change is
+  needed to look at it.
+- **Left as is, deliberately.** Nothing in the estimator is wrong, and no diag
+  bit is spent on it — `DIAGNOSTICS.md` records bits 27-30 as the last four and
+  they are allocated. A quadrocopter that reaches 90° of pitch is in an upset,
+  and the correct response to an upset is a defined failsafe action, not a
+  better roll number. That belongs with the actuator/arming safety design, not
+  here.
+- **The rate loop is unaffected.** It consumes body rates (`rateDps`, `0x24`),
+  which are never degenerate. Only the outer attitude loop consumes Euler
+  angles, and only in an orientation the aircraft should never hold.
+
 ---
 
 ## 7. Outdoor validation, 2026-08-26 (v1.19.5)
