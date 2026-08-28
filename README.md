@@ -175,12 +175,68 @@ Every `coreN_main` **must** call `IfxCpu_emitEvent` *and* `IfxCpu_waitEvent`
 before any application code — skipping either on any core causes a watchdog
 reset. Each core uses its own STM module (`MODULE_STM0` → CPU0, …).
 
-Cross-core data follows one pattern, documented in `SharedRam.h`: shared
-objects live in the LMU at a **non-cached alias**, `volatile`, all-32-bit,
-**single writer**, publish ordered by *payload → barrier → generation
-counter*, reader retries once on a torn read. Reuse it rather than inventing a
-second scheme — see `docs/CODEMAP.md` §3. `CoreStats.h` is diagnostic
-counters only, tolerant of a torn read, not this pattern.
+### Cross-core communication
+
+Splitting the flight chain onto CPU1 means data has to cross cores. There is
+**one pattern for that, and inventing a second one is a bug**. It is defined in
+`src/bsw/SharedRam.h`; the reasoning is `docs/REFACTORING_PLAN.md` §2.4.
+
+Infineon's documented mechanism for TC3xx shared data is: put it in the **LMU**
+and either address it through the **non-cached `0xB…` alias** (no coherency
+handling needed at all) or use the cached alias plus a data-synchronisation
+barrier after *every* write. This project takes the non-cached alias. Publishing
+the nav state that way costs ~3.9 µs — 0.2 % of the flight task's budget —
+against a permanent obligation to remember a barrier at every future write site.
+
+> ⚠️ The older claim in `CoreStats.h` that *"cross-core DSPR reads bypass the
+> data cache"* describes the **reader** only. It is not the sanctioned
+> mechanism and must not be stretched to cover new crossings. `CoreStats` is
+> diagnostic counters, tolerant of a torn read, and is deliberately exempt.
+
+All shared objects live in the top 64 K of `lmuram`, one per translation unit:
+
+| Object | Address | Writer | Carries |
+|---|---|---|---|
+| `g_coreStats[6]` | `0xB00F0000` | each core, own slot | load, exec time, alive counter |
+| `g_navState` | `0xB00F0060` | CPU1 | attitude + fusion snapshot → CPU0 |
+| `g_baroLatch` | `0xB00F0200` | CPU0 | barometric altitude → CPU1 |
+| `g_gnssLatch` | `0xB00F0300` | CPU0 | GNSS fix → CPU1 |
+| `g_magLatch` | `0xB00F0400` | CPU0 | magnetic field → CPU1 |
+| `g_imuEdge` | `0xB00F0500` | CPU1 (DRDY ISR) | data-ready timestamp + sequence |
+
+**The four rules**, all four load-bearing:
+
+1. **Exactly one writer per object.** The alias fixes visibility, not races.
+2. **Every field `volatile` and 32-bit.** LMU SRAM is physically 64 bits wide
+   with ECC and no sub-word write, so a byte or halfword store becomes a
+   read-modify-write of the whole doubleword — two writers must never share a
+   64-bit line. Keep each writer's region 8-byte aligned and a multiple of 8.
+3. **Ordering is the whole correctness argument.** Publish as *payload →
+   `Ifx__dsync()` → generation counter*. `volatile` orders the compiler only;
+   it does not stop the TriCore store buffer posting or merging writes, even to
+   non-cached memory. A single-field object needs no barrier.
+4. **No locks.** `IfxCpu_acquireMutex` is a real spinlock and is available, but
+   a spin on the flight core is an unbounded wait on another core's progress.
+
+The reader side is a **generation counter**: read `gen`, copy the payload,
+re-read `gen`; on mismatch retry once, then keep the previous snapshot and
+return `FALSE`. The reader never writes shared state. `NavState.c` is the
+reference implementation; a `FALSE` return is normal and is **not** a fault.
+
+Two traps worth knowing before adding an object here:
+
+- **`Ifx__dsync` does not exist for TASKING** in this iLLD tree — `SharedRam.h`
+  wraps the compiler builtin. A missing barrier fails **silently**, as a rare
+  torn read under load, never as a build error, so the acceptance check greps
+  the generated `.src` for a real `DSYNC` instruction.
+- **One `__at()` object per `.c` file.** cppcheck cannot parse the extension
+  and silently loses its symbol table for the rest of the file, so a second
+  object in the same translation unit stops half that file being analysed
+  without saying so. Hence the `*Place.c` files.
+
+The XCP blocks are **not** part of this and must not move: `Xcp_Data` lives at
+`0x70030000` in CPU0's DSPR, which is a second, independent reason publishing
+stays on CPU0.
 
 ### Fixed XCP memory map
 
@@ -251,8 +307,10 @@ barometer + GNSS ─────────────────────
                                         position, velocity, accel bias, meas bias
 ```
 
-Everything runs in `NavTask_step` at 50 Hz on **CPU1**, the dedicated flight
-core, and costs about 0.7 % of it — see `docs/FUSION.md` §1.
+Everything runs in `NavTask_step` on **CPU1**, the dedicated flight core,
+clocked by the IMU's own data-ready interrupt at a measured **1014.2 Hz** —
+not a fixed 1 kHz, and `dt` is taken per tick from the edge timestamps. It
+costs about 15.5 % of that core, 171 µs worst dispatch — see `docs/FUSION.md` §1.
 Frame is NED throughout, so **`d` is positive downward**.
 
 Why a cascade and not one 15-state EKF: attitude converges in seconds from two
@@ -452,10 +510,10 @@ reproduces locally with one command.
       firmware, A2L and GUI (`docs/CODEMAP.md`).
 - [ ] **Diagnostic bit word is full.** All 32 bits are allocated (bit 31 is
       `DIAG_CAL_INVALID`). A fifth peripheral needs a second bitmask word.
-- [ ] **CPU2–CPU5 still idle.** CPU1 now carries the flight chain (~0.7 %
-      load); the rest of CPU0's load — I2C sensors, GNSS, NVM, comms — is
-      deliberately unmoved (`docs/REFACTORING_PLAN.md` §2.2, D1). Next up:
-      raising `NavTask_step` from 50 Hz to the IMU's measured 1014.2 Hz
+- [ ] **CPU2–CPU5 still idle.** CPU1 now carries the flight chain at the IMU's
+      measured 1014.2 Hz (**15.5 % load, 171 µs worst dispatch** against a
+      300 µs budget); the rest of CPU0's load — I2C sensors, GNSS, NVM, comms —
+      is deliberately unmoved (`docs/REFACTORING_PLAN.md` §2.2, D1)
       (`docs/REFACTORING_PLAN.md` T14–T16), not yet done.
 - [ ] **DShot ESC output** — bidirectional DShot300 on GTM ATOM0/TIM, with RPM
       feedback for a notch filter. Pins allocated in `docs/PINNING.md`, driver
