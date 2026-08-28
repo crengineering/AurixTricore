@@ -115,18 +115,54 @@ which alias is reserved.**
         map     cached (dest=bus:sri, dest_offset=0x90040000,           size=704K);
         map not_cached (dest=bus:sri, dest_offset=0xb0040000, reserved, size=704K);
     }
-
-    memory lmuram_shared                /* top 64K of the same physical LMU */
-    {
-        mau = 8;
-        size = 64k;
-        type = ram;
-        map     cached (dest=bus:sri, dest_offset=0x900f0000, reserved, size=64k);
-        map not_cached (dest=bus:sri, dest_offset=0xb00f0000,           size=64k);
-    }
 ```
 
-Why this rather than un-reserving the existing map: un-reserving `lmuram`'s
+> **Corrected by the T0 spike — the dual-map `lmuram_shared` sketched below
+> does NOT work as written.** Original sketch (kept for the record):
+> ```
+>     memory lmuram_shared                /* top 64K of the same physical LMU */
+>     {
+>         mau = 8;
+>         size = 64k;
+>         type = ram;
+>         map     cached (dest=bus:sri, dest_offset=0x900f0000, reserved, size=64k);
+>         map not_cached (dest=bus:sri, dest_offset=0xb00f0000,           size=64k);
+>     }
+> ```
+> Measured on real hardware toolchain (T0, throwaway branch, discarded per
+> plan — findings kept here): `group shared_lmu (ordered, align = 8,
+> run_addr = mem:lmuram_shared)` against this dual-map form resolved to the
+> **cached** 0x900f0150, not the intended non-cached 0xb00f0150 — with
+> `cached` flagged `reserved` and `not_cached` left allocatable, i.e. the
+> *opposite* of what part 3.1's own model of `reserved` predicts. Tried
+> swapping declaration order of the two `map` lines too (in case `reserved`
+> is order-sensitive rather than semantic here) — no effect, still cached.
+> `run_addr = mem:lmuram_shared:not_cached` (an attempt to name the map
+> explicitly) is not valid syntax: `ltc E821: Could not find memory
+> lmuram_shared:not_cached for memory reference`. This makes R3 real, not
+> hypothetical, and the fix is a single-map memory, not a smarter selector:
+>
+> ```
+>     memory lmuram_shared                /* top 64K of the same physical LMU,
+>                                             non-cached alias ONLY -- see below */
+>     {
+>         mau = 8;
+>         size = 64k;
+>         type = ram;
+>         map not_cached (dest=bus:sri, dest_offset=0xb00f0000, size=64k);
+>     }
+> ```
+> No `cached` map is declared for this region at all. `run_addr =
+> mem:lmuram_shared` (bare, no map to disambiguate) then has only one
+> address to resolve to, and does — confirmed at 0xb00f0150 in the T0 build.
+> This is stronger than "reserved" was ever going to be: any future attempt
+> to place something at the 0x9 alias of this specific 64 K is not merely
+> unreserved-but-avoided, it is **not in any declared memory at all** and
+> fails the link, loud, instead of silently landing cacheable. Nothing in
+> this tree needs a cached view of the shared block — that is the entire
+> point of the block — so the missing map costs nothing.
+
+Why carve rather than un-reserve the existing map: un-reserving `lmuram`'s
 `not_cached` view lets any future `.bss` land non-cached by accident and leaves
 *both* views of the same 768 K allocatable. The carve-out keeps exactly one
 allocatable view of every byte, preserves the "everything else is cached"
@@ -155,6 +191,18 @@ Then one group, in `section_layout :vtc:linear` beside the existing
 `ordered` fixes the sequence so the `.map` stays readable and a diff means
 something; `align = 8` preserves today's property that no two of these objects
 share a 64-bit line. Offsets become the linker's problem.
+
+**R4 answered by T0, and it is good news.** With five of the six objects
+still on `__at()` (0xB00F0000..0xB00F0507) and only `g_imuEdge` moved into
+`shared_lmu`, the group did not collide with them and did not need to be
+told where the gaps are — the locator placed it at 0xb00f0150, exactly the
+first free 8-byte slot (right after `g_navState`, which ends at
+0xB00F0000+0x60+0xF0 = 0xB00F0150, and before `g_baroLatch` at 0xB00F0200).
+Absolute (`__at()`) and locator-placed (`group`) allocation in the same
+declared memory coexist correctly; the locator tracks bytes consumed by
+both. This means T1-T2 do not have to happen atomically with T3 — a group
+can carry a strict subset of the block's objects while the rest stay on
+`__at()`, which is exactly the bridgehead this task list needs.
 
 ### 3.2 The XCP blocks — absolute groups, addresses unchanged
 
@@ -190,10 +238,23 @@ enforced by whoever writes the defines and by the post-build check in part 5.
 
 ### 3.3 The C side — `#pragma section`, not `__attribute__((section))`
 
+> **Corrected by the T0 spike — the tag below is wrong.** `bss` is not a
+> TASKING section-class keyword; `ctc` silently accepts and discards it:
+> `ctc W509: ["ImuEdgePlace.c" ...] ignored unrecognized "#pragma section bss
+> shared_lmu.imuedge"` — no error, the object just stays on the compiler's
+> default section and nothing moves. Had this shipped without a build to
+> catch it, T2-T4 would have looked like a no-op placement change: green
+> build, wrong (unplaced) result. TASKING's tag for uninitialised far data is
+> **`farbss`**, confirmed working (`IfxGeth_Phy_Rtl8211f.c:98`,
+> `Ifx_Lwip.c:98`, both already in this tree): `#pragma section farbss
+> "text"` / `#pragma section farbss restore`. `code` (used correctly in the
+> original example, see `IfxCpu_Trap.c:318`) is fine as-is for text sections;
+> only the data/bss tag was wrong.
+
 ```c
-#pragma section bss "xcp_data"
+#pragma section farbss "xcp_data"
 volatile Xcp_Data g_xcpData;
-#pragma section bss restore
+#pragma section farbss restore
 ```
 
 Both forms parse cleanly in cppcheck (part 7). Prefer `#pragma section`
@@ -203,12 +264,14 @@ build — `IfxCpu_Trap.c:318` under `Libraries/iLLD/TC3xx/Tricore/Cpu/Trap/` use
 `__attribute__((section(...)))` is a GNU form whose TASKING support on this
 toolchain version is unverified.
 
-**Unknown needing one build (part 10):** the exact section name TASKING emits.
-Today's default is `.bss.<module>.<object>` (`.bss.SharedRam.g_coreStats` in
-the `.map`); under the pragma it becomes `.bss.xcp_data` or
-`.bss.xcp_data.g_xcpData`. The trailing `*` in every `select` covers both; the
-real name must be read out of the first `.map` and the wildcards tightened or
-documented then.
+**Answered by the T0 spike (was: "unknown needing one build", part 10).** The
+real section name TASKING emits is exactly `.bss.<pragma-name>` — no
+`.<object>` suffix. `#pragma section farbss "shared_lmu.imuedge"` on
+`g_imuEdge` produced `.bss.shared_lmu.imuedge` in the `.map`
+(`ImuEdgePlace.o | .bss.shared_lmu.imuedge (1159) | g_imuEdge | ...`), i.e.
+the FIRST of the two candidates guessed here, not the second. Every `select`
+pattern in this design already carries a trailing `*` for safety; that
+margin turned out to be unnecessary but costs nothing to keep.
 
 All seven placement TUs disappear. `src/bsw/SharedRam.c` becomes the one file
 holding all six LMU definitions — logic still forbidden there, but now for a
@@ -441,6 +504,12 @@ symbol table inspected:
 | `#pragma section bss "shared_lmu"` | **2** (`g_one`, `g_two`, access=Global) | **0** |
 | `__attribute__((section(...)))` | **2** (`g_one`, `g_two`, access=Global) | **0** |
 
+(The `bss` tag in the row above is what cppcheck's own parser accepted for
+this dump-level test; it is not what `ctc` accepts — see 3.3's T0 correction,
+`farbss`. cppcheck's `#pragma section` handling does not appear to validate
+the tag against TASKING's actual keyword set, so this row is still true as a
+statement about cppcheck but must not be read as confirming build syntax.)
+
 The `__at()` row is exactly the failure `src/bsw/NavStatePlace.c:6-17`
 describes ("misra-config: Variable 'g_navState' is unknown"), and it reproduces
 with **one** `__at()` object per TU, not two — so the one-object-per-TU rule
@@ -516,16 +585,21 @@ Hardware verification is required for T2 and T3 only.
 | # | Risk | Handling |
 |---|---|---|
 | R1 | ADS *Clean AURIX Project* deletes the edited `.lsl` (`.ads/clean-libraries.json`). | Documented in `CLAUDE.md`. Failure mode is a link error, not a flight bug; recoverable from git. |
-| R2 | The section name TASKING emits from `#pragma section bss "x"` is unverified. | Wildcard `select` covers both candidates; the first build reads the true name from the `.map` and tightens it. Main reason T0 is a throwaway spike. |
-| R3 | `run_addr = mem:lmuram_shared` might not resolve to the 0xB alias. | The boot self-check `IfxCpu_isAddressCachable(&g_coreStats[0])` at `src/bsw/Cpu0_Main.c:86-95` already catches exactly this and reports it over UART. It becomes T2's acceptance check. Keep it. |
-| R4 | The locator refuses an absolute `run_addr` for a group, or reshuffles `dsram0` `.bss`. | The part 9 symbol diff makes it visible before flashing. The trap-vector precedent (`.lsl` line 721) says absolute `run_addr` works. |
+| R2 | **ANSWERED (T0).** The section name TASKING emits from `#pragma section bss "x"` is unverified. | Turned out the tag itself was wrong (`bss` -> `farbss`, silently ignored otherwise, see 3.3). With the right tag, the emitted name is `.bss.<pragma-name>` exactly, no object suffix — measured, not guessed. Wildcards stay as cheap insurance. |
+| R3 | **ANSWERED (T0), and real.** `run_addr = mem:lmuram_shared` might not resolve to the 0xB alias. | It didn't: the dual-map form resolved to the *cached* 0x9 alias regardless of which map was `reserved` or their declaration order, and there is no valid map-qualifier syntax to force it (`ltc E821`). Fix: `lmuram_shared` is a single-map (`not_cached` only) memory (3.1) — removes the ambiguity outright, and the boot self-check still stands as the T2/T3 hardware confirmation. |
+| R4 | **ANSWERED (T0), and it is good news.** The locator refuses an absolute `run_addr` for a group, or reshuffles `dsram0` `.bss`. | Not observed. With five of six LMU objects still on `__at()`, the single-member group landed in the first free gap between them (0xb00f0150) with no collision and no manual gap bookkeeping needed. The part 9 symbol diff confirms only the moved object's address changed. |
 | R5 | New MISRA findings appear on the seven XCP objects once cppcheck can see them. | Expected and desired. Budget for it in T4; fix, do not baseline. |
 | R6 | **A2L / GUI contract.** If a pinned address moves by accident the GUI reads the wrong bytes and shows plausible garbage — the silent failure `tools/gen_a2l.py:1-30` exists to prevent. | Nothing here intends to move one. The part 9 diff, `a2l.yml --check`, and the new post-build checker are three independent gates. **No GUI change is required by this PR** — if one turns out to be, the design is wrong and should stop. |
 | R7 | T3 changes five of six shared-object addresses. | One flash, one bench run. Nothing external addresses them (part 4). |
 | R8 | `_Static_assert` may be unavailable in TASKING's C dialect (part 6, separate PR). | Fall back to the negative-array-size idiom. Does not block anything here. |
 
 **Could not determine without a build:** R2, R3, R4, whether TASKING accepts
-`__attribute__((section))`, and R8. The first four are answered by the T0 spike.
+`__attribute__((section))`, and R8. **The T0 spike answered R2, R3 and R4** —
+see their rows above and 3.1/3.3 for the measured results (R2 and R4 came
+back better than assumed; R3 was real and needed a design change). Whether
+TASKING accepts `__attribute__((section))` and R8 remain open; T0 used
+`#pragma section` only, per the design's own preference, so neither was
+exercised.
 
 **Not worth doing** (explicitly rejected):
 
@@ -549,9 +623,9 @@ Each task builds and flies on its own. T0 is throwaway.
 
 | # | Files | Change | Acceptance |
 |---|---|---|---|
-| **T0** | scratch branch, discarded | Spike: add `lmuram_shared` and a one-member `shared_lmu` group; move `g_imuEdge` only (8 B, newest, single core) from `__at()` to `#pragma section`. | Builds. `.map` shows the object at 0xb00f0000 in `mpe:lmuram_shared`. **Record the real section name.** Answers R2/R3/R4. Branch deleted; findings written back into this file. |
-| **T1** | `Lcf_Tasking_Tricore_Tc.lsl` | `lmuram` 768K to 704K; add `lmuram_shared` (64 K, cached view reserved, non-cached allocatable). No group, no C change. | Builds, 0 warnings. **Symbol diff empty** (part 9) — the region is still unused. |
-| **T2** | `.lsl`, `src/bsw/SharedRam.c`, `src/bsw/SharedRam.h`, `src/bsw/ImuEdge.h`, delete `src/bsw/ImuEdgePlace.c`, `.cproject` | Add the `shared_lmu` group. Move **`g_imuEdge` only** to `#pragma section`, into `SharedRam.c`. It becomes the group's sole member at 0xB00F0000. | Builds from clean. Symbol diff shows exactly one moved symbol. **Boot UART reports the block non-cacheable** (`src/bsw/Cpu0_Main.c:86`). Flash + bench: the missed-edge counter behaves as before. `misra-config` for `g_imuEdge` gone. |
+| **T0** | scratch branch, discarded | **DONE.** Spike: add `lmuram_shared` and a one-member `shared_lmu` group; move `g_imuEdge` only (8 B, newest, single core) from `__at()` to `#pragma section`. | Builds. `g_imuEdge` landed at **0xb00f0150** (not 0xb00f0000 — five other objects still occupy 0xB00F0000-0xB00F0507 via `__at()`, and the locator correctly filled the first free gap after `g_navState`). Real section name: **`.bss.<pragma-name>`** exactly, e.g. `.bss.shared_lmu.imuedge` (no `.g_xcpData`-style suffix). Symbol diff: exactly one symbol moved. Answers R2/R3/R4 — R2 and R4 came back clean, **R3 was real** (dual-map `lmuram_shared` resolves `run_addr=mem:X` to the cached alias regardless of `reserved`; fixed with a single-map region, 3.1). Branch deleted; findings written back into this file (3.1, 3.3, R2-R4 above). |
+| **T1** | `Lcf_Tasking_Tricore_Tc.lsl` | `lmuram` 768K to 704K; add `lmuram_shared` (64 K, **single map, `not_cached` only at 0xb00f0000** — see T0 correction in 3.1, not the original cached+reserved sketch). No group, no C change. | Builds, 0 warnings. **Symbol diff empty** (part 9) — the region is still unused. |
+| **T2** | `.lsl`, `src/bsw/SharedRam.c`, `src/bsw/SharedRam.h`, `src/bsw/ImuEdge.h`, delete `src/bsw/ImuEdgePlace.c`, `.cproject` | Add the `shared_lmu` group (`select` pattern `.bss.shared_lmu.imuedge*` per T0's confirmed section name). Move **`g_imuEdge` only** to `#pragma section farbss "shared_lmu.imuedge"` (T0 correction: `farbss`, not `bss`), into `SharedRam.c`. Lands wherever the locator puts it among the five still-`__at()` objects (T0: not necessarily 0xB00F0000). | Builds from clean. Symbol diff shows exactly one moved symbol. **Boot UART reports the block non-cacheable** (`src/bsw/Cpu0_Main.c:86`). Flash + bench: the missed-edge counter behaves as before. `misra-config` for `g_imuEdge` gone. |
 | **T3** | `src/bsw/SharedRam.c`; delete `src/bsw/NavStatePlace.c`, `src/bsw/FusionLatchPlace.c`, `src/bsw/GnssLatchPlace.c`, `src/bsw/AhrsLatchPlace.c`; `src/bsw/NavState.h`, `src/bsw/FusionLatch.h`, `src/bsw/AhrsLatch.h`, `.cproject`, `.lsl` group | Move the remaining five LMU objects in, in the documented order. **The one task where addresses change by design** — list the five in the commit message. | Builds from clean. `.map`: six objects contiguous from 0xB00F0000, 0x1B0 total, 8-byte aligned, all inside `lmuram_shared`. Boot self-check passes. **Bench/flight run: nav converges; baro, GNSS and mag latches all update.** MISRA green, zero `misra-config` for all six. |
 | **T4** | `src/bsw/Measurements.c`, `src/bsw/Diagnostics.c`, `src/bsw/Nvm.c`, `src/bsw/gpio.c`, `src/bsw/I2c.c`, `src/bsw/FusionCal.c`, delete `src/bsw/XcpFusionPlace.c`, `.lsl`, `.cproject` | Seven `xcp_*` groups at the `LCF_XCP_*_START` defines; the seven objects move to `#pragma section` in their own modules. The `XCP_*_ADDR` macros are **retained** this step, no longer used for placement. | **Symbol diff EMPTY.** `a2l.yml` green with no regeneration. Flash + `tools/xcp_test.py` + a GUI session: every block reads as before. Expect and fix new MISRA findings. |
 | **T5** | `src/bsw/Xcp.c`, `src/bsw/Measurements.h`, `src/bsw/Diagnostics.h`, `src/bsw/Nvm.h`, `src/bsw/gpio.h`, `src/bsw/I2c.h`, `src/bsw/FusionCal.h` | Delete the seven `XCP_*_ADDR` macros. The `Xcp.c` whitelist switches to `(uint32)&g_xcpCal` and friends, one documented 11.4 deviation each. | Builds. Host tests green. Flash: a write inside each cal block still succeeds, one outside still rejects. |
