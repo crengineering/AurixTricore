@@ -141,13 +141,18 @@ add_test(NAME imuint COMMAND test_imuint)
 #[[
 ImuEdge (T15, docs/REFACTORING_PLAN.md §3.6): the ISR->NavTask_step edge
 handoff protocol. ImuEdge_snapshot() is pure and iLLD-free (Ifx_Types.h only,
-same static-inline-in-the-header idiom as ImuInt_accumulate() above); only
-g_imuEdge's __at() placement (ImuEdgePlace.c) needs the tasking_shim
-treatment already set up for it above (test_navtask target).
+same static-inline-in-the-header idiom as ImuInt_accumulate() above); g_imuEdge
+itself now lives in SharedRam.c (docs/MEMORY_PLACEMENT.md T2 -- ImuEdgePlace.c
+is deleted, g_imuEdge moved off __at() onto #pragma section). SharedRam.c
+already carries the tasking_shim -include (above, for g_coreStats's __at());
+`#pragma section farbss "..."` is not a macro so the shim does not touch it --
+GCC just warns "ignoring #pragma section" (-Wunknown-pragmas, part of -Wall,
+not fatal here) and the object lands in ordinary .bss, same as every other
+host-side global.
 ]]
 add_executable(test_imuedge
     test_imuedge.c
-    ${BSW}/ImuEdgePlace.c
+    ${BSW}/SharedRam.c
 )
 target_link_libraries(test_imuedge PRIVATE unity test_common)
 add_test(NAME imuedge COMMAND test_imuedge)
@@ -191,18 +196,17 @@ fakes, so those two globals (plus g_imuDrdyMissedEdges, T14) are stubbed
 directly in test_navtask.c instead, same treatment as the other target-only
 symbols there. T15 added a REAL dependency instead of a stub: ImuEdge.h's
 g_imuEdge is genuinely iLLD-free (Ifx_Types.h only) and ImuEdge_snapshot() is
-the same static-inline-in-the-header idiom as ImuInt_accumulate() -- only its
-__at() placement (ImuEdgePlace.c) needs the tasking_shim treatment, same as
-NavStatePlace.c below.
+the same static-inline-in-the-header idiom as ImuInt_accumulate() -- its
+placement now lives in SharedRam.c (docs/MEMORY_PLACEMENT.md T2), which
+already carries the tasking_shim -include above (for g_coreStats's __at());
+no separate wiring needed for g_imuEdge's #pragma section (not a macro, GCC
+just warns and ignores it -- see the test_imuedge comment above).
 ]]
-set_source_files_properties(${BSW}/ImuEdgePlace.c PROPERTIES
-    COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/fakes/tasking_shim.h")
-
 add_executable(test_navtask
     test_navtask.c
     ${BSW}/NavState.c
     ${BSW}/NavStatePlace.c
-    ${BSW}/ImuEdgePlace.c
+    ${BSW}/SharedRam.c
     ${BSW}/SysTime.c
     fakes/IfxStm.c
 )

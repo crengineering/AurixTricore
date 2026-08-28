@@ -30,8 +30,8 @@ Three of the four costs raised are real; one is not.
   that arithmetic slack. Growing `CoreStats_t` needs a human to redo it.
 - **Real.** Seven placement TUs (`src/bsw/SharedRam.c`,
   `src/bsw/NavStatePlace.c`, `src/bsw/FusionLatchPlace.c`,
-  `src/bsw/GnssLatchPlace.c`, `src/bsw/AhrsLatchPlace.c`,
-  `src/bsw/ImuEdgePlace.c`, `src/bsw/XcpFusionPlace.c`) exist purely as a
+  `src/bsw/GnssLatchPlace.c`, `src/bsw/AhrsLatchPlace.c`, `ImuEdgePlace.c`
+  (deleted in T2 -- see below), `src/bsw/XcpFusionPlace.c`) exist purely as a
   cppcheck workaround and cost two CI failures in #15.
 - **Not real — checked twice, from two directions.** The claim that
   `tools/gen_a2l.py` hardcodes the bases a third time is **false**, in both the
@@ -279,6 +279,21 @@ better reason: they belong together and the group order should be visible in
 one place. `g_xcpData` and `g_xcpFusion` return to `src/bsw/Measurements.c`,
 `g_xcpCal` stays in `src/bsw/Diagnostics.c`, and so on: each definition sits
 with its module again.
+
+> **Caveat found at T2, applies to every "returns to its module" step above
+> (T3-T4), not just this one file.** This only fully delivers the cppcheck
+> win once the LAST `__at()` leaves a given TU. Measured: cppcheck's recovery
+> from an `__at()` syntax error is "raw-token fallback for the rest of the
+> file", not "skip this declaration" — a `#pragma section` object placed
+> *after* a surviving `__at()` object in the same TU is unbound too, exactly
+> like the `__at()` object itself. Concretely, `SharedRam.c` after T2 (one
+> `#pragma section` object, one `__at()` object) still has **zero** bound
+> globals in cppcheck's symbol table, same as before T2 — no regression, but
+> no MISRA win yet either. Each of T3/T4's target files only reaches "fully
+> visible to cppcheck" on the step where *all* `__at()` in that specific TU
+> is gone, which may not be the same step as when a given object physically
+> moves there. Worth checking file-by-file when T3/T4 land, not assumed from
+> the object list alone.
 
 ---
 
@@ -625,7 +640,36 @@ Each task builds and flies on its own. T0 is throwaway.
 |---|---|---|---|
 | **T0** | scratch branch, discarded | **DONE.** Spike: add `lmuram_shared` and a one-member `shared_lmu` group; move `g_imuEdge` only (8 B, newest, single core) from `__at()` to `#pragma section`. | Builds. `g_imuEdge` landed at **0xb00f0150** (not 0xb00f0000 — five other objects still occupy 0xB00F0000-0xB00F0507 via `__at()`, and the locator correctly filled the first free gap after `g_navState`). Real section name: **`.bss.<pragma-name>`** exactly, e.g. `.bss.shared_lmu.imuedge` (no `.g_xcpData`-style suffix). Symbol diff: exactly one symbol moved. Answers R2/R3/R4 — R2 and R4 came back clean, **R3 was real** (dual-map `lmuram_shared` resolves `run_addr=mem:X` to the cached alias regardless of `reserved`; fixed with a single-map region, 3.1). Branch deleted; findings written back into this file (3.1, 3.3, R2-R4 above). |
 | **T1** | `Lcf_Tasking_Tricore_Tc.lsl` | `lmuram` 768K to 704K; add `lmuram_shared` (64 K, **single map, `not_cached` only at 0xb00f0000** — see T0 correction in 3.1, not the original cached+reserved sketch). No group, no C change. | Builds, 0 warnings. **Symbol diff empty** (part 9) — the region is still unused. |
-| **T2** | `.lsl`, `src/bsw/SharedRam.c`, `src/bsw/SharedRam.h`, `src/bsw/ImuEdge.h`, delete `src/bsw/ImuEdgePlace.c`, `.cproject` | Add the `shared_lmu` group (`select` pattern `.bss.shared_lmu.imuedge*` per T0's confirmed section name). Move **`g_imuEdge` only** to `#pragma section farbss "shared_lmu.imuedge"` (T0 correction: `farbss`, not `bss`), into `SharedRam.c`. Lands wherever the locator puts it among the five still-`__at()` objects (T0: not necessarily 0xB00F0000). | Builds from clean. Symbol diff shows exactly one moved symbol. **Boot UART reports the block non-cacheable** (`src/bsw/Cpu0_Main.c:86`). Flash + bench: the missed-edge counter behaves as before. `misra-config` for `g_imuEdge` gone. |
+| **T2** | `.lsl`, `src/bsw/SharedRam.c`, `src/bsw/SharedRam.h`, `src/bsw/ImuEdge.h`, `docs/CODEMAP.md`, `test/CMakeLists.txt`; deleted `ImuEdgePlace.c` | **DONE (build/host-tests; MISRA acceptance NOT met yet, see finding; hardware pending).** Added the `shared_lmu` group (`select` pattern `.bss.shared_lmu.imuedge*`, T0's confirmed section name). Moved **`g_imuEdge` only** to `#pragma section farbss "shared_lmu.imuedge"`, into `SharedRam.c`; deleted `ImuEdgePlace.c`. **No `.cproject` edit needed** — its `sourceEntries` excludes only `test\|SCR\|MCS\|HSM`, no per-file list, so a deleted/added `src/bsw/*.c` needs nothing there (verified: build succeeds unchanged). `test/CMakeLists.txt` needed a real edit though: `test_imuedge`/`test_navtask` built `ImuEdgePlace.c` directly and had to switch to `SharedRam.c` (GCC warns and ignores the unrecognised `#pragma section`, harmless). | Clean build: 0 errors, 0 new warnings (2 pre-existing lwip/stdlib warnings, unchanged). `g_imuEdge` landed at **0xb00f0150**, matching T0 exactly. Symbol diff: exactly one moved symbol (`g_imuEdge`), plus the two expected linker-generated group markers. 17/17 host tests pass. **`misra-config` for `g_imuEdge` is NOT gone** — see the finding immediately below; this is a design-order issue, not an implementation bug. **Hardware verification (boot UART non-cacheable line, missed-edge counter) not yet done — pending flash.** |
+
+> **New finding (T2, not anticipated by parts 3.3/7): cppcheck's `__at()`
+> parse failure poisons the WHOLE translation unit, not just the `__at()`
+> line — anything textually after it in the same file, `#pragma section` or
+> not, stays unbound too.** Measured directly (isolated repro, mirroring
+> `SharedRam.c`'s real structure): a TU with `__at()` first and `#pragma
+> section` second gives **0** bound globals for *both* objects; the same
+> `#pragma section` object alone in its own TU gives 1 bound global (part 7's
+> already-measured good case). Cppcheck's recovery from the `__at()` syntax
+> error is "fall back to raw-token dump for the rest of the file", not "skip
+> this one declaration" — `NavStatePlace.c`'s own file comment already says
+> this in different words ("every later `g_navState.field` access
+> unresolved"), but nobody had connected it to a *different* placement
+> mechanism sharing the same TU because until T2 nothing did.
+>
+> Consequence: **T2 as specified (`g_imuEdge` into `SharedRam.c`, which still
+> holds `g_coreStats`'s `__at()`) cannot meet its own "misra-config for
+> g_imuEdge gone" acceptance criterion.** `g_imuEdge` stays exactly as
+> invisible to cppcheck as it was before, because it now shares a TU with an
+> `__at()` object, not because `#pragma section` failed. This is not a
+> regression — cppcheck's visibility into `SharedRam.c` was already 0 bound
+> globals before T2 (verified) — but it means the MISRA win this whole
+> redesign is *for* does not land at T2. It lands at **T3**, when the last
+> `__at()` (`g_coreStats`) leaves `SharedRam.c` and the file becomes 100%
+> `#pragma section`. T2's acceptance criterion should read "symbol diff +
+> hardware only"; the `misra-config` gone check belongs on T3, not T2. Left
+> for the architect/Chris to decide whether to amend the T2 row here or treat
+> this as accepted T3 scope — not changed unilaterally, since it is a design
+> decision about where an object lives, not an implementation bug.
 | **T3** | `src/bsw/SharedRam.c`; delete `src/bsw/NavStatePlace.c`, `src/bsw/FusionLatchPlace.c`, `src/bsw/GnssLatchPlace.c`, `src/bsw/AhrsLatchPlace.c`; `src/bsw/NavState.h`, `src/bsw/FusionLatch.h`, `src/bsw/AhrsLatch.h`, `.cproject`, `.lsl` group | Move the remaining five LMU objects in, in the documented order. **The one task where addresses change by design** — list the five in the commit message. | Builds from clean. `.map`: six objects contiguous from 0xB00F0000, 0x1B0 total, 8-byte aligned, all inside `lmuram_shared`. Boot self-check passes. **Bench/flight run: nav converges; baro, GNSS and mag latches all update.** MISRA green, zero `misra-config` for all six. |
 | **T4** | `src/bsw/Measurements.c`, `src/bsw/Diagnostics.c`, `src/bsw/Nvm.c`, `src/bsw/gpio.c`, `src/bsw/I2c.c`, `src/bsw/FusionCal.c`, delete `src/bsw/XcpFusionPlace.c`, `.lsl`, `.cproject` | Seven `xcp_*` groups at the `LCF_XCP_*_START` defines; the seven objects move to `#pragma section` in their own modules. The `XCP_*_ADDR` macros are **retained** this step, no longer used for placement. | **Symbol diff EMPTY.** `a2l.yml` green with no regeneration. Flash + `tools/xcp_test.py` + a GUI session: every block reads as before. Expect and fix new MISRA findings. |
 | **T5** | `src/bsw/Xcp.c`, `src/bsw/Measurements.h`, `src/bsw/Diagnostics.h`, `src/bsw/Nvm.h`, `src/bsw/gpio.h`, `src/bsw/I2c.h`, `src/bsw/FusionCal.h` | Delete the seven `XCP_*_ADDR` macros. The `Xcp.c` whitelist switches to `(uint32)&g_xcpCal` and friends, one documented 11.4 deviation each. | Builds. Host tests green. Flash: a write inside each cal block still succeeds, one outside still rejects. |

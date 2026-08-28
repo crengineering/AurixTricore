@@ -40,9 +40,19 @@
  * (Measurements.c:28-36). SharedRam.c therefore holds ONLY the `__at()`
  * definitions for objects placed at SHARED_LMU_ADDR and nothing else -- no
  * logic. A later object that also needs `__at()` here (NavState, T10; the
- * three input latches and the DRDY edge handoff, T12/T15) gets its OWN .c
- * file for the same reason, at its own fixed offset in this block -- see
- * docs/CODEMAP.md §3 for the full occupant list and their addresses.
+ * three input latches, T12) gets its OWN .c file for the same reason, at its
+ * own fixed offset in this block -- see docs/CODEMAP.md §3 for the full
+ * occupant list and their addresses.
+ *
+ * `g_imuEdge` (T15) is the exception: docs/MEMORY_PLACEMENT.md moves it onto
+ * a linker-managed `shared_lmu` group via `#pragma section farbss
+ * "shared_lmu.imuedge"` instead of `__at()` (T2) -- `#pragma section` parses
+ * cleanly in cppcheck even with a second placed object in the same TU
+ * (measured, docs/MEMORY_PLACEMENT.md §7), so it is defined directly in
+ * SharedRam.c rather than getting its own file. Its address is
+ * locator-assigned, not a literal -- read it from the `.map`, never hardcode
+ * it. This is the bridgehead for moving the other five the same way
+ * (docs/MEMORY_PLACEMENT.md T3); until then this remains a mixed block.
  *
  * Rules for anything placed in this block, restated from §2.4 (all four
  * planned crossings, not just this one):

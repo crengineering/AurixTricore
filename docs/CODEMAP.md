@@ -181,9 +181,11 @@ block introduced in T9 (`docs/REFACTORING_PLAN.md` §2.4), separate from the
 `0x700300xx` XCP series above and not reachable by SHORT_UPLOAD. It sits in the
 top 64 K of `lmuram` (768 K total) at the **non-cached** alias so no coherency
 handling is needed on either side of a crossing; the cached alias of the same
-physical RAM is `0x90040000`-`0x900FFFFF`. Every object placed there gets its
-own `.c` file with a single `__at()` definition (cppcheck cannot parse a
-second one in the same translation unit — see `SharedRam.h`). Occupants so far
+physical RAM is `0x90040000`-`0x900FFFFF`. Five of the six occupants below
+still get their own `.c` file with a single `__at()` definition (cppcheck
+cannot parse a second one in the same translation unit — see `SharedRam.h`);
+`g_imuEdge` is the first to move onto a linker-managed group instead
+(docs/MEMORY_PLACEMENT.md, T2) and lives in `SharedRam.c`. Occupants so far
 (writer, then address):
 
 | object | writer | address | defined in |
@@ -193,7 +195,7 @@ second one in the same translation unit — see `SharedRam.h`). Occupants so far
 | `g_baroLatch` | CPU0 (`SensorTask_baro`) | `0xB00F0200`, 24 bytes | `FusionLatch.h` / `FusionLatchPlace.c` |
 | `g_gnssLatch` | CPU0 (`SensorTask_gnss`) | `0xB00F0300`, 40 bytes | `FusionLatch.h` / `FusionLatchPlace.c` |
 | `g_magLatch` | CPU0 (`SensorTask_mag`) | `0xB00F0400`, 24 bytes | `AhrsLatch.h` / `AhrsLatchPlace.c` |
-| `g_imuEdge` | CPU1 (`imuDrdyIsr`) | `0xB00F0500`, 8 bytes | `ImuEdge.h` / `ImuEdgePlace.c` |
+| `g_imuEdge` | CPU1 (`imuDrdyIsr`) | linker-assigned, 8 bytes† | `ImuEdge.h` / `SharedRam.c` |
 
 The three latches (T12) are the "three input latches" of §2.4/§2.3 — moved off
 plain statics that a CPU0 writer and a CPU1 reader shared with no protocol.
@@ -202,6 +204,14 @@ size, so a `NavState_t` growth cannot silently reach one without first
 crossing `0xB00F0060 + 256` — the same spacing convention as the XCP blocks
 above. Confirmed non-overlapping via the `.map` file, the same check T9/T10
 used for `g_navState`.
+
+† `g_imuEdge` moved off `__at()` onto a linker-managed `shared_lmu` group in
+`Lcf_Tasking_Tricore_Tc.lsl` (docs/MEMORY_PLACEMENT.md, T2) — its address is
+no longer a literal in this table and is not guaranteed stable across builds;
+read it from the `.map` (`tools/xcp_read.py`), never hardcode it. The other
+five objects above are still on `__at()` at the fixed addresses shown and
+move in a later step (docs/MEMORY_PLACEMENT.md T3); this row and the "256
+bytes apart" convention below apply to those five only until then.
 
 `g_imuEdge` (T15, §3.6) is the fourth crossing and the odd one out: writer
 (`imuDrdyIsr`) and reader (`NavTask_step`) are on the SAME core, both CPU1,

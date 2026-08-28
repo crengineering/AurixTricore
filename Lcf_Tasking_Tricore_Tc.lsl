@@ -475,8 +475,8 @@ derivative tc39
      * shared block must never be cacheable (SharedRam.h), so the fix is to
      * not declare a cached view of it at all: any future attempt to place
      * something at 0x900f0000-0x900fffff then fails the link, loud, instead
-     * of silently landing cacheable. No group placed here yet (T1) -- this
-     * region is unused until T2. */
+     * of silently landing cacheable. First (and so far only) occupant is the
+     * `shared_lmu` group below (T2, g_imuEdge). */
     memory lmuram_shared
     {
         mau = 8;
@@ -1238,9 +1238,26 @@ derivative tc39
                     select "(.data.lmudata|.data.lmudata.*)";
                     select "(.bss.lmubss|.bss.lmubss.*)";
                 }
+                /* Cross-core LMU shared block, docs/MEMORY_PLACEMENT.md T2.
+                 * Sole member for now: g_imuEdge, moved off __at() as the
+                 * bridgehead object. The other five occupants of this block
+                 * (g_coreStats, g_navState, g_baroLatch, g_gnssLatch,
+                 * g_magLatch) stay on __at() at their existing fixed
+                 * addresses until T3 -- confirmed by the T0 spike that
+                 * absolute and locator-placed allocation coexist correctly
+                 * in the same memory, with the locator filling the first
+                 * free gap between the __at() objects. Section name
+                 * confirmed by build: `#pragma section farbss "X"` emits
+                 * exactly ".bss.X", so no `.g_imuEdge`-style suffix is
+                 * needed in the pattern; the trailing `*` is cheap
+                 * insurance kept anyway. */
+                group shared_lmu (ordered, align = 8, run_addr = mem:lmuram_shared)
+                {
+                    select "(.bss.shared_lmu.imuedge|.bss.shared_lmu.imuedge.*)";
+                }
             }
         }
-        
+
         /*Far Data Sections, selectable by toolchain*/
 #        if LCF_DEFAULT_HOST == LCF_CPU5
         group (ordered, contiguous, align = 4, attributes=rw, run_addr = mem:dsram5)

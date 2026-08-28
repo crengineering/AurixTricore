@@ -23,7 +23,9 @@
  * ISR/task boundary instead of a core/core one.
  *
  * SharedRam.h rule 2: both fields are 32-bit, the object is 8 bytes and
- * 8-byte aligned (ImuEdgePlace.c), and it has exactly ONE writer (imuDrdyIsr).
+ * 8-byte aligned (SharedRam.c, docs/MEMORY_PLACEMENT.md T2 -- linker-managed
+ * `shared_lmu` group, not `__at()`), and it has exactly ONE writer
+ * (imuDrdyIsr).
  * Rule 3: the writer stores `ticks`, Ifx__dsync()s, then increments `seq` --
  * `seq` doubles as the object's own "is this a NEW edge" generation counter,
  * so there is no separate `gen` field. */
