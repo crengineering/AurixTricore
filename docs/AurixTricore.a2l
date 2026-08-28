@@ -6,8 +6,10 @@
  *     python tools/gen_a2l.py
  * CI runs 'python tools/gen_a2l.py --check' to catch a stale file.
  *
- * All objects live at fixed addresses (TASKING __at), so this file does not
- * depend on the link run:
+ * All objects live at fixed addresses (absolute linker groups in
+ * Lcf_Tasking_Tricore_Tc.lsl, docs/MEMORY_PLACEMENT.md T4), so this file
+ * does not depend on the link run -- addresses below are read from the
+ * .lsl, not typed:
  *   Xcp_Data  (measurements)          0x70030000, 248 bytes, Measurements.h
  *   Xcp_Cal   (calibration, RAM only) 0x70030100, 64 bytes, Diagnostics.h
  *   Xcp_Nvm   (persistent, DFLASH)    0x70030200, 44 bytes, Nvm.h
@@ -93,7 +95,7 @@ ASAP2_VERSION 1 61
     /end RECORD_LAYOUT
 
     /* ------------------------------------------------------------------ */
-    /* Measurements: Xcp_Data @ 0x70030000 (see Measurements.h)           */
+    /* Measurements: Xcp_Data @ 0x70030000 (see Measurements.h)         */
     /* ------------------------------------------------------------------ */
     /begin MEASUREMENT SwVersionMajor "software version major"
       UBYTE NO_COMPU_METHOD 0 0 0 255

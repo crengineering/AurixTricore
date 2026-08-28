@@ -24,6 +24,13 @@ Three of the four costs raised are real; one is not.
   `g_i2cDebug`, `g_fusionCal`, `g_xcpFusion`, `g_coreStats`, `g_navState` and
   the three latches** — every shared object in the tree, everywhere they are
   used. Worth more than the tidiness.
+  **The number that justifies the whole exercise, measured at T4:**
+  `g_xcpData` went from 0 bound occurrences to **147**, throughout
+  `measurementsInit()` and every other access in `Measurements.c` — not a
+  hypothetical, and not just the declaration line. Full T4 counts: `g_xcpCal`
+  31, `g_xcpNvm` 18, `g_xcpGpio` 11, `g_i2cDebug` 9, `g_xcpFusion` 62,
+  `g_fusionCal` 16 (`cppcheck --dump`, misra_check.py's own include set; see
+  the T4 row below).
 - **Real.** Offsets are hand-computed. `src/bsw/NavStatePlace.c:22-30`
   documents a human doing 0xB00F0000 + 0x60 because `g_coreStats` is 96 B, and
   the "256 bytes apart" convention in `docs/CODEMAP.md` exists only to give
@@ -706,8 +713,23 @@ Each task builds and flies on its own. T0 is throwaway.
 > non-TASKING compiler, not just the one CI configuration that happened to
 > catch it. **Any future `#pragma section` in this codebase needs the same
 > guard from the start** — do not rediscover this.
-| **T5** | `src/bsw/Xcp.c`, `src/bsw/Measurements.h`, `src/bsw/Diagnostics.h`, `src/bsw/Nvm.h`, `src/bsw/gpio.h`, `src/bsw/I2c.h`, `src/bsw/FusionCal.h` | Delete the seven `XCP_*_ADDR` macros. The `Xcp.c` whitelist switches to `(uint32)&g_xcpCal` and friends, one documented 11.4 deviation each. | Builds. Host tests green. Flash: a write inside each cal block still succeeds, one outside still rejects. |
-| **T6** | `tools/gen_a2l.py`, `tools/check_docs.py` | Bases read from the `.lsl` defines instead of the header macros; fix the addresses hardcoded in the generated comment header. | `python tools/gen_a2l.py --check` passes **on a clean clone with no build**. `python tools/check_docs.py` passes. `a2l.yml` green. |
+> **T5 and T6 are swapped from this original ordering — run T6 first.** Found
+> while starting T5 (attempting to delete the seven `XCP_*_ADDR` macros):
+> `tools/gen_a2l.py` and `tools/check_docs.py` both read those exact macros
+> as their address source *today*, and `gen_a2l.py`'s `read_define()` hard-
+> fails (`SystemExit`) if a macro is missing. Deleting the macros before
+> retargeting the tools opens a window where `gen_a2l.py --check` — which
+> `a2l.yml` runs on every push — cannot resolve an address source at all.
+> The dependency only runs one way (T6 → T5, tools need *an* address source
+> at every point in time; T5 removes one of the two candidate sources), so
+> reversing the two removes the window rather than shrinking it. This also
+> buys a verification available nowhere else: while both sources coexist
+> (T4's `.lsl` defines and the still-live header macros), T6 can assert they
+> agree before either is touched further — stronger than trusting either
+> alone. Nothing in the content of either task changes, only which runs
+> first.
+|  T6  | `tools/gen_a2l.py`, `tools/check_docs.py` | **DONE.** `read_lsl_define()` (new, mirrors `read_define()`) is the address source for `block_objects()`, the diagnostics-bit base and `seed()`; `BLOCKS` keeps the header-macro column only for `verify_dual_sources()` (new: asserts all seven header macros and `.lsl` defines agree, run unconditionally from `main()` — this is the one window where both sources exist, so it is the strongest check available; delete this function and its call as part of T5, alongside the macros it reads). Fixed the six literal addresses in the generated comment preamble (`gen_a2l.py:384-389`, was `PREAMBLE.format()` with hardcoded text) and the two section-header comment lines that also had them typed. `check_docs.py`'s `check_block_addresses()` now reads the same `.lsl` defines instead of the header macros, and **no longer degrades silently**: a define missing from the `.lsl` now `fail()`s immediately with a named list of what's missing, rather than each per-block check quietly `continue`-ing past a `None` lookup (the defect the coordinator flagged: a checker that stops checking without saying so is worse than one that fails). | `gen_a2l.py --check`: passes, content byte-identical to before except the two comment texts that used to hardcode addresses (verified via diff — no address or structural drift). `verify_dual_sources()`: confirmed it actually catches a mismatch (manually broke one address, got the exact expected error; restored). `check_docs.py`: 157 cross-checks pass; confirmed the new fail-loud path fires correctly (manually renamed one `.lsl` define, got `missing define(s), address cross-check cannot run: LCF_XCP_CAL_START`; restored). `a2l.yml`/`misra.yml`/`unit_tests.yml`: below. |
+|  T5  | `src/bsw/Xcp.c`, `src/bsw/Measurements.h`, `src/bsw/Diagnostics.h`, `src/bsw/Nvm.h`, `src/bsw/gpio.h`, `src/bsw/I2c.h`, `src/bsw/FusionCal.h` | Delete the seven `XCP_*_ADDR` macros. The `Xcp.c` whitelist switches to `(uint32)&g_xcpCal` and friends, one documented 11.4 deviation each. | Builds. Host tests green. Flash: a write inside each cal block still succeeds, one outside still rejects. |
 | **T7** | new checker under `tools/`, `build.bat` | Post-build `.map` verifier: pinned addresses, overlap, LMU containment, measurement-block headroom (part 5). | Passes on a fresh build; fails if a block base is edited in the `.lsl` without rebuilding. |
 | **T8** | `docs/CODEMAP.md` section 3, `src/bsw/SharedRam.h`, `CLAUDE.md`, `docs/REFACTORING_PLAN.md` (one-line refs) | Documentation per part 8 plus the ADS-clean hazard per part 2. | `python tools/check_docs.py` green. No stale mention of `__at()` or of one-object-per-TU survives a grep. |
 

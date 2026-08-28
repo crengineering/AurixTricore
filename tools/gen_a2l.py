@@ -46,6 +46,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BSW = ROOT / "src" / "bsw"
 A2L_PATH = ROOT / "docs" / "AurixTricore.a2l"
 META_PATH = ROOT / "tools" / "a2l_meta.json"
+LSL_PATH = ROOT / "Lcf_Tasking_Tricore_Tc.lsl"
 
 # ---------------------------------------------------------------------------
 # C type model. Sizes and alignments are TriCore/TASKING: scalars are aligned
@@ -60,14 +61,28 @@ CTYPES = {
     "float32": (4, "FLOAT32_IEEE", "RL_FLOAT32"),
 }
 
+# block -> (header for the struct layout, header macro, .lsl define). The
+# header macro column is a T5/T6 transition artefact (docs/MEMORY_PLACEMENT.md):
+# T6 switches the ADDRESS SOURCE to the .lsl below, T5 (which follows
+# immediately) deletes the header macros entirely. Keeping the macro name
+# here a little longer is what lets verify_dual_sources() below assert the
+# two sources agree before the macro is deleted -- remove that column, and
+# the verification call in main(), as part of T5; nothing else in this file
+# reads it once T5 lands.
 BLOCKS = {
-    "Xcp_Data": ("Measurements.h", "XCP_DATA_ADDR"),
-    "Xcp_Cal":  ("Diagnostics.h",  "XCP_CAL_ADDR"),
-    "Xcp_Nvm":  ("Nvm.h",          "XCP_NVM_ADDR"),
-    "Xcp_Gpio": ("gpio.h",         "XCP_GPIO_ADDR"),
-    "Xcp_Fusion": ("Measurements.h", "XCP_FUSION_ADDR"),
-    "Xcp_FusionCal": ("FusionCal.h", "XCP_FUSIONCAL_ADDR"),
+    "Xcp_Data": ("Measurements.h", "XCP_DATA_ADDR", "LCF_XCP_DATA_START"),
+    "Xcp_Cal":  ("Diagnostics.h",  "XCP_CAL_ADDR", "LCF_XCP_CAL_START"),
+    "Xcp_Nvm":  ("Nvm.h",          "XCP_NVM_ADDR", "LCF_XCP_NVM_START"),
+    "Xcp_Gpio": ("gpio.h",         "XCP_GPIO_ADDR", "LCF_XCP_GPIO_START"),
+    "Xcp_Fusion": ("Measurements.h", "XCP_FUSION_ADDR", "LCF_XCP_FUSION_START"),
+    "Xcp_FusionCal": ("FusionCal.h", "XCP_FUSIONCAL_ADDR", "LCF_XCP_FUSIONCAL_START"),
 }
+
+# Not one of the six blocks the A2L exposes (I2c_Debug is diagnostic-only,
+# never in the A2L), but its address is pinned in both sources the same way
+# -- included in the T6 dual-source verification for completeness (all
+# seven XCP objects, matching docs/MEMORY_PLACEMENT.md T4's LCF_XCP_* set).
+I2C_DEBUG_ADDR = ("I2c.h", "XCP_I2CDBG_ADDR", "LCF_XCP_I2CDBG_START")
 
 
 class Field:
@@ -114,6 +129,44 @@ def read_define(header: Path, name: str) -> int:
     if not m:
         raise SystemExit(f"error: {name} not found in {header.name}")
     return int(m.group(1), 16)
+
+
+def read_lsl_define(name: str) -> int:
+    """Value of a #define <name> 0x... in the linker script.
+
+    T6 (docs/MEMORY_PLACEMENT.md): the address SOURCE for every XCP block --
+    same shape as read_define() above, but no 'u' suffix (the .lsl is not C)
+    and a different file. The .lsl is checked in, needs no build, and after
+    T5 is the ONLY place these addresses are written down -- unlike the .map
+    (gitignored, requires a build) or the header macros (deleted, T5)."""
+    m = re.search(rf"^#define\s+{name}\s+(0x[0-9A-Fa-f]+)", read(LSL_PATH), re.M)
+    if not m:
+        raise SystemExit(f"error: {name} not found in {LSL_PATH.name}")
+    return int(m.group(1), 16)
+
+
+def verify_dual_sources() -> None:
+    """T6 window only: while the header macros (about to be deleted, T5) and
+    the .lsl LCF_XCP_*_START defines (T4) both exist, assert they agree
+    before anything switches over. This is the one point in the whole
+    migration where both sources are simultaneously available to compare --
+    delete this function and its call in main() as part of T5, alongside the
+    macros it reads; read_define() on a deleted macro raises SystemExit, so
+    leaving this in place after T5 would fail every invocation, not
+    silently pass. Covers all seven XCP objects (the six A2L blocks plus
+    I2c_Debug, which is not in the A2L but is pinned the same way)."""
+    pairs = dict(BLOCKS)
+    pairs["I2c_Debug"] = I2C_DEBUG_ADDR
+    mismatches = []
+    for block, (header, macro, lsl_name) in pairs.items():
+        macro_addr = read_define(BSW / header, macro)
+        lsl_addr = read_lsl_define(lsl_name)
+        if macro_addr != lsl_addr:
+            mismatches.append(f"{block}: {macro}=0x{macro_addr:08X} "
+                              f"(header) vs {lsl_name}=0x{lsl_addr:08X} (.lsl)")
+    if mismatches:
+        raise SystemExit("error: header macro and .lsl define disagree for "
+                         "the following block(s):\n  " + "\n  ".join(mismatches))
 
 
 def parse_struct(header: Path, tag: str) -> tuple[list[Field], int]:
@@ -296,9 +349,9 @@ def emit_characteristic(entry: dict, field: Field, addr: int, warn: list[str]) -
 
 
 def block_objects(block: str, meta: dict, warn: list[str], kind: str) -> tuple[list[str], int]:
-    header, addr_macro = BLOCKS[block]
+    header, _addr_macro, lsl_define = BLOCKS[block]
     hdr = BSW / header
-    base = read_define(hdr, addr_macro)
+    base = read_lsl_define(lsl_define)
     fields, size = parse_struct(hdr, block)
 
     out: list[str] = []
@@ -326,14 +379,16 @@ PREAMBLE = """\
  *     python tools/gen_a2l.py
  * CI runs 'python tools/gen_a2l.py --check' to catch a stale file.
  *
- * All objects live at fixed addresses (TASKING __at), so this file does not
- * depend on the link run:
- *   Xcp_Data  (measurements)          0x70030000, {data_size} bytes, Measurements.h
- *   Xcp_Cal   (calibration, RAM only) 0x70030100, {cal_size} bytes, Diagnostics.h
- *   Xcp_Nvm   (persistent, DFLASH)    0x70030200, {nvm_size} bytes, Nvm.h
- *   Xcp_Gpio  (GPIO control, RAM only) 0x70030300, {gpio_size} bytes, gpio.h
- *   Xcp_Fusion (navigation state)     0x70030500, {fusion_size} bytes, Measurements.h
- *   Xcp_FusionCal (estimator tuning)  0x70030600, {fcal_size} bytes, FusionCal.h
+ * All objects live at fixed addresses (absolute linker groups in
+ * Lcf_Tasking_Tricore_Tc.lsl, docs/MEMORY_PLACEMENT.md T4), so this file
+ * does not depend on the link run -- addresses below are read from the
+ * .lsl, not typed:
+ *   Xcp_Data  (measurements)          0x{data_addr:08X}, {data_size} bytes, Measurements.h
+ *   Xcp_Cal   (calibration, RAM only) 0x{cal_addr:08X}, {cal_size} bytes, Diagnostics.h
+ *   Xcp_Nvm   (persistent, DFLASH)    0x{nvm_addr:08X}, {nvm_size} bytes, Nvm.h
+ *   Xcp_Gpio  (GPIO control, RAM only) 0x{gpio_addr:08X}, {gpio_size} bytes, gpio.h
+ *   Xcp_Fusion (navigation state)     0x{fusion_addr:08X}, {fusion_size} bytes, Measurements.h
+ *   Xcp_FusionCal (estimator tuning)  0x{fcal_addr:08X}, {fcal_size} bytes, FusionCal.h
  * Transport: XCP on UDP/IP, port 5555, station 192.168.0.10.
  * DAQ: dynamic, 1 list, event channel 0 = 100 ms task.
  */
@@ -425,7 +480,13 @@ def generate() -> tuple[str, list[str]]:
     fusion_objs, fusion_size = block_objects("Xcp_Fusion", meta, warn, "meas")
     fcal_objs, fcal_size = block_objects("Xcp_FusionCal", meta, warn, "char")
 
-    diag_base = read_define(BSW / "Measurements.h", "XCP_DATA_ADDR")
+    data_addr = read_lsl_define("LCF_XCP_DATA_START")
+    cal_addr = read_lsl_define("LCF_XCP_CAL_START")
+    nvm_addr = read_lsl_define("LCF_XCP_NVM_START")
+    gpio_addr = read_lsl_define("LCF_XCP_GPIO_START")
+    fusion_addr = read_lsl_define("LCF_XCP_FUSION_START")
+    fcal_addr = read_lsl_define("LCF_XCP_FUSIONCAL_START")
+
     diag_fields, _ = parse_struct(BSW / "Measurements.h", "Xcp_Data")
     diag_off = next(f.offset for f in diag_fields if f.name == "diagStatus")
 
@@ -438,27 +499,30 @@ def generate() -> tuple[str, list[str]]:
             entry = dict(entry, name=macro,
                          desc=entry.get("desc", f"{macro} (no metadata)"))
             warn.append(f"{macro}: no metadata, using the macro name")
-        diag_objs.append(emit_bit_measurement(entry, diag_base + diag_off, mask))
+        diag_objs.append(emit_bit_measurement(entry, data_addr + diag_off, mask))
 
     parts = [PREAMBLE.format(version=parse_version(BSW / "Version.h"),
+                             data_addr=data_addr, cal_addr=cal_addr,
+                             nvm_addr=nvm_addr, gpio_addr=gpio_addr,
+                             fusion_addr=fusion_addr, fcal_addr=fcal_addr,
                              data_size=data_size, cal_size=cal_size,
                              nvm_size=nvm_size, gpio_size=gpio_size,
                              fusion_size=fusion_size, fcal_size=fcal_size)]
     parts.append("\n    /* ------------------------------------------------------------------ */"
-                 "\n    /* Measurements: Xcp_Data @ 0x70030000 (see Measurements.h)           */"
+                 f"\n    /* Measurements: Xcp_Data @ 0x{data_addr:08X} (see Measurements.h)         */"
                  "\n    /* ------------------------------------------------------------------ */\n")
     parts.append("\n\n".join(data_objs))
     parts.append("\n\n    /* individual diagnostics bits (BIT_MASK views on DiagStatus) */\n")
     parts.append("\n\n".join(diag_objs))
-    parts.append("\n\n    /* Calibration: Xcp_Cal @ 0x70030100, RAM only (see Diagnostics.h) */\n")
+    parts.append(f"\n\n    /* Calibration: Xcp_Cal @ 0x{cal_addr:08X}, RAM only (see Diagnostics.h) */\n")
     parts.append("\n\n".join(cal_objs))
-    parts.append("\n\n    /* Persistent: Xcp_Nvm @ 0x70030200, DFLASH (see Nvm.h) */\n")
+    parts.append(f"\n\n    /* Persistent: Xcp_Nvm @ 0x{nvm_addr:08X}, DFLASH (see Nvm.h) */\n")
     parts.append("\n\n".join(nvm_objs))
-    parts.append("\n\n    /* GPIO control: Xcp_Gpio @ 0x70030300, RAM only (see gpio.h) */\n")
+    parts.append(f"\n\n    /* GPIO control: Xcp_Gpio @ 0x{gpio_addr:08X}, RAM only (see gpio.h) */\n")
     parts.append("\n\n".join(gpio_objs))
-    parts.append("\n\n    /* Navigation state: Xcp_Fusion @ 0x70030500 (see Measurements.h) */\n")
+    parts.append(f"\n\n    /* Navigation state: Xcp_Fusion @ 0x{fusion_addr:08X} (see Measurements.h) */\n")
     parts.append("\n\n".join(fusion_objs))
-    parts.append("\n\n    /* Estimator tuning: Xcp_FusionCal @ 0x70030600, RAM only (FusionCal.h) */\n")
+    parts.append(f"\n\n    /* Estimator tuning: Xcp_FusionCal @ 0x{fcal_addr:08X}, RAM only (FusionCal.h) */\n")
     parts.append("\n\n".join(fcal_objs))
     parts.append("\n\n  /end MODULE\n/end PROJECT\n")
     return "".join(parts), warn
@@ -524,9 +588,9 @@ def seed() -> None:
     by_addr, by_mask = a2l_objects(read(A2L_PATH))
 
     meta: dict = {}
-    for block, (hdr, addr_macro) in BLOCKS.items():
+    for block, (hdr, _addr_macro, lsl_define) in BLOCKS.items():
         header = BSW / hdr
-        base = read_define(header, addr_macro)
+        base = read_lsl_define(lsl_define)
         fields, _ = parse_struct(header, block)
         meta[block] = {}
 
@@ -585,6 +649,8 @@ def main() -> int:
     ap.add_argument("--seed", action="store_true",
                     help="dump descriptions from the existing A2L, for migration")
     args = ap.parse_args()
+
+    verify_dual_sources()
 
     if args.seed:
         seed()
