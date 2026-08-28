@@ -4,8 +4,12 @@
 #include "IfxScuWdt.h"
 
 /* The persistent parameter block; XCP write access is permitted from
- * offset 0x04 (Xcp.c), the magic word is set only by the firmware. */
-volatile Xcp_Nvm g_xcpNvm __at(XCP_NVM_ADDR);
+ * offset 0x04 (Xcp.c), the magic word is set only by the firmware. Off
+ * __at() onto `#pragma section` (docs/MEMORY_PLACEMENT.md T4) -- an absolute
+ * group at the unchanged LCF_XCP_NVM_START literal. */
+#pragma section farbss "xcp_nvm"
+volatile Xcp_Nvm g_xcpNvm;
+#pragma section farbss restore
 
 /* Local u-suffixed copies of the iLLD flash constants: the iLLD defines
  * them without suffix, which leaks essentially-signed operands into every

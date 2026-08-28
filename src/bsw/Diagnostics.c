@@ -5,8 +5,12 @@
 #include "Uart.h"
 
 /* Calibration block at a fixed address so XCP masters can read/write it
- * without the map file. The XCP slave only permits writes inside this block. */
-volatile Xcp_Cal g_xcpCal __at(XCP_CAL_ADDR);
+ * without the map file (docs/MEMORY_PLACEMENT.md T4: `#pragma section`, an
+ * absolute group at the unchanged LCF_XCP_CAL_START literal, not `__at()`).
+ * The XCP slave only permits writes inside this block. */
+#pragma section farbss "xcp_cal"
+volatile Xcp_Cal g_xcpCal;
+#pragma section farbss restore
 
 extern volatile Xcp_Data g_xcpData;
 

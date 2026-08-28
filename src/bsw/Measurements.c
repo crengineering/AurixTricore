@@ -15,20 +15,29 @@
  * XCP-calibratable block (g_xcpCal.fsVdd/fsVddp3/fsVext); defaults were
  * derived empirically on 2026-07-02 with the rails at nominal. */
 
-/* Fixed address so XCP clients can read without the map file (TASKING __at).
- * 0x70030000 is high in CPU0 DSPR0 (240 KB), clear of linker-placed data —
- * the linker errors out on any overlap. */
 #define MEAS_RAD_TO_DEG   (57.29578f)
 
-volatile Xcp_Data g_xcpData __at(XCP_DATA_ADDR);
+/* Fixed address (docs/MEMORY_PLACEMENT.md T4) so XCP clients can read without
+ * the map file: 0x70030000, high in CPU0 DSPR0 (240 KB), clear of
+ * linker-placed data -- the linker errors out on any overlap. Off __at()
+ * onto `#pragma section farbss "xcp_data"`, an absolute group in
+ * Lcf_Tasking_Tricore_Tc.lsl at the unchanged LCF_XCP_DATA_START literal --
+ * `#pragma section` needs no per-object TU the way __at() did, so this file's
+ * own logic (measurementsInit() etc., below) is no longer invisible to
+ * cppcheck's misra addon either. */
+#pragma section farbss "xcp_data"
+volatile Xcp_Data g_xcpData;
+#pragma section farbss restore
 
 /* The navigation state lives in its own block at the next free 256-byte slot,
  * because Xcp_Data has 8 bytes left before Xcp_Cal and this needs 180. Putting
  * it here rather than growing Xcp_Data means no existing address moves.
- * g_xcpFusion's own `__at()` definition now lives in XcpFusionPlace.c, not
- * here -- a second `__at()` in this file trips misra-c2012-8.2/8.5 the same
- * way it does everywhere else in this tree (SharedRam.h); this file reaches
- * it through the `extern` declaration in Measurements.h, as before. */
+ * g_xcpFusion returns here from its own TU, XcpFusionPlace.c (deleted, T4) --
+ * that split existed only because a second `__at()` in this file tripped
+ * misra-c2012-8.2/8.5; `#pragma section` has no such restriction. */
+#pragma section farbss "xcp_fusion"
+volatile Xcp_Fusion g_xcpFusion;
+#pragma section farbss restore
 
 void measurementsInit(void)
 {

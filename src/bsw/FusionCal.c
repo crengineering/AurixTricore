@@ -4,12 +4,15 @@
  *********************************************************************************************************************/
 #include "FusionCal.h"
 
-/* Fixed address so XCP masters reach it without the map file (TASKING __at). */
-/* cppcheck-suppress misra-c2012-8.2 ; deviation: false positive, not a
- * declaration in non-prototype form. tools/misra_check.py does not preprocess
- * the TASKING __at() extension away, so cppcheck reads "__at(ADDR)" as an
- * old-style function declarator. See the same note in Measurements.c. */
-volatile Xcp_FusionCal g_fusionCal __at(XCP_FUSIONCAL_ADDR);
+/* Fixed address so XCP masters reach it without the map file. Off __at()
+ * onto `#pragma section` (docs/MEMORY_PLACEMENT.md T4) -- an absolute group
+ * at the unchanged LCF_XCP_FUSIONCAL_START literal. The __at()-era
+ * misra-c2012-8.2 false-positive deviation (cppcheck misreading "__at(ADDR)"
+ * as an old-style function declarator) no longer applies -- #pragma section
+ * is not parsed as a declarator at all. */
+#pragma section farbss "xcp_fusioncal"
+volatile Xcp_FusionCal g_fusionCal;
+#pragma section farbss restore
 
 /* Compiled defaults. These are the values documented in docs/FUSION.md section
  * 2, every one of them derived from a measurement on this board rather than

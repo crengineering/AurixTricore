@@ -158,6 +158,21 @@
 #define TRAPTAB4            (LCF_TRAPVEC4_START)
 #define TRAPTAB5            (LCF_TRAPVEC5_START)
 
+/* XCP block bases, docs/MEMORY_PLACEMENT.md T4. Hard external contract (A2L,
+ * AurixGUI, tools/xcp_read.py raw-address mode) -- these MUST NOT move; see
+ * the absolute `xcp_*` groups in the :vtc:linear section_layout below. Values
+ * unchanged from the XCP_*_ADDR macros in the C headers they replace as the
+ * placement mechanism (Measurements.h/Diagnostics.h/Nvm.h/gpio.h/I2c.h) --
+ * those macros are retained through T5 for the cal-write whitelist, just no
+ * longer used for placement. */
+#define LCF_XCP_DATA_START      0x70030000
+#define LCF_XCP_CAL_START       0x70030100
+#define LCF_XCP_NVM_START       0x70030200
+#define LCF_XCP_GPIO_START      0x70030300
+#define LCF_XCP_I2CDBG_START    0x70030400
+#define LCF_XCP_FUSION_START    0x70030500
+#define LCF_XCP_FUSIONCAL_START 0x70030600
+
 #define RESET LCF_STARTPTR_NC_CPU0
 
 #include "tc1v1_6_2.lsl"
@@ -1263,6 +1278,51 @@ derivative tc39
                     select "(.bss.shared_lmu.gnsslatch|.bss.shared_lmu.gnsslatch.*)";
                     select "(.bss.shared_lmu.maglatch|.bss.shared_lmu.maglatch.*)";
                     select "(.bss.shared_lmu.imuedge|.bss.shared_lmu.imuedge.*)";
+                }
+            }
+
+            /* XCP blocks, docs/MEMORY_PLACEMENT.md T4 -- absolute placement,
+             * addresses unchanged from the __at() literals they replace (hard
+             * external contract: A2L, AurixGUI, tools/xcp_read.py raw-address
+             * mode). One group per block, same form the trap vectors use for
+             * a literal run_addr (lines ~735-745, `run_addr=LCF_TRAPVEC0_START`)
+             * but WITHOUT a `section "..." (size=...)` wrapper: a sized
+             * section would emit fill bytes for what is otherwise a plain
+             * `.bss` block, and none is needed -- select claims exactly the
+             * one section per block. Placed here, ahead of the generic
+             * `group data(attributes=rw) { select "(.bss|.bss.*)"; ... }`
+             * catch-all further down (same section_layout, ~150 lines below)
+             * so these sections are claimed before that catch-all ever sees
+             * them -- verified in the .map, not assumed. */
+            group (ordered)
+            {
+                group xcp_data (run_addr = LCF_XCP_DATA_START)
+                {
+                    select "(.bss.xcp_data|.bss.xcp_data.*)";
+                }
+                group xcp_cal (run_addr = LCF_XCP_CAL_START)
+                {
+                    select "(.bss.xcp_cal|.bss.xcp_cal.*)";
+                }
+                group xcp_nvm (run_addr = LCF_XCP_NVM_START)
+                {
+                    select "(.bss.xcp_nvm|.bss.xcp_nvm.*)";
+                }
+                group xcp_gpio (run_addr = LCF_XCP_GPIO_START)
+                {
+                    select "(.bss.xcp_gpio|.bss.xcp_gpio.*)";
+                }
+                group xcp_i2cdbg (run_addr = LCF_XCP_I2CDBG_START)
+                {
+                    select "(.bss.xcp_i2cdbg|.bss.xcp_i2cdbg.*)";
+                }
+                group xcp_fusion (run_addr = LCF_XCP_FUSION_START)
+                {
+                    select "(.bss.xcp_fusion|.bss.xcp_fusion.*)";
+                }
+                group xcp_fusioncal (run_addr = LCF_XCP_FUSIONCAL_START)
+                {
+                    select "(.bss.xcp_fusioncal|.bss.xcp_fusioncal.*)";
                 }
             }
         }

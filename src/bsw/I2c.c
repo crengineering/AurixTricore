@@ -61,7 +61,11 @@ typedef enum
 
 static IfxI2c_I2c g_i2c;   /* I2C0 module handle */
 
-volatile I2c_Debug g_i2cDebug __at(XCP_I2CDBG_ADDR);
+/* Off __at() onto `#pragma section` (docs/MEMORY_PLACEMENT.md T4) -- an
+ * absolute group at the unchanged LCF_XCP_I2CDBG_START literal. */
+#pragma section farbss "xcp_i2cdbg"
+volatile I2c_Debug g_i2cDebug;
+#pragma section farbss restore
 
 /* Record the outcome of one transfer attempt for the XCP-readable counters. */
 static void i2c_note(i2c_XferResult res, uint8 busStatus)

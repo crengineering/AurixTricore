@@ -56,7 +56,9 @@ skill for PDFs.
 5. Bump `Version.h`, then **verify over XCP** — `amk` may not rebuild every
    includer (see `amk-stale-intermediates`: delete `.src` + `.o` + `.d`).
 
-Addresses are fixed via TASKING `__at`, so the A2L does not depend on the link.
+Addresses are fixed literals in `Lcf_Tasking_Tricore_Tc.lsl` (absolute `xcp_*`
+groups, docs/MEMORY_PLACEMENT.md T4 — formerly TASKING `__at`, same addresses,
+different mechanism), so the A2L does not depend on the link.
 Appending is safe; **inserting shifts every later offset** and silently breaks
 every A2L entry and GUI plot below it. Append.
 
