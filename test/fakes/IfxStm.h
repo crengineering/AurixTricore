@@ -12,6 +12,11 @@ extern Ifx_STM MODULE_STM0;
 
 uint32 IfxStm_getLower(Ifx_STM *stm);
 
+/* Busy-wait stub for drivers that only call it during init (Mmc5983_init,
+ * Icm42688_init) -- a plausibility-band host test never reaches it, so it is
+ * a no-op rather than an actual delay. */
+void IfxStm_waitTicks(Ifx_STM *stm, uint32 ticks);
+
 /* Steuerung der Fake-Uhr - existiert nur im Host-Build. */
 void   FakeStm_setTicks(uint32 ticks);
 void   FakeStm_advance(uint32 delta);

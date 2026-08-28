@@ -271,6 +271,19 @@ boolean Bmp581_read(float32 *pressurePa, float32 *temperatureC)
     return ok;
 }
 
+boolean Bmp581_plausible(float32 pressPa, float32 tempC, float32 *liveness)
+{
+    boolean plausible = FALSE;
+
+    if ((pressPa > 30000.0f) && (pressPa < 120000.0f)
+        && (tempC > -40.0f) && (tempC < 85.0f))
+    {
+        plausible = TRUE;
+    }
+    *liveness = pressPa + tempC;
+    return plausible;
+}
+
 boolean Bmp581_debugDump(uint8 cfg[BMP581_DUMP_CFG_LEN], uint8 *osrEff, uint8 raw[6])
 {
     /* Block scope (MISRA 8.9): only this function walks the dump list, and the

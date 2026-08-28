@@ -18,6 +18,11 @@ void Uart_print(const char *str);
 /** Transmit a null-terminated string followed by \r\n (blocking). */
 void Uart_println(const char *str);
 
+/** Transmit one byte as two upper-case hex digits (blocking). There is no
+ *  formatted print available on this console, so every boot-time dump of a
+ *  register or raw byte goes through this helper. */
+void Uart_printHexByte(uint8 v);
+
 /** Heartbeat byte the PC GUI sends every 500 ms ('H'). Only this value counts
  *  as link activity: an unplugged USB bridge pulls the RX line low (break),
  *  which floods the FIFO with 0x00 garbage frames. */

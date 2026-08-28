@@ -93,4 +93,18 @@ boolean Mmc5983_read(Mmc5983_Sample *sample);
  *  \return FALSE on a bus error (outputs undefined). */
 boolean Mmc5983_debugDump(uint8 cfg[MMC5983_DUMP_CFG_LEN], uint8 raw[7]);
 
+/** Plausibility band on |B|. Stronger than the barometer's, because |B| is a
+ *  property of the LOCATION and not of the orientation: it must stay put
+ *  however the board is turned. Earth's field spans ~0.25..0.65 G worldwide
+ *  (~0.48 G in Munich), and the band is widened to 0.15..2.0 G to tolerate
+ *  the hard-iron offset of the board's own magnetics without accepting a
+ *  value that is wrong by a clean factor — which is exactly what a bad
+ *  scaling constant or a mis-assembled 18-bit word would produce.
+ *  \p liveness receives the sum of all three axes — it only freezes if the
+ *  whole sample block stops updating. Heading is deliberately excluded: it
+ *  is derived from X and Y, so it would add no independent information.
+ *  Pure (no bus access): host-testable.
+ *  \return TRUE if |B|^2 falls inside the band. */
+boolean Mmc5983_plausible(const Mmc5983_Sample *sample, float32 *liveness);
+
 #endif /* MMC5983_H */

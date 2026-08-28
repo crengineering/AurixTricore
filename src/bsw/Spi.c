@@ -33,11 +33,17 @@
 /* One data item = one byte. */
 #define SPI_DATA_WIDTH_BITS     (8u)
 
-/* Transfer deadline. STM0 runs at ~100 MHz, so 10 ms is 1 000 000 ticks —
- * three orders of magnitude more than the longest transfer this bus performs,
- * so it only ever fires on a genuine fault. */
+/* Transfer deadline. STM0 runs at ~100 MHz, so 1 ms is 100 000 ticks —
+ * still 8x the measured 124.4 us IMU burst (docs/IMU_INTERRUPT.md §5.6), so it
+ * only ever fires on a genuine fault.
+ *
+ * T14 (docs/REFACTORING_PLAN.md §3.2/§3.8): was 10 ms, sized against the
+ * 20 ms task period this bus is read from. At the 985 us period a wedged
+ * transfer would cost TEN consecutive ticks instead of one — ten slots is
+ * most of the control chain's budget for one fault. 1 ms bounds a wedge to a
+ * single missed tick at any rate this task runs at. */
 #define SPI_STM_TICKS_PER_MS    (100000u)
-#define SPI_XFER_DEADLINE_MS    (10u)
+#define SPI_XFER_DEADLINE_MS    (1u)
 
 static IfxQspi_SpiMaster         s_spiMaster;
 static IfxQspi_SpiMaster_Channel s_spiImuChannel;
@@ -59,10 +65,29 @@ void spiIsrError(void);
 
 /* cppcheck-suppress-begin misra-c2012-17.3 ; deviation: IFX_INTERRUPT is an
  * iLLD macro that emits the vector-table entry; the handlers themselves are
- * prototyped immediately above. */
-IFX_INTERRUPT(spiIsrTransmit, 0, ISR_PRIORITY_QSPI0_TX);
-IFX_INTERRUPT(spiIsrReceive,  0, ISR_PRIORITY_QSPI0_RX);
-IFX_INTERRUPT(spiIsrError,    0, ISR_PRIORITY_QSPI0_ER);
+ * prototyped immediately above.
+ *
+ * ⚠️ vectabNum (2nd argument) is NOT the same thing as isrProvider/`.TOS`
+ * below, and the first T12 build shipped with them disagreeing -- CPU1 hung
+ * forever, never reaching Scheduler_init, the moment Icm42688_init()
+ * completed its first QSPI0 transfer. IFX_INTERRUPT expands to
+ * `__vector_table(vectabNum)` (CompilerTasking.h): a LINK-TIME placement of
+ * the handler into vector table `vectabNum` -- `int_tab_tc0`.."tc5" in
+ * Lcf_Tasking_Tricore_Tc.lsl:807-833, one physical table per core
+ * (`__INTTAB_CPU0`.."CPU1"... same file). `isrProvider` (IfxSrc's `.TOS`) is
+ * a RUN-TIME SCU field selecting which core's interrupt controller the
+ * request signals. Nothing checks the two agree: with
+ * `isrProvider = IfxSrc_Tos_cpu1` and `vectabNum = 0`, CPU1 gets a real
+ * interrupt request but its OWN table (int_tab_tc1) has no entry at that
+ * SRPN -- CPU0's table does, uselessly -- so CPU1 traps into whatever the
+ * linker left in that empty slot and never returns. The SPI_XFER_DEADLINE_MS
+ * software timeout in Spi_transfer() never gets a chance to fire: a hardware
+ * trap does not unwind through a C busy-wait loop. See docs/ILLD_NOTES.md
+ * for the general form of this trap: vectabNum must equal the core number
+ * named in isrProvider, always, for every ISR moved to a non-CPU0 core. */
+IFX_INTERRUPT(spiIsrTransmit, 1, ISR_PRIORITY_QSPI0_TX);
+IFX_INTERRUPT(spiIsrReceive,  1, ISR_PRIORITY_QSPI0_RX);
+IFX_INTERRUPT(spiIsrError,    1, ISR_PRIORITY_QSPI0_ER);
 /* cppcheck-suppress-end misra-c2012-17.3 */
 
 /* cppcheck-suppress misra-c2012-8.7 ; deviation: referenced by the interrupt
@@ -104,7 +129,14 @@ void Spi_init(void)
     cfg.txPriority      = ISR_PRIORITY_QSPI0_TX;
     cfg.rxPriority      = ISR_PRIORITY_QSPI0_RX;
     cfg.erPriority      = ISR_PRIORITY_QSPI0_ER;
-    cfg.isrProvider     = IfxSrc_Tos_cpu0;
+    /* T12 (docs/REFACTORING_PLAN.md 2.4/Risk 3): Spi_init() itself now runs
+     * on CPU1 (core1_main), so the three QSPI0 interrupts that complete a
+     * transfer must be serviced there too. This alone is NOT "silent jitter
+     * and nothing worse" the way Risk 3 originally framed it: it is a hard
+     * hang unless the IFX_INTERRUPT vectabNum above is ALSO 1, not 0 -- see
+     * the comment there, and docs/ILLD_NOTES.md, for the trap this shipped
+     * as once already. */
+    cfg.isrProvider     = IfxSrc_Tos_cpu1;
     cfg.maximumBaudrate = SPI_BAUDRATE_HZ;
     cfg.pins                 = &pins;
     /* No DMA: the transfers are a handful of bytes and the interrupt path is
@@ -194,6 +226,18 @@ boolean Spi_transfer(const uint8 *tx, uint8 *rx, uint16 len)
             if (IfxQspi_SpiMaster_exchange(&s_spiImuChannel, tx, dest, len)
                 == IfxQspi_Status_ok)
             {
+                /* ⚠️ Deliberate exception to "each core uses its own STM"
+                 * (CLAUDE.md rule 2): since T12, Spi_transfer() runs on CPU1
+                 * (called from NavTask_step) but this deadline still reads
+                 * MODULE_STM0, CPU0's timer. That is intentional, not a
+                 * leftover -- SysTime.c (the dt base every core shares) is
+                 * likewise pinned to MODULE_STM0 on purpose, and a second
+                 * time base here would let this deadline and NavTask_step's
+                 * own dt drift apart. It is read-only and cross-core STM
+                 * reads are safe (docs/REFACTORING_PLAN.md Risk 3); it is
+                 * still a deliberate deviation and must not be "fixed" to
+                 * MODULE_STM1 without re-deriving SPI_XFER_DEADLINE_MS
+                 * against that module's own tick rate. */
                 uint32 start = IfxStm_getLower(&MODULE_STM0);
                 uint32 limit = (uint32)SPI_XFER_DEADLINE_MS * SPI_STM_TICKS_PER_MS;
 

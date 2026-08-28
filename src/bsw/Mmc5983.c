@@ -201,6 +201,21 @@ boolean Mmc5983_read(Mmc5983_Sample *sample)
     return ok;
 }
 
+boolean Mmc5983_plausible(const Mmc5983_Sample *sample, float32 *liveness)
+{
+    const float32 fieldSq = (sample->mag[0] * sample->mag[0])
+                          + (sample->mag[1] * sample->mag[1])
+                          + (sample->mag[2] * sample->mag[2]);
+    boolean plausible = FALSE;
+
+    if ((fieldSq > 0.0225f) && (fieldSq < 4.0f))
+    {
+        plausible = TRUE;
+    }
+    *liveness = sample->mag[0] + sample->mag[1] + sample->mag[2];
+    return plausible;
+}
+
 boolean Mmc5983_debugDump(uint8 cfg[MMC5983_DUMP_CFG_LEN], uint8 raw[7])
 {
     /* Block scope (MISRA 8.9): the order here is the order documented for

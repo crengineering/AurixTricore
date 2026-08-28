@@ -28,10 +28,23 @@ where it enters.
                                        measurement bias
 ```
 
-Everything runs in `Task_Imu` at 50 Hz on CPU0. The barometer, magnetometer and
-GNSS tasks **latch** their samples (`Fusion_setBaroAlt`, `Ahrs_setMag`,
-`Fusion_setGnss`) and the IMU tick consumes whatever has arrived. That keeps a
-single writer per state and needs no locking.
+Everything runs in `NavTask_step` on **CPU1**, the dedicated flight core
+(`docs/REFACTORING_PLAN.md` T12) — nothing else is registered on that core but
+a 2 µs LED blink. **The rate is 1014.2 Hz, DRDY-clocked, not a fixed 1 kHz**
+(T15, `docs/REFACTORING_PLAN.md` §3.1/§3.6/§9): the IMU's own INT1 edge — timed
+by `imuDrdyIsr`, now on CPU1 too — is the clock, and `NavTask_step` (registered
+at `SCHED_US(500)`, a 2 kHz poll well above the sensor) takes its `dt` from the
+edge timestamps every time, never from a constant or from its own dispatch
+interval. Adopted at ~5x the ~200 Hz the control law actually needs (§9.3),
+justified by anti-aliasing the 244-382 Hz propeller blade-pass band rather
+than by the control law (§9.4) — a fixed 1000 µs would be 1.4 % wrong on a
+normal tick and 100 % wrong across a missed edge. The barometer, magnetometer
+and GNSS tasks run on CPU0 and **latch** their samples into the shared LMU
+block (`Fusion_setBaroAlt`, `Ahrs_setMag`, `Fusion_setGnss`; backing state in
+`FusionLatch.h`/`AhrsLatch.h`, see `docs/CODEMAP.md` §3); `NavTask_step`
+consumes whatever has arrived and publishes the result via `NavState_publish`
+for CPU0 to read with `NavState_get`. That keeps a single writer per state and
+needs no locking.
 
 ### Why a cascade rather than one big EKF
 
@@ -303,6 +316,55 @@ Quick health read, in order of what to distrust first:
 | `velD` | `0x58` | ≈ 0 at rest |
 | `varD` | `0x68` | bounded, ≈ 0.4 m² |
 
+### 6.1 Roll and yaw are meaningless near pitch = ±90° — this is not a bug
+
+**Measured 2026-08-27 on v1.19.13.** Pitching the board nose-up through 90°
+makes `rollDeg` leap tens or hundreds of degrees and slam between +180 and
+−180. It looks alarming on a plot and it is **not** a filter fault. Do not
+re-investigate this; the evidence is below.
+
+`rollDeg` is a projection of the quaternion, `Ahrs.c:818`:
+
+```c
+out->rollRad = atan2f(2.0f * ((q0*q1) + (q2*q3)),
+                      1.0f - (2.0f * ((q1*q1) + (q2*q2))));
+```
+
+At pitch → ±90° **both arguments approach zero**, so the value is
+`atan2f(0, 0)` — mathematically undefined, and arbitrarily small noise picks a
+different answer each tick. The two triples (roll 0°, pitch 90°, yaw ψ) and
+(roll 180°, pitch 90°, yaw ψ+180°) describe **the same physical orientation**;
+the filter is free to report either. This is gimbal lock, inherent to any
+three-angle representation, not something this code introduced.
+
+The measurement that settles it — one sample step at pitch ≈ 87-89°:
+
+| | roll [deg] | q0 | q1 | q2 | q3 |
+|---|---|---|---|---|---|
+| t | **6.08** | 0.6587 | −0.2835 | 0.6251 | 0.3084 |
+| t+1 | **62.53** | 0.6453 | −0.2842 | 0.6446 | 0.2954 |
+
+`|Δq| = 0.0270`, i.e. a **2.94° physical rotation**, while the reported roll
+changed **56.5°**. The quaternion — which *is* the filter state — stayed
+continuous through the whole event, and so did `pitchDeg` (86.6 → 89.1 → 88.7
+→ 87.7). Only the Euler projection blew up.
+
+**What follows from this:**
+
+- **The Euler triple is telemetry. `q[4]` (offset `0x14`) is the state.** When
+  an attitude looks wrong above ~80° of pitch, read the quaternion before
+  suspecting the filter. It is already published, so no firmware change is
+  needed to look at it.
+- **Left as is, deliberately.** Nothing in the estimator is wrong, and no diag
+  bit is spent on it — `DIAGNOSTICS.md` records bits 27-30 as the last four and
+  they are allocated. A quadrocopter that reaches 90° of pitch is in an upset,
+  and the correct response to an upset is a defined failsafe action, not a
+  better roll number. That belongs with the actuator/arming safety design, not
+  here.
+- **The rate loop is unaffected.** It consumes body rates (`rateDps`, `0x24`),
+  which are never degenerate. Only the outer attitude loop consumes Euler
+  angles, and only in an orientation the aircraft should never hold.
+
 ---
 
 ## 7. Outdoor validation, 2026-08-26 (v1.19.5)
@@ -532,19 +594,26 @@ drift away from the estimate that produced it.
 
 `ahrs_calibrate()` restarts its window whenever the gyro spread exceeds 3 °/s.
 With no bound that never completes on a board powered on while moving — in a
-vehicle, on a vibrating bench, in a hand — and `Task_Imu` gates the entire
+vehicle, on a vibrating bench, in a hand — and `NavTask_step` gates the entire
 navigation filter on `AHRS_RUNNING`: no attitude, no position, no velocity,
 indefinitely, with nothing saying why.
 
-There is now a 500-sample (10 s) deadline. A bias averaged over a moving window
-is worse than one averaged over a still window, and enormously better than no
-estimate at all; the Mahony integral converges the remainder within seconds once
-the accelerometer and magnetometer start correcting. The degraded result is
-flagged, not hidden: `ahrsBiasDegraded` (`0xBC`) says the calibration was taken
-while the board was moving. It also divides by the samples actually accumulated
-rather than the nominal 100, because at the deadline the window is usually
-partial and dividing by 100 regardless would scale the bias toward zero and make
-it look deceptively good.
+There is now a 10 s deadline, and a 2 s still-window to accept a clean bias
+before it. Both are **durations accumulated from `dt`**, not sample counts
+(T14, `docs/REFACTORING_PLAN.md` §3.8) — a count sized "100 samples, ~2 s at
+50 Hz" would silently become ~0.1 s of averaging the moment the task rate
+changed, 20x less noise rejection on the one number the whole attitude
+solution rests on. Accumulating `dt` instead means the same 2 s/10 s at any
+rate this task ever runs at, past (50 Hz) or present (1014.2 Hz). A bias
+averaged over a moving window is worse than one averaged over a still window,
+and enormously better than no estimate at all; the Mahony integral converges
+the remainder within seconds once the accelerometer and magnetometer start
+correcting. The degraded result is flagged, not hidden: `ahrsBiasDegraded`
+(`0xBC`) says the calibration was taken while the board was moving. It also
+divides by the samples actually accumulated rather than a nominal count,
+because at the deadline the window is usually partial and dividing by a fixed
+number regardless would scale the bias toward zero and make it look
+deceptively good.
 
 ---
 

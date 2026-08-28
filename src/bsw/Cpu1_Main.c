@@ -31,6 +31,10 @@
 #include "Uart.h"
 #include "scheduler.h"
 #include "led.h"
+#include "Spi.h"
+#include "Icm42688.h"
+#include "NavTask.h"
+#include "BringUp.h"
 
 extern IfxCpu_syncEvent cpuSyncEvent;
 
@@ -40,11 +44,6 @@ static Led_t       g_led;
 static void Task_LedToggle(void)
 {
     Led_toggle(&g_led);
-}
-
-static void Task_App10ms(void)
-{
-    /* TODO: add CPU1 application logic here */
 }
 
 void core1_main(void)
@@ -59,9 +58,58 @@ void core1_main(void)
 
     Led_init(&g_led, &MODULE_P20, 12u);
 
+    /* Flight IMU on QSPI0 (T12, docs/REFACTORING_PLAN.md): moved here from
+     * core0_main verbatim, along with NavTask_init(), so the QSPI ISR
+     * retarget (Spi.c), the driver init and the task registration below all
+     * land on the same core together -- an intermediate state with the ISR
+     * on one core and the init on another does not fly (Risk 7 of the
+     * refactor's predecessor step, T11, applies identically here). Nothing
+     * shared with the I2C0 sensors, which stay on CPU0. */
+    Spi_init();
+    if (Icm42688_init() != FALSE)
+    {
+        Uart_print("ICM-42688-P detected (WHO_AM_I 0x47) in SPI mode ");
+        Uart_printHexByte(Spi_getMode());
+        Uart_println("");
+    }
+    else
+    {
+        uint8 who = 0u;
+
+        Uart_println("ICM-42688-P not found");
+        Spi_setMode(SPI_MODE_0);
+        (void)Icm42688_readWhoAmI(&who);
+        Uart_print("  WHO_AM_I mode0=");
+        Uart_printHexByte(who);
+        who = 0u;
+        Spi_setMode(SPI_MODE_3);
+        (void)Icm42688_readWhoAmI(&who);
+        Uart_print("  mode3=");
+        Uart_printHexByte(who);
+        Uart_println("");
+    }
+    BringUp_dumpImu();     /* one-time ICM-42688-P register dump -- see BringUp.h */
+    NavTask_init();         /* NavState_init, FusionCal_init, Ahrs_init, Fusion_init */
+
+    /* T15 (docs/REFACTORING_PLAN.md §3.6): NavTask_step registered FIRST and
+     * at SCHED_US(500) -- Scheduler_run() dispatches in registration order
+     * (scheduler.c), and at a ~985 us sensor period a task ahead of the
+     * flight chain is no longer merely harmless the way it was at 20 ms, so
+     * this ordering is now part of the contract for anything else ever added
+     * to this core. NavTask_step itself gates on a pending DRDY edge (or a
+     * timeout, NavTask.c) and returns almost immediately otherwise, so the
+     * 2 kHz poll rate is not the actual work rate -- see NavTask.h. */
     Scheduler_init(&g_sched, &MODULE_STM1, 1u);
+    /* cppcheck-suppress misra-c2012-10.8 ; deviation: SCHED_US(us) expands to
+     * the same "(uint32)((n) * <suffixed-literal>)" composite-cast shape as
+     * SCHED_MS(ms), already used and already baselined project-wide
+     * (tools/misra_baseline.txt, misra-c2012-10.8 in Cpu0_Main.c/Diagnostics.c/
+     * Xcp.c) -- this is the first SCHED_US() call in the tree, not a new
+     * pattern. Fixing the macro itself is out of scope here: scheduler.h is
+     * shared by every core's task registration, not something T15 (the rate
+     * change and only the rate change) should be touching. */
+    (void)Scheduler_addTask(&g_sched, NavTask_step, SCHED_US(500u));
     Scheduler_addTask(&g_sched, Task_LedToggle, SCHED_MS(500u));
-    Scheduler_addTask(&g_sched, Task_App10ms,   SCHED_MS(10u));
 
     while (TRUE)
     {

@@ -24,6 +24,12 @@ Each of these cost real debugging time on this project. They are not in the vend
 | T7 | Qspi | `exchange()` is **async**; poll `getStatus()` before touching the RX buffer. |
 | T8 | All | Unsuffixed vendor constants trip cppcheck/MISRA — see `tools/misra_baseline.txt`. |
 | T9 | Build | Header-only changes leave stale `.src` — delete `.src` + `.o` + `.d`, not just `.o`. |
+| T10 | ScuEru | Only 18 pads reach the ERU on the 516 package, and this board commits most of them. |
+| T11 | ScuEru | Only **OGU0-3** have an SRC node; `OutputChannel_4..7` / `InputNodePointer_4..7` are silently dead. |
+| T12 | ScuEru | The **input** channel is fixed by the pad (`req->channelId`); `initReqPin` also sets the input mux. |
+| T13 | ScuEru | The glitch filter (`SCU_EIFILT`) is **global to all ERU inputs**, not per channel. |
+| T14 | Cpu | `Ifx__dsync` is **undefined for TASKING** in this tree — see §3. |
+| T15 | Cpu | `IFX_INTERRUPT`'s `vectabNum` and `IfxSrc_init`'s/`isrProvider`'s target core are **two independent settings nothing cross-checks** — see §3. |
 
 ---
 
@@ -122,8 +128,71 @@ must call both** `IfxCpu_emitEvent(&cpuSyncEvent)` and
 `IfxCpu_waitEvent(&cpuSyncEvent, timeout)` before any application code. Skipping
 either on *any* core → watchdog reset at the timeout. Cores 4-5 sync then idle.
 
-Cross-core data: single writer per slot, no locks, readers see coherent 32-bit
-words. Cross-core DSPR reads bypass the cache. Pattern documented in `CoreStats.h`.
+Cross-core data: **the real rule is LMU + non-cached alias (or LMU + `DSYNC`
+per write), not "cross-core DSPR reads bypass the cache"** — that older claim
+described the reader only, was never Infineon's actual mechanism, and must not
+be extended to a new crossing. See `SharedRam.h` (`src/bsw/`) and
+`docs/REFACTORING_PLAN.md` §2.4 for the vendor-sourced rule: exactly one
+writer per object, every field `volatile` and 32-bit (LMU has no sub-word
+write), and `store payload -> Ifx__dsync() -> publish` for anything with more
+than one field a reader must see consistently.
+
+### T14 — `Ifx__dsync` is not declared for TASKING
+
+`IfxCpu_IntrinsicsDcc.h:1349-1351`, `...Gcc.h`, `...Gnuc.h` and
+`...HighTec.h:354` all declare `Ifx__dsync` (mapping to the compiler's own
+`__dsync`/`__builtin_tricore_dsync`). `IfxCpu_IntrinsicsTasking.h` has **no
+`dsync` symbol at all**, and the project's build config is TriCore Debug
+(TASKING). The TASKING compiler still recognises `__dsync()` as a built-in
+intrinsic with no declaration needed — `IfxFlash.c`/`IfxFlash.h` already call
+it bare and that TU builds today — so the fix is a one-line wrapper, not a
+missing header:
+```c
+#ifndef Ifx__dsync
+#define Ifx__dsync()   __dsync()
+#endif
+```
+A missing barrier here is **silent**: it does not fail the build, it fails as
+a rare torn cross-core snapshot under load. Never trust "it compiled" for this
+one — inspect the generated `.src` for the actual `DSYNC` instruction.
+
+### T15 — moving an interrupt to another core is TWO settings, not one
+
+Found retargeting the QSPI0 ISRs to CPU1 (`Spi.c`, T12,
+`docs/REFACTORING_PLAN.md`): CPU1 hung forever, never reaching
+`Scheduler_init`, the first time `Icm42688_init()` completed a transfer.
+
+Two settings decide which core services an interrupt, and **nothing in the
+iLLD checks that they agree**:
+
+1. **Run-time**: `IfxSrc_init(&src, IfxSrc_Tos_cpuN, prio)` (or, for a
+   pre-configured driver like `IfxQspi_SpiMaster`, `cfg.isrProvider =
+   IfxSrc_Tos_cpuN`) sets the SRC's `.TOS` field — which CPU's interrupt
+   controller the service request signals.
+2. **Link-time**: `IFX_INTERRUPT(isr, vectabNum, prio)` expands to
+   `void __interrupt(prio) __vector_table(vectabNum) isr(void)`
+   (`CompilerTasking.h`) — which physical vector table the handler CODE gets
+   placed into. `Lcf_Tasking_Tricore_Tc.lsl:807-833` provisions one such
+   table per core, `int_tab_tc0` through `int_tab_tc5`
+   (`__INTTAB_CPU0`..`__INTTAB_CPU5`), and `vectabNum` selects among them.
+
+Change #1 without #2 (or vice versa): the SRC signals CPUn, CPUn takes the
+trap using **its own** `BIV` + vector table, finds no entry at that SRPN
+(CPU0's table has it, uselessly), and vectors into whatever the linker left
+in the empty slot. That is not a graceful failure — it is a hardware trap,
+and it does **not** unwind through a C-level bounded wait (e.g.
+`SPI_XFER_DEADLINE_MS` in `Spi.c`): the trap hijacks the core before the
+timeout loop ever gets a chance to notice anything is wrong. The three other
+symptoms that make this look like something else at first: (a) the OTHER five
+cores are completely unaffected and keep incrementing their alive counters,
+because each core's vector table is a separate memory region; (b) the stuck
+core does not reset and retry, because `IfxScuWdt_disableCpuWatchdog()` runs
+before the trap, same as every core's boot sequence; (c) there is no build or
+link error — both settings are individually valid, just for different cores.
+
+**Rule: `vectabNum` must always equal the core number named in
+`isrProvider`/`.TOS`.** Whenever an ISR's target core changes, grep for its
+`IFX_INTERRUPT(...)` line in the same file and change both numbers together.
 
 ---
 
@@ -298,7 +367,90 @@ Single module, no instance pointer. Feeds `Xcp_Data`.
 
 ---
 
-## 10. Cross-cutting
+## 10. IfxScuEru — external interrupts (ERU)
+
+`Scu/Std/IfxScuEru.{c,h}` + the REQ pin objects in
+`_PinMap/TC39xB/IfxScu_PinMap_TC39xB_516.{c,h}`. **Not `.cproject`-excluded** —
+unlike `Qspi`/`I2c`, nothing has to be un-excluded.
+
+```c
+void IfxScuEru_initReqPin(IfxScu_Req_In *req, IfxPort_InputMode mode); /* inline */
+void IfxScuEru_enableRisingEdgeDetection (IfxScuEru_InputChannel  ch);
+void IfxScuEru_disableFallingEdgeDetection(IfxScuEru_InputChannel ch);
+void IfxScuEru_enableTriggerPulse        (IfxScuEru_InputChannel  ch);
+void IfxScuEru_connectTrigger            (IfxScuEru_InputChannel  ch,
+                                          IfxScuEru_InputNodePointer trigSel);
+void IfxScuEru_setFlagPatternDetection   (IfxScuEru_OutputChannel out,
+                                          IfxScuEru_InputChannel  ch, boolean state);
+void IfxScuEru_enablePatternDetectionTrigger(IfxScuEru_OutputChannel out);
+void IfxScuEru_setInterruptGatingPattern (IfxScuEru_OutputChannel out,
+                                          IfxScuEru_InterruptGatingPattern pattern);
+```
+
+Working order is the example in `IfxScuEru.h:89-111`; then
+`IfxSrc_init(&SRC_SCUERU<n>, IfxSrc_Tos_cpuX, srpn)` + `IfxSrc_enable`.
+⚠️ **That vendor example also calls `IfxScuEru_enableAutoClear()`, which is
+wrong for a pulsed signal — see T14. Omitted from the list above on purpose.**
+
+**T10 — only 8 pads on the 516 package reach the ERU, and most are taken.**
+The complete list is `IfxScu_PinMap_TC39xB_516.h:112-128` (18 objects, 8 input
+channels). On *this* board nearly all are board-committed: P15.4/P15.5 (EEPROM),
+P14.3 (TLF35584 WDI), P14.1 (console RX), P33.7 (LED + DAP_SCR), P20.0 (JTAG),
+P20.9 (ERAY-B ERRN), P15.1 (LIN1 RXD), P11.10 (RGMII). The genuinely free ones
+are **P10.7 (REQ0C, ch0)**, **P10.8 (REQ1C, ch1)**, **P10.3 (REQ3A, ch3)** and
+P15.8 (REQ5A, ch5 — carries the Eth-MDINT footprint stub). Check
+`docs/PINNING.md` before assuming any of them is still free.
+
+**T11 — only OGU0-3 have a service-request node.** `SRC_SCUERU0..3` at
+`0xF0038880/84/88/8C` (`IfxSrc_reg.h:3489-3514`). `IfxScuEru_InputNodePointer_4`
+… `_7` and `IfxScuEru_OutputChannel_4..7` exist in the enums but cannot raise an
+interrupt on TC39x — a config using them is silently dead.
+
+**T12 — the input channel is fixed by the pad, the output channel is not.**
+`req->channelId` in the pin object *is* the `IfxScuEru_InputChannel`
+(REQ**0**C_P10_7 → channel 0). `initReqPin` also programs the external-input
+mux from `req->select` (`Ifx_RxSel_c` for that pin), so do not call
+`IfxScuEru_selectExternalInput` yourself as well.
+
+**T13 — the glitch filter is global, not per channel, and ENDINIT-protected.**
+`IfxScuEru_setInputFilterDepth`/`setInputFilterPredivider` write `SCU_EIFILT`
+for *all* ERU inputs. Enabling it for one signal changes behaviour for every
+future ERU user. Leave it disabled unless a finding forces it.
+
+**T14 — `IfxScuEru_enableAutoClear()` is a misnomer; it does NOT self-clear
+after one edge, and combining it with edge detection double-counts a pulse.**
+The bit it writes is `EICRn.LDENx` = **"Level Detection Enable"**
+(`Ifx_SCU_EICR_Bits`, `Libraries/Infra/Sfr/TC39xB/IfxScu_regdef.h:368` — the
+regdef header, generated from Infineon's own register database, is
+authoritative; the wrapper function name is not). With `LDENx` enabled,
+`INTFx` tracks the pin's **level**: it is *set* by the edge you enabled
+(`RENx`/`FENx`) and *cleared* by the **opposite** edge, or by software
+(`FMR.FCx`) — confirmed against Infineon's community KB article "How to use
+and configure the External Request Unit for AURIX" (no full peripheral UM in
+this repo, `docs/ILLD_NOTES.md` intro). The OGU's pattern-detection stage
+fires on every **transition** of `INTFx`, not only the set. For a signal that
+is genuinely held at a level (a button, say) that is the wanted behaviour —
+one interrupt while it's pressed, roughly. For a **self-terminating pulse**
+(any data-ready line with a finite `INT_TPULSE_DURATION`) it produces **two**
+interrupts per pulse: one on the rising edge (the real event) and a second
+when `INTFx` clears on the falling edge, `TPULSE_DURATION` later. Found on the
+ICM-42688-P INT1 line (`docs/IMU_INTERRUPT.md`): a bimodal ~107 µs / ~878 µs
+interval distribution, the two populations summing to the true ~985 µs sample
+period. `IfxScuEru_enableTriggerPulse()` (`EICRn.EIENx`) already generates a
+genuine one-shot trigger per edge on its own — `LDENx` is not needed for a
+pulsed signal and is actively wrong for one. **For a pulse: `RENx`/`FENx` +
+`EIENx` only, never `LDENx`.**
+
+**Pad note:** a 3.3 V peripheral driving a VEXT (5 V) pad still needs
+`IfxPort_setPinPadDriver(port, pin, IfxPort_PadDriver_ttlSpeed1)` *after*
+`initReqPin`, and must use `IfxPort_InputMode_pullDown`/`noPullDevice` — the
+internal pull-**up** goes to 5 V and fights a 3.3 V push-pull output.
+
+First use: `docs/IMU_INTERRUPT.md` (ICM-42688-P data-ready on P10.7).
+
+---
+
+## 11. Cross-cutting
 
 **`DEVICE_TC39XB` must be defined** in the TASKING preprocessing symbols.
 Without it `IfxPort.c` takes the wrong `#else` branch and GPIO silently fails.
@@ -322,4 +474,4 @@ string landed in the ELF.
 
 Not yet distilled — expect to read vendor source (and then extend this file):
 MCMCAN, EVADC, ASCLIN beyond raw `readRxData`/`writeTxData`, GETH/lwIP port,
-DMA, SENT/PSI5.
+DMA, SENT/PSI5. *(ERU was a gap — distilled in §10 on 2026-08-27.)*

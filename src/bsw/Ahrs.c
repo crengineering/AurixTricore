@@ -5,6 +5,8 @@
 #include "Ahrs.h"
 #include "Nvm.h"
 #include "FusionCal.h"
+#include "AhrsLatch.h"
+#include "SharedRam.h"
 #include <math.h>
 
 /* --- tuning -------------------------------------------------------------- */
@@ -44,17 +46,24 @@
 #define AHRS_MAG_MIN_G        (0.15f)
 #define AHRS_MAG_MAX_G        (2.0f)
 
-/* Gyro-bias calibration: samples to average, and the motion gate. 100 samples
- * is ~2 s at the 50 Hz IMU task.
+/* Gyro-bias calibration: a still-window DURATION to average over, and the
+ * motion gate. T14 (docs/REFACTORING_PLAN.md §3.8): this used to be a sample
+ * COUNT ("100 samples is ~2 s at the 50 Hz IMU task"), which silently became
+ * ~0.1 s of averaging the moment the task moved to 1014 Hz -- 20x less noise
+ * rejection on the one number the whole attitude solution rests on, with no
+ * error anywhere. Accumulating `dt` instead of counting calls makes the
+ * window mean the same thing at any rate, forever.
  *
  * The gate measures the SPREAD (max - min) across the window, NOT the absolute
  * rate — a large constant offset is precisely the thing being measured, so an
  * absolute threshold would read "moving" forever and calibration would never
  * finish. Motion restarts the window, because a biased bias is worse than none. */
-#define AHRS_CAL_SAMPLES      (100u)
+#define AHRS_CAL_WINDOW_S     (2.0f)
 #define AHRS_CAL_SPREAD_DPS   (3.0f)
 
-/* ...but give up after this many samples and go anyway (10 s at 50 Hz).
+/* ...but give up after this DURATION and go anyway (was "500 samples, 10 s at
+ * 50 Hz" -- same T14 fix, same reason: a sample count silently changes
+ * meaning with the task rate, a duration does not).
  *
  * Without a bound this never finishes on a board that is powered on while
  * moving -- in a vehicle, on a vibrating bench, in someone's hand. Every
@@ -69,7 +78,7 @@
  * and magnetometer start correcting. The degraded result is flagged rather than
  * hidden: Ahrs_Values.biasDegraded says the boot calibration was taken while
  * the board was moving. */
-#define AHRS_CAL_MAX_SAMPLES  (500u)
+#define AHRS_CAL_DEADLINE_S   (10.0f)
 
 /* Sanity bounds on dt [s]. The IMU task runs at 50 Hz; the upper bound matters
  * at boot, where the first measured interval is whatever the STM counter held. */
@@ -164,8 +173,14 @@ static float32 s_bias[3];          /* boot gyro bias, body frame [deg/s]      */
 static float32 s_calSum[3];
 static float32 s_calMin[3];
 static float32 s_calMax[3];
-static uint16  s_calCount;
-static uint16  s_calTotal;      /* samples since calibration started */
+static uint16  s_calCount;      /* samples in the CURRENT window -- only ever
+                                  * used to divide s_calSum; the window's PASS
+                                  * condition is s_calWindowS, not this */
+static float32 s_calWindowS;    /* elapsed dt in the current window [s];
+                                  * reset to 0 whenever motion restarts it */
+static float32 s_calElapsedS;   /* elapsed dt since calibration STARTED [s];
+                                  * NEVER reset by motion -- this is what the
+                                  * AHRS_CAL_DEADLINE_S gate is measured against */
 static boolean s_biasDegraded;  /* deadline hit before a clean window */
 
 /* Named s_ahrsState rather than the obvious s_state: MISRA 5.9 wants
@@ -173,6 +188,10 @@ static boolean s_biasDegraded;  /* deadline hit before a clean window */
  * fusion.c and src/asw/CtrlReplay.c each had their own s_state. */
 static Ahrs_State s_ahrsState;
 
+/* CPU1-side cache of the last CONSUMED magnetometer sample, refreshed from
+ * g_magLatch (AhrsLatch.h) at the top of every Ahrs_update() call -- see
+ * ahrs_refreshMag() below. Ahrs_setMag() (CPU0) no longer writes these
+ * directly, same T12 discipline as fusion.c's baro/GNSS latches. */
 static float32 s_magB[3];          /* latched sample, BODY frame, corrected   */
 static float32 s_magNorm;
 
@@ -267,14 +286,35 @@ void Ahrs_init(void)
     }
 
     s_calCount     = 0u;
-    s_calTotal     = 0u;
+    s_calWindowS   = 0.0f;
+    s_calElapsedS  = 0.0f;
     s_biasDegraded = FALSE;
     s_ahrsState    = AHRS_CALIBRATING;
     s_magNorm  = 0.0f;
+
+    /* g_magLatch (AhrsLatch.h): the PRODUCER's state, zeroed here even though
+     * Ahrs_init() runs on CPU1 (via NavTask_init, T12) -- safe by
+     * construction, not synchronisation, for the same reason Fusion_init()
+     * zeroing g_baroLatch/g_gnssLatch is safe: SensorTask_mag (the only
+     * writer) does not run until CPU0's own Scheduler_run() loop starts,
+     * strictly after CPU1 has already reached this point in its own, much
+     * shorter boot sequence (see fusion.c Fusion_init() for the full
+     * argument). */
+    for (i = 0u; i < 3u; i++)
+    {
+        g_magLatch.magB[i] = 0.0f;
+    }
+    g_magLatch.magNorm  = 0.0f;
+    g_magLatch.reserved = 0u;
+    g_magLatch.gen      = 0u;
 }
 
-/* Average the gyro while the board is still; motion restarts the window. */
-static boolean ahrs_calibrate(const float32 gyroBody[3])
+/* Average the gyro while the board is still; motion restarts the window.
+ * T14: the window is now a DURATION (s_calWindowS/s_calElapsedS, accumulated
+ * from dt) rather than a sample count -- see AHRS_CAL_WINDOW_S's comment.
+ * s_calCount still counts samples, but only to divide s_calSum; it plays no
+ * part in deciding when the window is done. */
+static boolean ahrs_calibrate(const float32 gyroBody[3], float32 dt)
 {
     boolean done   = FALSE;
     boolean moving = FALSE;
@@ -322,28 +362,35 @@ static boolean ahrs_calibrate(const float32 gyroBody[3])
 
     s_calCount++;
 
-    s_calTotal++;
+    s_calWindowS  += dt;
+    s_calElapsedS += dt;
 
-    if ((moving != FALSE) && (s_calTotal < AHRS_CAL_MAX_SAMPLES))
+    if ((moving != FALSE) && (s_calElapsedS < AHRS_CAL_DEADLINE_S))
     {
-        /* Throw the window away rather than bake the motion into the bias. */
+        /* Throw the window away rather than bake the motion into the bias.
+         * s_calElapsedS is NOT reset here -- the deadline is measured against
+         * the whole calibration attempt, not against the current window, or a
+         * board that never sits still for AHRS_CAL_WINDOW_S would restart the
+         * deadline every time and never give up. */
         for (i = 0u; i < 3u; i++)
         {
             s_calSum[i] = 0.0f;
         }
-        s_calCount = 0u;
+        s_calCount   = 0u;
+        s_calWindowS = 0.0f;
     }
-    else if ((s_calCount >= AHRS_CAL_SAMPLES)
-             || (s_calTotal >= AHRS_CAL_MAX_SAMPLES))
+    else if ((s_calWindowS >= AHRS_CAL_WINDOW_S)
+             || (s_calElapsedS >= AHRS_CAL_DEADLINE_S))
     {
         /* Either a clean window completed, or the deadline expired and this is
          * the best that is going to be available. Divide by what was actually
-         * accumulated, not by the nominal count -- at the deadline the window
-         * is usually partial, and dividing by 100 regardless would scale the
-         * bias down toward zero and look deceptively small. */
+         * accumulated, not by a nominal count -- at the deadline the window
+         * is usually partial, and dividing by the nominal sample count
+         * regardless would scale the bias down toward zero and look
+         * deceptively small. */
         const uint16 n = (s_calCount > 0u) ? s_calCount : 1u;
 
-        if (s_calCount < AHRS_CAL_SAMPLES)
+        if (s_calWindowS < AHRS_CAL_WINDOW_S)
         {
             s_biasDegraded = TRUE;
         }
@@ -506,12 +553,50 @@ static void ahrs_errorVector(const float32 accBody[3], float32 accNorm,
     }
 }
 
+/* Read one consistent snapshot of g_magLatch into s_magB/s_magNorm. CPU1
+ * (the consumer) ONLY -- same protocol as NavState_get()/
+ * baroLatch_get()/gnssLatch_get() (fusion.c): read gen, copy the payload,
+ * re-read gen; one retry on a mismatch, then give up and leave s_magB/
+ * s_magNorm exactly as they were (the last consumed sample), rather than a
+ * torn mix of old and new. Unlike the baro/GNSS latches there is no
+ * "already consumed this gen" check: this latch is LEVEL-triggered, so every
+ * Ahrs_update() tick re-applies whatever the latch currently holds, exactly
+ * as the original single-core code did with no "new sample" concept at all. */
+static void ahrs_refreshMag(void)
+{
+    uint8   attempt;
+    boolean ok = FALSE;
+
+    for (attempt = 0u; (attempt < 2u) && (ok == FALSE); attempt++)
+    {
+        uint32  genBefore = g_magLatch.gen;
+        float32 magB[3];
+        float32 magNorm;
+
+        magB[0] = g_magLatch.magB[0];
+        magB[1] = g_magLatch.magB[1];
+        magB[2] = g_magLatch.magB[2];
+        magNorm = g_magLatch.magNorm;
+
+        if (g_magLatch.gen == genBefore)
+        {
+            s_magB[0] = magB[0];
+            s_magB[1] = magB[1];
+            s_magB[2] = magB[2];
+            s_magNorm = magNorm;
+            ok = TRUE;
+        }
+    }
+}
+
 void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
                  float32 dt, boolean valid)
 {
     boolean accUsed = FALSE;
     boolean magUsed = FALSE;
     uint8   i;
+
+    ahrs_refreshMag();
 
     if ((valid == FALSE) || (dt <= AHRS_DT_MIN_S) || (dt >= AHRS_DT_MAX_S))
     {
@@ -575,7 +660,7 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
 
         if (s_ahrsState == AHRS_CALIBRATING)
         {
-            if (ahrs_calibrate(gyroBody) != FALSE)
+            if (ahrs_calibrate(gyroBody, dt) != FALSE)
             {
                 s_ahrsState = AHRS_ALIGNING;
             }
@@ -782,6 +867,12 @@ void Ahrs_nedToBody(const float32 vNed[3], float32 vBody[3])
     ahrs_nedToBody(vNed, vBody);
 }
 
+/* CPU0 ONLY (SensorTask_mag). Writes g_magLatch (AhrsLatch.h): payload ->
+ * Ifx__dsync() -> gen++, same discipline as every other shared object
+ * (SharedRam.h rule 3) -- applied on BOTH branches here, even though this
+ * latch is level-triggered rather than one-shot, so the reader's torn-read
+ * retry (ahrsMagLatch_get(), below) is meaningful for every write, not only
+ * some of them. */
 void Ahrs_setMag(const float32 mag[3], boolean valid)
 {
     if (valid != FALSE)
@@ -794,20 +885,30 @@ void Ahrs_setMag(const float32 mag[3], boolean valid)
         const float32 sy = (g_xcpNvm.magScaleY > 0.0f) ? g_xcpNvm.magScaleY : 1.0f;
         const float32 sz = (g_xcpNvm.magScaleZ > 0.0f) ? g_xcpNvm.magScaleZ : 1.0f;
         float32 corrected[3];
+        float32 bodyMag[3];
 
         corrected[0] = (mag[0] - g_xcpNvm.magOffX) * sx;
         corrected[1] = (mag[1] - g_xcpNvm.magOffY) * sy;
         corrected[2] = (mag[2] - g_xcpNvm.magOffZ) * sz;
 
-        ahrs_mountMag(corrected, s_magB);
+        ahrs_mountMag(corrected, bodyMag);
 
-        s_magNorm = sqrtf((s_magB[0] * s_magB[0]) + (s_magB[1] * s_magB[1])
-                        + (s_magB[2] * s_magB[2]));
+        g_magLatch.magB[0] = bodyMag[0];
+        g_magLatch.magB[1] = bodyMag[1];
+        g_magLatch.magB[2] = bodyMag[2];
+        g_magLatch.magNorm = sqrtf((bodyMag[0] * bodyMag[0]) + (bodyMag[1] * bodyMag[1])
+                                  + (bodyMag[2] * bodyMag[2]));
     }
     else
     {
         /* Stop trusting a field we are no longer receiving: leaving the last
          * sample latched would let a dead magnetometer keep steering yaw. */
-        s_magNorm = 0.0f;
+        g_magLatch.magNorm = 0.0f;
     }
+
+    /* cppcheck-suppress misra-c2012-17.3 ; deviation: Ifx__dsync() wraps
+     * TASKING's __dsync() intrinsic, which has no declaration anywhere
+     * cppcheck can see (SharedRam.h). */
+    Ifx__dsync();
+    g_magLatch.gen = g_magLatch.gen + 1u;
 }

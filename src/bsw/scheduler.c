@@ -85,8 +85,10 @@ void Scheduler_run(Scheduler_t *sched)
             g_coreStats[id].execUs    = sched->busyTicks / SCHED_TICKS_PER_US;
             g_coreStats[id].execMaxUs = sched->maxTicks  / SCHED_TICKS_PER_US;
             /* Per mille of the window actually spent in tasks. Scale first in
-             * 64-bit-free form: busyTicks stays far below 2^32/1000 here. */
-            g_coreStats[id].loadPmil  = (uint16)((sched->busyTicks / (elapsed / 1000u)));
+             * 64-bit-free form: busyTicks stays far below 2^32/1000 here.
+             * loadPmil is uint32 (T9, SharedRam.h no-sub-word rule), so the
+             * division result assigns without a narrowing cast. */
+            g_coreStats[id].loadPmil  = sched->busyTicks / (elapsed / 1000u);
             g_coreStats[id].aliveCounter++;
         }
         sched->busyTicks   = 0u;

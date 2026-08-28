@@ -17,6 +17,12 @@ uint32 IfxStm_getLower(Ifx_STM *stm)
     return now;
 }
 
+void IfxStm_waitTicks(Ifx_STM *stm, uint32 ticks)
+{
+    (void)stm;
+    (void)ticks;    /* no-op: nothing under host test exercises the delay path */
+}
+
 void FakeStm_setTicks(uint32 ticks)       { s_ticks = ticks; }
 void FakeStm_advance(uint32 delta)        { s_ticks += delta; }
 void FakeStm_setAutoAdvance(uint32 delta) { s_autoAdvance = delta; }
