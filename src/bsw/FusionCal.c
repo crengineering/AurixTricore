@@ -9,10 +9,17 @@
  * at the unchanged LCF_XCP_FUSIONCAL_START literal. The __at()-era
  * misra-c2012-8.2 false-positive deviation (cppcheck misreading "__at(ADDR)"
  * as an old-style function declarator) no longer applies -- #pragma section
- * is not parsed as a declarator at all. */
+ * is not parsed as a declarator at all. Guarded by `#if defined(__TASKING__)`
+ * -- see SharedRam.c for why (GCC -Werror; this file is compiled for the
+ * host as part of the `estimator` test library, and this is exactly where
+ * that CI job actually caught it). */
+#if defined(__TASKING__)
 #pragma section farbss "xcp_fusioncal"
+#endif
 volatile Xcp_FusionCal g_fusionCal;
+#if defined(__TASKING__)
 #pragma section farbss restore
+#endif
 
 /* Compiled defaults. These are the values documented in docs/FUSION.md section
  * 2, every one of them derived from a measurement on this board rather than

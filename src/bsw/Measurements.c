@@ -24,10 +24,17 @@
  * Lcf_Tasking_Tricore_Tc.lsl at the unchanged LCF_XCP_DATA_START literal --
  * `#pragma section` needs no per-object TU the way __at() did, so this file's
  * own logic (measurementsInit() etc., below) is no longer invisible to
- * cppcheck's misra addon either. */
+ * cppcheck's misra addon either. Guarded by `#if defined(__TASKING__)` --
+ * see SharedRam.c for why: GCC only warns about an unrecognised pragma under
+ * plain -Wall, but CI's unit_tests.yml adds -Werror, promoting it to a
+ * build failure. */
+#if defined(__TASKING__)
 #pragma section farbss "xcp_data"
+#endif
 volatile Xcp_Data g_xcpData;
+#if defined(__TASKING__)
 #pragma section farbss restore
+#endif
 
 /* The navigation state lives in its own block at the next free 256-byte slot,
  * because Xcp_Data has 8 bytes left before Xcp_Cal and this needs 180. Putting
@@ -35,9 +42,13 @@ volatile Xcp_Data g_xcpData;
  * g_xcpFusion returns here from its own TU, XcpFusionPlace.c (deleted, T4) --
  * that split existed only because a second `__at()` in this file tripped
  * misra-c2012-8.2/8.5; `#pragma section` has no such restriction. */
+#if defined(__TASKING__)
 #pragma section farbss "xcp_fusion"
+#endif
 volatile Xcp_Fusion g_xcpFusion;
+#if defined(__TASKING__)
 #pragma section farbss restore
+#endif
 
 void measurementsInit(void)
 {

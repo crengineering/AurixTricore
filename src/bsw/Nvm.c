@@ -6,10 +6,15 @@
 /* The persistent parameter block; XCP write access is permitted from
  * offset 0x04 (Xcp.c), the magic word is set only by the firmware. Off
  * __at() onto `#pragma section` (docs/MEMORY_PLACEMENT.md T4) -- an absolute
- * group at the unchanged LCF_XCP_NVM_START literal. */
+ * group at the unchanged LCF_XCP_NVM_START literal. Guarded by `#if
+ * defined(__TASKING__)` -- see SharedRam.c for why (GCC -Werror). */
+#if defined(__TASKING__)
 #pragma section farbss "xcp_nvm"
+#endif
 volatile Xcp_Nvm g_xcpNvm;
+#if defined(__TASKING__)
 #pragma section farbss restore
+#endif
 
 /* Local u-suffixed copies of the iLLD flash constants: the iLLD defines
  * them without suffix, which leaks essentially-signed operands into every
