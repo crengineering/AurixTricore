@@ -73,4 +73,18 @@ if not exist "%ELF%" (
 
 echo.
 echo === BUILD ERFOLGREICH: "%ELF%" ===
+
+rem --- post-build .map verifier (docs/MEMORY_PLACEMENT.md T7): pinned XCP
+rem     addresses, overlap, LMU containment, Xcp_Data headroom. Needs a
+rem     build (reads the .map), so it runs here and not in any offline CI
+rem     gate -- see tools/check_memmap.py's own header comment.
+echo.
+echo === MEMORY MAP CHECK ===
+python "%PROJECT_DIR%\tools\check_memmap.py"
+if errorlevel 1 (
+    echo.
+    echo === MEMORY MAP CHECK FEHLGESCHLAGEN ===
+    exit /b 1
+)
+
 exit /b 0
