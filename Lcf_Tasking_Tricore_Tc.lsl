@@ -453,15 +453,38 @@ derivative tc39
         map not_cached (dest=bus:sri, dest_offset=0xb0030000, reserved, size=64k);
     }
 
-    memory lmuram
+    memory lmuram                       /* 768K -> 704K, T1: top 64K carved
+                                            out into lmuram_shared below */
     {
         mau = 8;
-        size = 768K;
+        size = 704K;
         type = ram;
-        map     cached (dest=bus:sri, dest_offset=0x90040000,           size=768K);
-        map not_cached (dest=bus:sri, dest_offset=0xb0040000, reserved, size=768K);
+        map     cached (dest=bus:sri, dest_offset=0x90040000,           size=704K);
+        map not_cached (dest=bus:sri, dest_offset=0xb0040000, reserved, size=704K);
     }
-    
+
+    /* Cross-core LMU block (docs/MEMORY_PLACEMENT.md), top 64K of the same
+     * physical LMU as lmuram above -- carved out, not overlaid, so the
+     * locator never sees the same physical byte twice (part 3.1). Single
+     * map, non-cached alias only: docs/MEMORY_PLACEMENT.md 3.1 T0 spike
+     * measured that a dual cached/not_cached form (mirroring lmuram's own
+     * shape, cached view reserved) resolves a bare `run_addr = mem:X` group
+     * to the CACHED alias regardless of the `reserved` flag or map
+     * declaration order, and there is no valid map-qualifier syntax to force
+     * the non-cached one (`run_addr = mem:X:not_cached` is ltc E821). This
+     * shared block must never be cacheable (SharedRam.h), so the fix is to
+     * not declare a cached view of it at all: any future attempt to place
+     * something at 0x900f0000-0x900fffff then fails the link, loud, instead
+     * of silently landing cacheable. No group placed here yet (T1) -- this
+     * region is unused until T2. */
+    memory lmuram_shared
+    {
+        mau = 8;
+        size = 64K;
+        type = ram;
+        map not_cached (dest=bus:sri, dest_offset=0xb00f0000, size=64K);
+    }
+
     memory cpu4_dlmu
     {
         mau = 8;
