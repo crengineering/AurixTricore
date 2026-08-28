@@ -114,10 +114,4 @@ extern volatile uint8  g_gnssTxDiscards;
 extern volatile uint32 g_gnssUbxNavPvt;
 extern volatile uint32 g_gnssUbxSyncCount;
 
-#define GNSS_RAW_SNAPSHOT_LEN 64u
-extern volatile uint8  g_gnssRawFirst[GNSS_RAW_SNAPSHOT_LEN];
-extern volatile uint8  g_gnssRawFirstLen;
-extern volatile uint8  g_gnssRawRecent[GNSS_RAW_SNAPSHOT_LEN];
-extern volatile uint8  g_gnssRawRecentHead;
-
 #endif /* GNSSM9N_H */

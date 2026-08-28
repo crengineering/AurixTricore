@@ -151,11 +151,14 @@ static uint8 g_cfg_expected_acks = 0u;
  * bring-up globals -- see docs/CODEMAP.md, "IMU data-ready interrupt".
  * Declared extern in GnssM9N.h (MISRA 8.4).
  *
- * The observed signature is GnssRxBytes climbing steadily with
- * GnssSentences stuck at 0 and GnssErrors also 0 -- a clean, silent link.
- * That is consistent with either an unacknowledged configuration or a
- * receiver emitting NMEA into this UBX-only decoder. These answer both
- * questions directly instead of guessing.
+ * This is what turned "GnssRxBytes climbing, GnssSentences/GnssErrors both
+ * stuck at 0" from a suspected dead decoder into a five-second diagnosis:
+ * config fully acked, NAV-PVT frames decoding, zero drops -- the receiver
+ * just had no satellite fix (see docs/GNSS_UBX.md §9 for the read-out and
+ * how to interpret it). g_gnssRawFirst/g_gnssRawRecent, the one-off raw byte
+ * snapshots from that investigation, earned their keep for a single session
+ * and were removed afterwards -- see git history if the NMEA-vs-UBX question
+ * ever needs re-asking.
  *
  * Each of the following mirrors an existing static that already carries
  * the value, updated with one extra assignment at the point the static
@@ -185,14 +188,6 @@ volatile uint8  g_gnssTxDiscards      = 0u; /* mirrors g_tx_discards: CFG bytes 
 /* What actually decoded. */
 volatile uint32 g_gnssUbxNavPvt       = 0u; /* mirrors g_ubx_navpvt: UBX-NAV-PVT frames decoded */
 volatile uint32 g_gnssUbxSyncCount    = 0u; /* 0xB5 0x62 sync pairs found on the wire, counted whether or not the frame that followed passed its checksum -- answers "is this UBX at all", independent of GnssErrors */
-
-/* Raw wire capture, filled a byte at a time as GnssM9N_read drains the ring
- * buffer -- deliberately NOT in the ISR, to keep that path cheap.
- * 0x24 ('$') as the first byte means NMEA; 0xB5 0x62 means UBX. */
-volatile uint8  g_gnssRawFirst[GNSS_RAW_SNAPSHOT_LEN];  /* first bytes ever received since boot, captured once and never overwritten */
-volatile uint8  g_gnssRawFirstLen   = 0u;               /* valid bytes in g_gnssRawFirst, saturates at GNSS_RAW_SNAPSHOT_LEN */
-volatile uint8  g_gnssRawRecent[GNSS_RAW_SNAPSHOT_LEN]; /* rolling snapshot of the most recent bytes -- oldest at index g_gnssRawRecentHead */
-volatile uint8  g_gnssRawRecentHead = 0u;               /* next write index into g_gnssRawRecent (wraps) */
 /* cppcheck-suppress-end misra-c2012-8.7 */
 
 
@@ -513,6 +508,13 @@ static boolean gnss_ubx_decode (const uint8 *buffer, uint8 buffer_len, uint8 pay
     }
     else
     {
+        /* Every checksum-valid frame counts, regardless of class/id -- the
+         * UBX equivalent of the old "NMEA sentence assembled" count
+         * (GnssSentences, issue #16: it never moved, because nothing
+         * incremented it on a driver that had already moved from NMEA to
+         * UBX). This is deliberately broader than g_ubx_navpvt/g_ubx_ack:
+         * it is the general "the driver is parsing real frames" signal. */
+        g_sentences++;
 
     /* Dispatch on class/id. Anything else is ignored on purpose -- the frame
      * was well formed, we simply do not consume that message. */
@@ -640,9 +642,7 @@ boolean GnssM9N_init(void)
       g_ubx_navpvt      = 0u;
       g_detect_ack      = 0u;
 
-      /* bring-up instrumentation mirrors (issue #16) -- g_gnssRawFirst* is
-       * deliberately NOT reset here: it is meant to survive a warm re-init
-       * and only ever capture the first bytes seen since power-on. */
+      /* bring-up instrumentation mirrors (issue #16) */
       g_gnssCfgSent         = 0u;
       g_gnssCfgExpectedAcks = 0u;
       g_gnssCfgAcked        = 0u;
@@ -717,21 +717,6 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
     while (g_ring_tail != head)
     {
         uint8 byte = g_ring_buffer[g_ring_tail];
-
-        /* Bring-up raw capture (issue #16) -- every byte popped off the ring,
-         * before anything is decoded. Cheap (one store, one wrapping index),
-         * and off the ISR path on purpose (see the declaration comment). */
-        if (g_gnssRawFirstLen < GNSS_RAW_SNAPSHOT_LEN)
-        {
-            g_gnssRawFirst[g_gnssRawFirstLen] = byte;
-            g_gnssRawFirstLen++;
-        }
-        g_gnssRawRecent[g_gnssRawRecentHead] = byte;
-        g_gnssRawRecentHead++;
-        if (g_gnssRawRecentHead >= GNSS_RAW_SNAPSHOT_LEN)
-        {
-            g_gnssRawRecentHead = 0u;
-        }
 
        /*  decode statemachine for NMEA & UBX */
         switch (parse_state)

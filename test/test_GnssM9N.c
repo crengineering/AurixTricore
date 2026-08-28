@@ -115,10 +115,6 @@ static void resetDriverState(void)
     g_gnssTxDiscards      = 0u;
     g_gnssUbxNavPvt       = 0u;
     g_gnssUbxSyncCount    = 0u;
-    g_gnssRawFirstLen     = 0u;
-    g_gnssRawRecentHead   = 0u;
-    memset((void *)g_gnssRawFirst,  0, sizeof(g_gnssRawFirst));
-    memset((void *)g_gnssRawRecent, 0, sizeof(g_gnssRawRecent));
 }
 
 void setUp(void)
@@ -665,7 +661,9 @@ void test_decode_clears_fixok_when_gnssfixok_is_clear(void)
     TEST_ASSERT_EQUAL_UINT8(0u, g_nav.fixOk);
 }
 
-/* An unknown class/id is well formed but not ours -- accepted, not counted. */
+/* An unknown class/id is well formed but not ours -- accepted, not counted
+ * by the class-specific counters, but it IS a complete, checksum-valid UBX
+ * frame, so it counts toward g_sentences (GnssSentences, issue #16). */
 void test_decode_ignores_an_unhandled_message(void)
 {
     uint8 pl[4] = { 0x01u, 0x02u, 0x03u, 0x04u };
@@ -676,6 +674,40 @@ void test_decode_ignores_an_unhandled_message(void)
     TEST_ASSERT_EQUAL_UINT8 (0u, g_ubx_ack);
     TEST_ASSERT_EQUAL_UINT32(0u, g_ubx_nak);
     TEST_ASSERT_EQUAL_UINT32(0u, g_ubx_navpvt);
+    TEST_ASSERT_EQUAL_UINT32(1u, g_sentences);
+}
+
+/* =======================================================================
+ * g_sentences (GnssSentences, issue #16) -- was dead, now counts every
+ * complete, checksum-valid UBX frame, any class.
+ * ======================================================================= */
+
+void test_sentences_counts_every_class_of_valid_frame(void)
+{
+    uint8 pl[92];
+    uint8 f[110];
+    uint8 len;
+
+    TEST_ASSERT_EQUAL(TRUE, gnss_ubx_decode(ACK_BODY, 8u, 2u, &g_nav));
+    TEST_ASSERT_EQUAL_UINT32(1u, g_sentences);
+
+    memset(pl, 0, sizeof(pl));
+    len = buildUbx(f, 0x01u, 0x07u, pl, 92u);
+    TEST_ASSERT_EQUAL(TRUE, gnss_ubx_decode(f, len, 92u, &g_nav));
+    TEST_ASSERT_EQUAL_UINT32(2u, g_sentences);
+}
+
+/* A corrupted checksum must not count -- g_sentences is a health signal, not
+ * a byte counter (that is GnssRxBytes). */
+void test_sentences_does_not_count_a_bad_checksum(void)
+{
+    uint8 bad[8];
+
+    memcpy(bad, ACK_BODY, sizeof(bad));
+    bad[4] = 0x07u;
+
+    TEST_ASSERT_EQUAL(FALSE, gnss_ubx_decode(bad, 8u, 2u, &g_nav));
+    TEST_ASSERT_EQUAL_UINT32(0u, g_sentences);
 }
 
 /* =======================================================================
@@ -768,49 +800,6 @@ void test_sync_count_stays_zero_on_an_nmea_stream(void)
     (void)GnssM9N_read(&sample);
 
     TEST_ASSERT_EQUAL_UINT32(0u, g_gnssUbxSyncCount);
-    TEST_ASSERT_EQUAL_UINT8('$', g_gnssRawFirst[0]);
-}
-
-void test_raw_first_capture_records_bytes_once_and_stops(void)
-{
-    GnssM9N_Sample sample = {0};
-    uint8 blob[80];
-    uint8 i;
-
-    for (i = 0u; i < sizeof(blob); i++) { blob[i] = i; }
-
-    FakeAsclin_pushRxBytes(blob, sizeof(blob));
-    pumpIsr();
-    (void)GnssM9N_read(&sample);
-
-    TEST_ASSERT_EQUAL_UINT8(GNSS_RAW_SNAPSHOT_LEN, g_gnssRawFirstLen);
-    TEST_ASSERT_EQUAL_UINT8(0u,  g_gnssRawFirst[0]);
-    TEST_ASSERT_EQUAL_UINT8(63u, g_gnssRawFirst[63]);
-
-    /* a second, different burst must not touch the first snapshot */
-    FakeAsclin_pushRxBytes(blob, 4u);
-    pumpIsr();
-    (void)GnssM9N_read(&sample);
-    TEST_ASSERT_EQUAL_UINT8(GNSS_RAW_SNAPSHOT_LEN, g_gnssRawFirstLen);
-    TEST_ASSERT_EQUAL_UINT8(0u, g_gnssRawFirst[0]);
-}
-
-void test_raw_recent_wraps_after_snapshot_length(void)
-{
-    GnssM9N_Sample sample = {0};
-    uint8 blob[GNSS_RAW_SNAPSHOT_LEN + 5u];
-    uint8 i;
-
-    for (i = 0u; i < sizeof(blob); i++) { blob[i] = (uint8)(0x80u + i); }
-
-    FakeAsclin_pushRxBytes(blob, sizeof(blob));
-    pumpIsr();
-    (void)GnssM9N_read(&sample);
-
-    /* head wrapped exactly 5 slots past the start */
-    TEST_ASSERT_EQUAL_UINT8(5u, g_gnssRawRecentHead);
-    /* the last 5 bytes overwrote the first 5 -- index 0 holds byte 64 */
-    TEST_ASSERT_EQUAL_UINT8((uint8)(0x80u + GNSS_RAW_SNAPSHOT_LEN), g_gnssRawRecent[0]);
 }
 
 /* =======================================================================
@@ -1067,14 +1056,16 @@ int main(void)
     RUN_TEST(test_decode_clears_fixok_when_gnssfixok_is_clear);
     RUN_TEST(test_decode_ignores_an_unhandled_message);
 
+    /* g_sentences (GnssSentences, issue #16) */
+    RUN_TEST(test_sentences_counts_every_class_of_valid_frame);
+    RUN_TEST(test_sentences_does_not_count_a_bad_checksum);
+
     /* bring-up instrumentation mirrors (issue #16) */
     RUN_TEST(test_cfg_mirrors_track_the_internal_counters);
     RUN_TEST(test_tx_discard_mirror_tracks_the_internal_counter);
     RUN_TEST(test_navpvt_mirror_tracks_the_internal_counter);
     RUN_TEST(test_sync_count_increments_even_when_the_frame_is_garbage);
     RUN_TEST(test_sync_count_stays_zero_on_an_nmea_stream);
-    RUN_TEST(test_raw_first_capture_records_bytes_once_and_stops);
-    RUN_TEST(test_raw_recent_wraps_after_snapshot_length);
 
     /* ISR + ring */
     RUN_TEST(test_isr_moves_fifo_bytes_into_the_ring);
