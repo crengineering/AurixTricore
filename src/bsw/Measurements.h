@@ -82,6 +82,12 @@
  * several SHORT_UPLOADs — AurixGUI already does this for the IMU sub-block.
  * DAQ has room: 8 ODTs x 63 B = 504 B (see XCP_DAQ_MAX_ODTS in Xcp.c).
  */
+/* cppcheck-suppress misra-c2012-2.5 ; deviation: genuinely unused as of T4
+ * (docs/MEMORY_PLACEMENT.md) -- placement moved to the linker (`#pragma
+ * section`, Measurements.c), and Xcp_Data is read-only over XCP so nothing
+ * needs this address in a runtime whitelist the way XCP_CAL_ADDR/
+ * XCP_NVM_ADDR/XCP_GPIO_ADDR/XCP_FUSIONCAL_ADDR are still used in Xcp.c.
+ * Retained deliberately through T5, not deleted here -- see the task list. */
 #define XCP_DATA_ADDR   0x70030000u
 #define XCP_DATA_MAGIC  0x41555258u
 
@@ -178,6 +184,16 @@ typedef struct
 
 } Xcp_Data;
 
+/* Defined (with #pragma section) in Measurements.c -- docs/MEMORY_PLACEMENT.md
+ * T4. Was undeclared here through T3: __at() poisoned cppcheck's parse of
+ * the whole of Measurements.c, so the missing MISRA 8.4 declaration (a
+ * compatible extern must be visible where an external-linkage object is
+ * defined) was itself invisible until #pragma section fixed that. Diagnostics.c
+ * used to carry its own ad hoc `extern volatile Xcp_Data g_xcpData;` for the
+ * same reason -- this header is the one declaration now; Diagnostics.c reaches
+ * it through its existing `#include "Measurements.h"`. */
+extern volatile Xcp_Data g_xcpData;
+
 /* ---------------------------------------------------------------------------
  * Xcp_Fusion — the full navigation state, in its own block.
  *
@@ -251,6 +267,10 @@ typedef struct
  * Total 0xF4 = 244 bytes, leaving 12 before the next slot at 0x70030600.
  * Exceeds XCP MAX_CTO (64), so clients read it in several SHORT_UPLOADs.
  * --------------------------------------------------------------------------- */
+/* cppcheck-suppress misra-c2012-2.5 ; deviation: genuinely unused as of T4
+ * (docs/MEMORY_PLACEMENT.md) -- same reasoning as XCP_DATA_ADDR above:
+ * placement moved to the linker, Xcp_Fusion is read-only over XCP, no
+ * runtime whitelist references this address. Retained through T5. */
 #define XCP_FUSION_ADDR   0x70030500u
 #define XCP_FUSION_MAGIC  0x4E535546u
 

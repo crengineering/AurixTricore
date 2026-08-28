@@ -30,6 +30,11 @@
  * identical from the outside whether the device is silent or the master is
  * wedged -- these separate the two. Sits clear of the other pinned blocks
  * (cal 0x...100, nvm 0x...200, gpio 0x...300). */
+/* cppcheck-suppress misra-c2012-2.5 ; deviation: genuinely unused as of T4
+ * (docs/MEMORY_PLACEMENT.md) -- placement moved to the linker (`#pragma
+ * section`, I2c.c); I2c_Debug is diagnostic-only, never part of Xcp.c's
+ * cal-write whitelist, so nothing else needs this address either.
+ * Retained through T5. */
 #define XCP_I2CDBG_ADDR   0x70030400u
 #define XCP_I2CDBG_MAGIC  0x49324344u   /* "I2CD" */
 

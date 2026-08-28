@@ -17,8 +17,6 @@ volatile Xcp_Cal g_xcpCal;
 #pragma section farbss restore
 #endif
 
-extern volatile Xcp_Data g_xcpData;
-
 #define DIAG_NUM_CHECKS     12u
 #define DIAG_TICK_MS        100u    /* diagnosticsUpdate() call period       */
 #define DIAG_MAX_DEBOUNCE_S 60.0f
