@@ -118,7 +118,11 @@ static uint16                  g_errors      = 0u;
 static volatile uint32         g_bytes       = 0u;
 static uint32                  g_sentences   = 0u;
 static uint16                  g_poll_counter = GNSS_NOT_PRESENT_TICKS;
-static uint8                   g_ring_buf_overflow_counter = 0u;
+/* Non-static (exposed by name to tools/xcp_read.py, no A2L/GUI needed --
+ * issue #16, see the instrumentation block below): a link streaming bytes
+ * with zero framing errors can still be silently dropping them here if the
+ * ring fills faster than GnssM9N_read() drains it. */
+volatile uint8                 g_ring_buf_overflow_counter = 0u;
 static GnssM9N_Nav             g_nav;
 
 static uint8                   g_tx_discards = 0u;
@@ -144,6 +148,44 @@ static uint8 g_ubx_ack = 0u;
  * rather than compared against a literal so adding a key cannot silently
  * invalidate the check. */
 static uint8 g_cfg_expected_acks = 0u;
+
+/* ---------------------------------------------------------------------
+ * Bring-up instrumentation (GitHub issue #16): plain non-static globals,
+ * read by name with tools/xcp_read.py -- no Xcp_Data field (it has none
+ * left), no A2L, no GUI change. Same pattern as ImuInt.c's g_imuDrdy*
+ * bring-up globals -- see docs/CODEMAP.md, "IMU data-ready interrupt".
+ *
+ * The observed signature is GnssRxBytes climbing steadily with
+ * GnssSentences stuck at 0 and GnssErrors also 0 -- a clean, silent link.
+ * That is consistent with either an unacknowledged configuration or a
+ * receiver emitting NMEA into this UBX-only decoder. These answer both
+ * questions directly instead of guessing.
+ *
+ * Each of the following mirrors an existing static that already carries
+ * the value, updated with one extra assignment at the point the static
+ * changes -- the driver's decode/config logic and its existing host tests
+ * (test/test_GnssM9N.c, which reaches the statics directly) are untouched. */
+
+/* Config handshake. */
+volatile uint8  g_gnssCfgSent         = 0u; /* mirrors gsv_cfg_sent: the one-shot CFG-VALSET burst has been transmitted */
+volatile uint8  g_gnssCfgExpectedAcks = 0u; /* mirrors g_cfg_expected_acks: CFG-VALSETs actually queued for TX -- doubles as "how many were sent" */
+volatile uint8  g_gnssCfgAcked        = 0u; /* mirrors g_ubx_ack: UBX-ACK-ACK frames decoded */
+volatile uint32 g_gnssCfgNaked        = 0u; /* mirrors g_ubx_nak: UBX-ACK-NAK frames decoded */
+volatile uint8  g_gnssCfgOk           = 0u; /* mirrors GnssM9N_Sample.cfgOk */
+volatile uint8  g_gnssTxDiscards      = 0u; /* mirrors g_tx_discards: CFG bytes that missed the TX deadline -- if >0, config may never have reached the wire even though g_gnssCfgSent is 1 */
+
+/* What actually decoded. */
+volatile uint32 g_gnssUbxNavPvt       = 0u; /* mirrors g_ubx_navpvt: UBX-NAV-PVT frames decoded */
+volatile uint32 g_gnssUbxSyncCount    = 0u; /* 0xB5 0x62 sync pairs found on the wire, counted whether or not the frame that followed passed its checksum -- answers "is this UBX at all", independent of GnssErrors */
+
+/* Raw wire capture, filled a byte at a time as GnssM9N_read drains the ring
+ * buffer -- deliberately NOT in the ISR, to keep that path cheap.
+ * 0x24 ('$') as the first byte means NMEA; 0xB5 0x62 means UBX. */
+#define GNSS_RAW_SNAPSHOT_LEN 64u
+volatile uint8  g_gnssRawFirst[GNSS_RAW_SNAPSHOT_LEN];  /* first bytes ever received since boot, captured once and never overwritten */
+volatile uint8  g_gnssRawFirstLen   = 0u;               /* valid bytes in g_gnssRawFirst, saturates at GNSS_RAW_SNAPSHOT_LEN */
+volatile uint8  g_gnssRawRecent[GNSS_RAW_SNAPSHOT_LEN]; /* rolling snapshot of the most recent bytes -- oldest at index g_gnssRawRecentHead */
+volatile uint8  g_gnssRawRecentHead = 0u;               /* next write index into g_gnssRawRecent (wraps) */
 
 
 /* local functions */
@@ -244,6 +286,7 @@ static boolean gnss_txByte(uint8 value)
         if ((SysTime_getTicks() - start) > GNSS_TX_DEADLINE_TICKS)
         {
             g_tx_discards++;
+            g_gnssTxDiscards = g_tx_discards;
             discard = TRUE;
         }
     }
@@ -313,6 +356,7 @@ static boolean gnss_sendUbx (uint8 msgClass, uint8 msgId, const uint8 *payload, 
          (msgClass == UBX_CLASS_CFG) )
     {
         g_cfg_expected_acks++;
+        g_gnssCfgExpectedAcks = g_cfg_expected_acks;
     }
     }
 
@@ -469,10 +513,12 @@ static boolean gnss_ubx_decode (const uint8 *buffer, uint8 buffer_len, uint8 pay
         if (buffer[1] == UBX_ID_ACK_ACK)
         {
             g_ubx_ack++;
+            g_gnssCfgAcked = g_ubx_ack;
         }
         else if (buffer[1] == UBX_ID_ACK_NAK)
         {
             g_ubx_nak++;
+            g_gnssCfgNaked = g_ubx_nak;
         }
         else
         {
@@ -487,6 +533,7 @@ static boolean gnss_ubx_decode (const uint8 *buffer, uint8 buffer_len, uint8 pay
         {
             ubx_decode_navPvt(&buffer[UBX_PAYLOAD_OFFSET], Nav);
             g_ubx_navpvt++;
+            g_gnssUbxNavPvt = g_ubx_navpvt;
         }
     }
     else
@@ -585,6 +632,18 @@ boolean GnssM9N_init(void)
       g_ubx_navpvt      = 0u;
       g_detect_ack      = 0u;
 
+      /* bring-up instrumentation mirrors (issue #16) -- g_gnssRawFirst* is
+       * deliberately NOT reset here: it is meant to survive a warm re-init
+       * and only ever capture the first bytes seen since power-on. */
+      g_gnssCfgSent         = 0u;
+      g_gnssCfgExpectedAcks = 0u;
+      g_gnssCfgAcked        = 0u;
+      g_gnssCfgNaked        = 0u;
+      g_gnssCfgOk           = 0u;
+      g_gnssTxDiscards      = 0u;
+      g_gnssUbxNavPvt       = 0u;
+      g_gnssUbxSyncCount    = 0u;
+
       /* navigation solution */
       /* All-zero template, block scope: clears g_nav without memset (which
        * would pull in string.h) and without listing every field. */
@@ -642,6 +701,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
         (void)gnss_cfgValsetU2(1u           , CFG_RATE_NAV);
         (void)gnss_cfgValsetU1(UBX_DYNMODEL_AIR1, CFG_NAVSPG_DYNMODEL);
         gsv_cfg_sent = TRUE;
+        g_gnssCfgSent = 1u;
     }
 
     /* read from ring buffer */
@@ -650,6 +710,20 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
     {
         uint8 byte = g_ring_buffer[g_ring_tail];
 
+        /* Bring-up raw capture (issue #16) -- every byte popped off the ring,
+         * before anything is decoded. Cheap (one store, one wrapping index),
+         * and off the ISR path on purpose (see the declaration comment). */
+        if (g_gnssRawFirstLen < GNSS_RAW_SNAPSHOT_LEN)
+        {
+            g_gnssRawFirst[g_gnssRawFirstLen] = byte;
+            g_gnssRawFirstLen++;
+        }
+        g_gnssRawRecent[g_gnssRawRecentHead] = byte;
+        g_gnssRawRecentHead++;
+        if (g_gnssRawRecentHead >= GNSS_RAW_SNAPSHOT_LEN)
+        {
+            g_gnssRawRecentHead = 0u;
+        }
 
        /*  decode statemachine for NMEA & UBX */
         switch (parse_state)
@@ -660,6 +734,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
                      (byte      == 0x62u) )
                 {
                     parse_state = GNSS_UBX;
+                    g_gnssUbxSyncCount++;
                 }
 
                 break;
@@ -725,6 +800,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
      * FALSE before the send too -- an unconfigured receiver is not "OK". */
     sample->cfgOk      = ((gsv_cfg_sent != FALSE) &&
                           (g_ubx_ack >= g_cfg_expected_acks)) ? 1u : 0u;
+    g_gnssCfgOk        = sample->cfgOk;
     sample->fixOk      = g_nav.fixOk;
     sample->timeOk     = g_nav.timeOk;
     sample->navOk      = g_nav.navOk;
