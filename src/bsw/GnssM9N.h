@@ -96,4 +96,28 @@ typedef enum
 boolean GnssM9N_init(void);
 boolean GnssM9N_read(GnssM9N_Sample *sample);
 
+/* --- bring-up instrumentation (GitHub issue #16), non-static so
+ * tools/xcp_read.py finds them in the map -- no Xcp_Data field, no A2L, no
+ * GUI change (same pattern as ImuInt.c's g_imuDrdy* globals). Declared here
+ * only to satisfy MISRA 8.4 (a compatible declaration must be visible when
+ * an external-linkage object is defined); no other C code reads them --
+ * see the definitions and detail comments in GnssM9N.c. */
+extern volatile uint8  g_ring_buf_overflow_counter;
+
+extern volatile uint8  g_gnssCfgSent;
+extern volatile uint8  g_gnssCfgExpectedAcks;
+extern volatile uint8  g_gnssCfgAcked;
+extern volatile uint32 g_gnssCfgNaked;
+extern volatile uint8  g_gnssCfgOk;
+extern volatile uint8  g_gnssTxDiscards;
+
+extern volatile uint32 g_gnssUbxNavPvt;
+extern volatile uint32 g_gnssUbxSyncCount;
+
+#define GNSS_RAW_SNAPSHOT_LEN 64u
+extern volatile uint8  g_gnssRawFirst[GNSS_RAW_SNAPSHOT_LEN];
+extern volatile uint8  g_gnssRawFirstLen;
+extern volatile uint8  g_gnssRawRecent[GNSS_RAW_SNAPSHOT_LEN];
+extern volatile uint8  g_gnssRawRecentHead;
+
 #endif /* GNSSM9N_H */

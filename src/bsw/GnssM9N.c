@@ -118,11 +118,6 @@ static uint16                  g_errors      = 0u;
 static volatile uint32         g_bytes       = 0u;
 static uint32                  g_sentences   = 0u;
 static uint16                  g_poll_counter = GNSS_NOT_PRESENT_TICKS;
-/* Non-static (exposed by name to tools/xcp_read.py, no A2L/GUI needed --
- * issue #16, see the instrumentation block below): a link streaming bytes
- * with zero framing errors can still be silently dropping them here if the
- * ring fills faster than GnssM9N_read() drains it. */
-volatile uint8                 g_ring_buf_overflow_counter = 0u;
 static GnssM9N_Nav             g_nav;
 
 static uint8                   g_tx_discards = 0u;
@@ -154,6 +149,7 @@ static uint8 g_cfg_expected_acks = 0u;
  * read by name with tools/xcp_read.py -- no Xcp_Data field (it has none
  * left), no A2L, no GUI change. Same pattern as ImuInt.c's g_imuDrdy*
  * bring-up globals -- see docs/CODEMAP.md, "IMU data-ready interrupt".
+ * Declared extern in GnssM9N.h (MISRA 8.4).
  *
  * The observed signature is GnssRxBytes climbing steadily with
  * GnssSentences stuck at 0 and GnssErrors also 0 -- a clean, silent link.
@@ -165,6 +161,18 @@ static uint8 g_cfg_expected_acks = 0u;
  * the value, updated with one extra assignment at the point the static
  * changes -- the driver's decode/config logic and its existing host tests
  * (test/test_GnssM9N.c, which reaches the statics directly) are untouched. */
+
+/* cppcheck-suppress-begin misra-c2012-8.7 ; deviation: read over XCP
+ * SHORT_UPLOAD by raw address (tools/xcp_read.py), never referenced by C
+ * code outside this file -- same class of deviation as ImuInt.c's
+ * g_imuDrdy* block and the Bmp388/Mpu6050 pool drivers (docs/ILLD_NOTES.md,
+ * PeriphDiag.md). */
+
+/* A link streaming bytes with zero framing errors can still be silently
+ * dropping them here if the ring fills faster than GnssM9N_read() drains
+ * it. Formerly a plain static; exposed for the same reason as the rest of
+ * this block. */
+volatile uint8  g_ring_buf_overflow_counter = 0u;
 
 /* Config handshake. */
 volatile uint8  g_gnssCfgSent         = 0u; /* mirrors gsv_cfg_sent: the one-shot CFG-VALSET burst has been transmitted */
@@ -181,11 +189,11 @@ volatile uint32 g_gnssUbxSyncCount    = 0u; /* 0xB5 0x62 sync pairs found on the
 /* Raw wire capture, filled a byte at a time as GnssM9N_read drains the ring
  * buffer -- deliberately NOT in the ISR, to keep that path cheap.
  * 0x24 ('$') as the first byte means NMEA; 0xB5 0x62 means UBX. */
-#define GNSS_RAW_SNAPSHOT_LEN 64u
 volatile uint8  g_gnssRawFirst[GNSS_RAW_SNAPSHOT_LEN];  /* first bytes ever received since boot, captured once and never overwritten */
 volatile uint8  g_gnssRawFirstLen   = 0u;               /* valid bytes in g_gnssRawFirst, saturates at GNSS_RAW_SNAPSHOT_LEN */
 volatile uint8  g_gnssRawRecent[GNSS_RAW_SNAPSHOT_LEN]; /* rolling snapshot of the most recent bytes -- oldest at index g_gnssRawRecentHead */
 volatile uint8  g_gnssRawRecentHead = 0u;               /* next write index into g_gnssRawRecent (wraps) */
+/* cppcheck-suppress-end misra-c2012-8.7 */
 
 
 /* local functions */
