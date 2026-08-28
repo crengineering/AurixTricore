@@ -450,22 +450,22 @@ ASAP2_VERSION 1 61
       PHYS_UNIT "bytes"
     /end MEASUREMENT
 
-    /begin MEASUREMENT GnssSentences "complete NMEA sentences assembled - ~6/s at the 1 Hz default nav rate"
+    /begin MEASUREMENT GnssSentences "complete, checksum-valid UBX frames assembled, any class (ACK, NAV-PVT, ...) -- was dead (never incremented) until issue #16, on a driver that had already moved from NMEA to UBX; rate follows CFG-RATE-NAV plus one ACK per CFG-VALSET at boot"
       ULONG NO_COMPU_METHOD 0 0 0 4294967295
       ECU_ADDRESS 0x700300B4
     /end MEASUREMENT
 
-    /begin MEASUREMENT GnssErrors "ASCLIN framing errors + RX FIFO overflows - must stay 0 on a healthy link"
+    /begin MEASUREMENT GnssErrors "UBX frames whose length the state machine completed but whose checksum failed -- NOT ASCLIN hardware framing errors or FIFO overflow (see g_ring_buf_overflow_counter, not in Xcp_Data, for dropped ring bytes); must stay 0 on a healthy link"
       UWORD NO_COMPU_METHOD 0 0 0 65535
       ECU_ADDRESS 0x700300B8
     /end MEASUREMENT
 
-    /begin MEASUREMENT GnssFixType "fix quality - PHASE B, currently always 0 (no NMEA parser yet)"
+    /begin MEASUREMENT GnssFixType "fix quality from UBX-NAV-PVT (0=no fix, 2=2D, 3=3D, 4=GNSS+DR) -- reads 0 with no satellite visibility (normal indoors); see GnssNavOk for the fusion-ready gate"
       UBYTE NO_COMPU_METHOD 0 0 0 5
       ECU_ADDRESS 0x700300BA
     /end MEASUREMENT
 
-    /begin MEASUREMENT GnssNumSats "satellites used in the solution - PHASE B, currently always 0"
+    /begin MEASUREMENT GnssNumSats "satellites used in the solution, from UBX-NAV-PVT -- reads 0 with no satellite visibility (normal indoors)"
       UBYTE NO_COMPU_METHOD 0 0 0 32
       ECU_ADDRESS 0x700300BB
     /end MEASUREMENT

@@ -105,6 +105,16 @@ static void resetDriverState(void)
     last_byte                   = 0u;
     memset(&g_nav, 0, sizeof(g_nav));
     memset(g_buffer, 0, sizeof(g_buffer));
+
+    /* bring-up instrumentation mirrors (issue #16) */
+    g_gnssCfgSent         = 0u;
+    g_gnssCfgExpectedAcks = 0u;
+    g_gnssCfgAcked        = 0u;
+    g_gnssCfgNaked        = 0u;
+    g_gnssCfgOk           = 0u;
+    g_gnssTxDiscards      = 0u;
+    g_gnssUbxNavPvt       = 0u;
+    g_gnssUbxSyncCount    = 0u;
 }
 
 void setUp(void)
@@ -651,7 +661,9 @@ void test_decode_clears_fixok_when_gnssfixok_is_clear(void)
     TEST_ASSERT_EQUAL_UINT8(0u, g_nav.fixOk);
 }
 
-/* An unknown class/id is well formed but not ours -- accepted, not counted. */
+/* An unknown class/id is well formed but not ours -- accepted, not counted
+ * by the class-specific counters, but it IS a complete, checksum-valid UBX
+ * frame, so it counts toward g_sentences (GnssSentences, issue #16). */
 void test_decode_ignores_an_unhandled_message(void)
 {
     uint8 pl[4] = { 0x01u, 0x02u, 0x03u, 0x04u };
@@ -662,6 +674,132 @@ void test_decode_ignores_an_unhandled_message(void)
     TEST_ASSERT_EQUAL_UINT8 (0u, g_ubx_ack);
     TEST_ASSERT_EQUAL_UINT32(0u, g_ubx_nak);
     TEST_ASSERT_EQUAL_UINT32(0u, g_ubx_navpvt);
+    TEST_ASSERT_EQUAL_UINT32(1u, g_sentences);
+}
+
+/* =======================================================================
+ * g_sentences (GnssSentences, issue #16) -- was dead, now counts every
+ * complete, checksum-valid UBX frame, any class.
+ * ======================================================================= */
+
+void test_sentences_counts_every_class_of_valid_frame(void)
+{
+    uint8 pl[92];
+    uint8 f[110];
+    uint8 len;
+
+    TEST_ASSERT_EQUAL(TRUE, gnss_ubx_decode(ACK_BODY, 8u, 2u, &g_nav));
+    TEST_ASSERT_EQUAL_UINT32(1u, g_sentences);
+
+    memset(pl, 0, sizeof(pl));
+    len = buildUbx(f, 0x01u, 0x07u, pl, 92u);
+    TEST_ASSERT_EQUAL(TRUE, gnss_ubx_decode(f, len, 92u, &g_nav));
+    TEST_ASSERT_EQUAL_UINT32(2u, g_sentences);
+}
+
+/* A corrupted checksum must not count -- g_sentences is a health signal, not
+ * a byte counter (that is GnssRxBytes). */
+void test_sentences_does_not_count_a_bad_checksum(void)
+{
+    uint8 bad[8];
+
+    memcpy(bad, ACK_BODY, sizeof(bad));
+    bad[4] = 0x07u;
+
+    TEST_ASSERT_EQUAL(FALSE, gnss_ubx_decode(bad, 8u, 2u, &g_nav));
+    TEST_ASSERT_EQUAL_UINT32(0u, g_sentences);
+}
+
+/* =======================================================================
+ * bring-up instrumentation mirrors (issue #16)
+ * ======================================================================= */
+
+/* Each mirror must track its source static exactly -- a mirror that lags
+ * or races the value it reflects would be worse than not having it, since
+ * it would misreport what the receiver actually did. */
+void test_cfg_mirrors_track_the_internal_counters(void)
+{
+    GnssM9N_Sample sample = {0};
+    uint16         i;
+
+    /* Same bring-up sequence as test_cfgok_is_false_until_every_command_is_acked:
+     * presence needs two GnssM9N_read() calls before the one-shot config
+     * burst goes out (GnssM9N_timeout()'s first call always reports absent). */
+    pushUbxFrame(ACK_BODY, 8u);
+    pumpIsr();
+    for (i = 0u; i < 3u; i++) { (void)GnssM9N_read(&sample); }
+
+    TEST_ASSERT_EQUAL_UINT8 (1u,                  g_gnssCfgSent);
+    TEST_ASSERT_EQUAL_UINT8 (g_cfg_expected_acks, g_gnssCfgExpectedAcks);
+    TEST_ASSERT_EQUAL_UINT8 (g_ubx_ack,           g_gnssCfgAcked);
+    TEST_ASSERT_EQUAL_UINT32(g_ubx_nak,           g_gnssCfgNaked);
+    TEST_ASSERT_EQUAL_UINT8 (sample.cfgOk,        g_gnssCfgOk);
+    TEST_ASSERT_TRUE(g_gnssCfgExpectedAcks > 1u);
+    TEST_ASSERT_EQUAL_UINT8(0u, g_gnssCfgOk);   /* only one ACK so far */
+
+    /* drain the remaining ACKs */
+    while (g_ubx_ack < g_cfg_expected_acks)
+    {
+        pushUbxFrame(ACK_BODY, 8u);
+        pumpIsr();
+        (void)GnssM9N_read(&sample);
+    }
+    TEST_ASSERT_EQUAL_UINT8(1u, g_gnssCfgOk);
+    TEST_ASSERT_EQUAL_UINT8(g_ubx_ack, g_gnssCfgAcked);
+}
+
+void test_tx_discard_mirror_tracks_the_internal_counter(void)
+{
+    FakeStm_setAutoAdvance(GNSS_TX_DEADLINE_TICKS / 4u);
+    FakeAsclin_setTxBlocked(TRUE);
+
+    (void)gnss_txByte(0x42u);
+
+    TEST_ASSERT_TRUE(g_tx_discards > 0u);
+    TEST_ASSERT_EQUAL_UINT8(g_tx_discards, g_gnssTxDiscards);
+}
+
+void test_navpvt_mirror_tracks_the_internal_counter(void)
+{
+    uint8 pl[92];
+    uint8 f[110];
+    uint8 len;
+
+    memset(pl, 0, sizeof(pl));
+    len = buildUbx(f, 0x01u, 0x07u, pl, 92u);
+
+    TEST_ASSERT_EQUAL(TRUE, gnss_ubx_decode(f, len, 92u, &g_nav));
+    TEST_ASSERT_EQUAL_UINT32(1u, g_gnssUbxNavPvt);
+    TEST_ASSERT_EQUAL_UINT32(g_ubx_navpvt, g_gnssUbxNavPvt);
+}
+
+/* Answers "is this UBX at all" on its own: a sync pair increments the count
+ * even when the frame that follows is garbage and never decodes. */
+void test_sync_count_increments_even_when_the_frame_is_garbage(void)
+{
+    GnssM9N_Sample sample = {0};
+    uint8 junk[8] = { 0xB5u, 0x62u, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0x00u, 0x00u };
+
+    FakeAsclin_pushRxBytes(junk, sizeof(junk));
+    pumpIsr();
+    (void)GnssM9N_read(&sample);
+
+    TEST_ASSERT_EQUAL_UINT32(1u, g_gnssUbxSyncCount);
+}
+
+/* An NMEA-only stream (leading '$', no 0xB5 0x62 ever) must leave the sync
+ * counter at zero -- this is the exact signature that would explain
+ * GnssSentences stuck at 0 with GnssErrors also 0. */
+void test_sync_count_stays_zero_on_an_nmea_stream(void)
+{
+    GnssM9N_Sample sample = {0};
+    const uint8 nmea[] = "$GNGGA,120000.00,4807.038,N*47\r\n";
+
+    FakeAsclin_pushRxBytes(nmea, (uint32)(sizeof(nmea) - 1u));
+    pumpIsr();
+    (void)GnssM9N_read(&sample);
+
+    TEST_ASSERT_EQUAL_UINT32(0u, g_gnssUbxSyncCount);
 }
 
 /* =======================================================================
@@ -917,6 +1055,17 @@ int main(void)
     RUN_TEST(test_decode_clears_fixok_when_llh_is_invalid);
     RUN_TEST(test_decode_clears_fixok_when_gnssfixok_is_clear);
     RUN_TEST(test_decode_ignores_an_unhandled_message);
+
+    /* g_sentences (GnssSentences, issue #16) */
+    RUN_TEST(test_sentences_counts_every_class_of_valid_frame);
+    RUN_TEST(test_sentences_does_not_count_a_bad_checksum);
+
+    /* bring-up instrumentation mirrors (issue #16) */
+    RUN_TEST(test_cfg_mirrors_track_the_internal_counters);
+    RUN_TEST(test_tx_discard_mirror_tracks_the_internal_counter);
+    RUN_TEST(test_navpvt_mirror_tracks_the_internal_counter);
+    RUN_TEST(test_sync_count_increments_even_when_the_frame_is_garbage);
+    RUN_TEST(test_sync_count_stays_zero_on_an_nmea_stream);
 
     /* ISR + ring */
     RUN_TEST(test_isr_moves_fifo_bytes_into_the_ring);

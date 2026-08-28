@@ -350,8 +350,9 @@ software FIFO and is useless here; `IfxAsclin_Status_noError = 1`) — see
 Trust this note's silence only within the list above.
 
 - **NMEA message definitions** (§2.7) — GGA/RMC/VTG/GSA/GSV field tables. The
-  current decoder only uses GGA fields 6 and 7; if NMEA parsing is extended,
-  extract §2.7 rather than guessing.
+  driver has no NMEA decoder at all (removed 2026-08-21 when UBX-NAV-PVT
+  replaced $GNGGA — see `test/test_GnssM9N.c`'s file header); if NMEA parsing
+  is ever added back, extract §2.7 rather than guessing.
 - **CFG-VALGET / CFG-VALDEL payloads** (§3.10.26–27) — class/ids recorded above,
   layouts not extracted. VALGET is worth having for read-back verification.
 - **CFG-VALSET with transactions** (§3.10.28.2, version `0x01`) — only the
@@ -365,7 +366,48 @@ Trust this note's silence only within the list above.
 
 ---
 
-## 9. See also
+## 9. Health-check recipe (bring-up instrumentation, issue #16)
+
+`GnssRxBytes` climbing with `GnssSentences`/`GnssErrors` stuck at 0 looks like
+a dead decoder. It is not, by itself — it is also exactly what a healthy link
+with **no satellite fix** looks like, because `GnssSentences` was dead
+(**never incremented**, on a driver that had already moved from NMEA to UBX)
+until this instrumentation shipped. That confusion cost a full round trip on
+2026-08-28: the diagnosis was corrected only after reading the globals below,
+which showed config fully acknowledged, 176 NAV-PVT frames decoded, zero
+drops — the receiver was simply indoors with `numSats = 0`. Read these first,
+before suspecting the decoder or the receiver's configuration.
+
+```
+python tools/xcp_read.py g_gnssCfgSent g_gnssCfgExpectedAcks g_gnssCfgAcked \
+    g_gnssCfgNaked g_gnssCfgOk g_gnssTxDiscards g_gnssUbxNavPvt \
+    g_gnssUbxSyncCount g_ring_buf_overflow_counter GnssSentences GnssErrors \
+    GnssFixType GnssNumSats
+```
+
+All non-static, so no A2L/GUI change is ever needed to add more of these —
+see `src/bsw/GnssM9N.h` and `docs/CODEMAP.md` "IMU data-ready interrupt" for
+the pattern. `GnssSentences`/`GnssErrors`/`GnssFixType`/`GnssNumSats` are
+`Xcp_Data` fields (readable by name here too, or in the GUI); the `g_gnss*`
+ones are the driver's own internal state, mirrored so `tools/xcp_read.py`
+can see them without a header/A2L change.
+
+| Reading | Means |
+|---|---|
+| `g_gnssCfgSent == 0` | the one-shot CFG-VALSET burst never ran — presence was never asserted (check `GnssRxBytes`/the timeout logic, not the decoder) |
+| `g_gnssCfgSent == 1`, `g_gnssTxDiscards > 0` | TX FIFO never drained within the deadline — config bytes likely never reached the receiver at all |
+| `g_gnssCfgExpectedAcks > 0`, `g_gnssCfgAcked == 0`, `g_gnssCfgNaked == 0` | config was sent but the receiver never replied (wrong baud, wrong port, or it is not listening) |
+| `g_gnssCfgNaked > 0` | receiver is alive and replying but rejecting our keys (wrong key ID or protocol version — see §5) |
+| `g_gnssCfgOk == 1` | every CFG-VALSET we sent was acknowledged — configuration is not the problem |
+| `g_gnssUbxSyncCount == 0` after bytes have arrived | no `0xB5 0x62` ever seen — the receiver is very likely emitting NMEA, not UBX (§3 turns it off; check `CFG_UART1OUTPROT_NMEA` actually landed, i.e. `g_gnssCfgOk`) |
+| `g_gnssUbxSyncCount > 0`, `GnssErrors > 0`, `GnssSentences` low relative to it | frames are being found but failing checksum — a wiring/noise problem, not a config or logic one |
+| `g_gnssUbxNavPvt > 0` | NAV-PVT is decoding. **Check `GnssFixType`/`GnssNumSats` before concluding anything is wrong**: 0/0 with no antenna view (indoors, under a roof) is the receiver working correctly, not a fault. `GnssNumSats = 12` was observed outdoors on 2026-08-18 — take the board outside before diagnosing this further |
+| `g_ring_buf_overflow_counter > 0` | the software ring is overflowing — bytes are being silently dropped, independent of `GnssErrors` (which only counts frames that were fully assembled and then failed checksum) |
+| `GnssSentences` climbing, `GnssErrors == 0` | the general "the driver is parsing real UBX frames" signal — counts every checksum-valid frame of any class, not just NAV-PVT |
+
+---
+
+## 10. See also
 
 - `docs/PINNING.md` §2.7 — ASCLIN4 pins, the 1 kΩ/2 kΩ divider on P22.5, supply
 - `docs/ILLD_NOTES.md` — ASCLIN driver traps

@@ -269,25 +269,25 @@
     },
     "gnsssentences": {
       "name": "GnssSentences",
-      "desc": "complete NMEA sentences assembled - ~6/s at the 1 Hz default nav rate",
+      "desc": "complete, checksum-valid UBX frames assembled, any class (ACK, NAV-PVT, ...) -- was dead (never incremented) until issue #16, on a driver that had already moved from NMEA to UBX; rate follows CFG-RATE-NAV plus one ACK per CFG-VALSET at boot",
       "lo": "0",
       "hi": "4294967295"
     },
     "gnsserrors": {
       "name": "GnssErrors",
-      "desc": "ASCLIN framing errors + RX FIFO overflows - must stay 0 on a healthy link",
+      "desc": "UBX frames whose length the state machine completed but whose checksum failed -- NOT ASCLIN hardware framing errors or FIFO overflow (see g_ring_buf_overflow_counter, not in Xcp_Data, for dropped ring bytes); must stay 0 on a healthy link",
       "lo": "0",
       "hi": "65535"
     },
     "gnssfixType": {
       "name": "GnssFixType",
-      "desc": "fix quality - PHASE B, currently always 0 (no NMEA parser yet)",
+      "desc": "fix quality from UBX-NAV-PVT (0=no fix, 2=2D, 3=3D, 4=GNSS+DR) -- reads 0 with no satellite visibility (normal indoors); see GnssNavOk for the fusion-ready gate",
       "lo": "0",
       "hi": "5"
     },
     "gnssnumSats": {
       "name": "GnssNumSats",
-      "desc": "satellites used in the solution - PHASE B, currently always 0",
+      "desc": "satellites used in the solution, from UBX-NAV-PVT -- reads 0 with no satellite visibility (normal indoors)",
       "lo": "0",
       "hi": "32"
     },

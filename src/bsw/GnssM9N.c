@@ -118,7 +118,6 @@ static uint16                  g_errors      = 0u;
 static volatile uint32         g_bytes       = 0u;
 static uint32                  g_sentences   = 0u;
 static uint16                  g_poll_counter = GNSS_NOT_PRESENT_TICKS;
-static uint8                   g_ring_buf_overflow_counter = 0u;
 static GnssM9N_Nav             g_nav;
 
 static uint8                   g_tx_discards = 0u;
@@ -144,6 +143,52 @@ static uint8 g_ubx_ack = 0u;
  * rather than compared against a literal so adding a key cannot silently
  * invalidate the check. */
 static uint8 g_cfg_expected_acks = 0u;
+
+/* ---------------------------------------------------------------------
+ * Bring-up instrumentation (GitHub issue #16): plain non-static globals,
+ * read by name with tools/xcp_read.py -- no Xcp_Data field (it has none
+ * left), no A2L, no GUI change. Same pattern as ImuInt.c's g_imuDrdy*
+ * bring-up globals -- see docs/CODEMAP.md, "IMU data-ready interrupt".
+ * Declared extern in GnssM9N.h (MISRA 8.4).
+ *
+ * This is what turned "GnssRxBytes climbing, GnssSentences/GnssErrors both
+ * stuck at 0" from a suspected dead decoder into a five-second diagnosis:
+ * config fully acked, NAV-PVT frames decoding, zero drops -- the receiver
+ * just had no satellite fix (see docs/GNSS_UBX.md §9 for the read-out and
+ * how to interpret it). g_gnssRawFirst/g_gnssRawRecent, the one-off raw byte
+ * snapshots from that investigation, earned their keep for a single session
+ * and were removed afterwards -- see git history if the NMEA-vs-UBX question
+ * ever needs re-asking.
+ *
+ * Each of the following mirrors an existing static that already carries
+ * the value, updated with one extra assignment at the point the static
+ * changes -- the driver's decode/config logic and its existing host tests
+ * (test/test_GnssM9N.c, which reaches the statics directly) are untouched. */
+
+/* cppcheck-suppress-begin misra-c2012-8.7 ; deviation: read over XCP
+ * SHORT_UPLOAD by raw address (tools/xcp_read.py), never referenced by C
+ * code outside this file -- same class of deviation as ImuInt.c's
+ * g_imuDrdy* block and the Bmp388/Mpu6050 pool drivers (docs/ILLD_NOTES.md,
+ * PeriphDiag.md). */
+
+/* A link streaming bytes with zero framing errors can still be silently
+ * dropping them here if the ring fills faster than GnssM9N_read() drains
+ * it. Formerly a plain static; exposed for the same reason as the rest of
+ * this block. */
+volatile uint8  g_ring_buf_overflow_counter = 0u;
+
+/* Config handshake. */
+volatile uint8  g_gnssCfgSent         = 0u; /* mirrors gsv_cfg_sent: the one-shot CFG-VALSET burst has been transmitted */
+volatile uint8  g_gnssCfgExpectedAcks = 0u; /* mirrors g_cfg_expected_acks: CFG-VALSETs actually queued for TX -- doubles as "how many were sent" */
+volatile uint8  g_gnssCfgAcked        = 0u; /* mirrors g_ubx_ack: UBX-ACK-ACK frames decoded */
+volatile uint32 g_gnssCfgNaked        = 0u; /* mirrors g_ubx_nak: UBX-ACK-NAK frames decoded */
+volatile uint8  g_gnssCfgOk           = 0u; /* mirrors GnssM9N_Sample.cfgOk */
+volatile uint8  g_gnssTxDiscards      = 0u; /* mirrors g_tx_discards: CFG bytes that missed the TX deadline -- if >0, config may never have reached the wire even though g_gnssCfgSent is 1 */
+
+/* What actually decoded. */
+volatile uint32 g_gnssUbxNavPvt       = 0u; /* mirrors g_ubx_navpvt: UBX-NAV-PVT frames decoded */
+volatile uint32 g_gnssUbxSyncCount    = 0u; /* 0xB5 0x62 sync pairs found on the wire, counted whether or not the frame that followed passed its checksum -- answers "is this UBX at all", independent of GnssErrors */
+/* cppcheck-suppress-end misra-c2012-8.7 */
 
 
 /* local functions */
@@ -244,6 +289,7 @@ static boolean gnss_txByte(uint8 value)
         if ((SysTime_getTicks() - start) > GNSS_TX_DEADLINE_TICKS)
         {
             g_tx_discards++;
+            g_gnssTxDiscards = g_tx_discards;
             discard = TRUE;
         }
     }
@@ -313,6 +359,7 @@ static boolean gnss_sendUbx (uint8 msgClass, uint8 msgId, const uint8 *payload, 
          (msgClass == UBX_CLASS_CFG) )
     {
         g_cfg_expected_acks++;
+        g_gnssCfgExpectedAcks = g_cfg_expected_acks;
     }
     }
 
@@ -461,6 +508,13 @@ static boolean gnss_ubx_decode (const uint8 *buffer, uint8 buffer_len, uint8 pay
     }
     else
     {
+        /* Every checksum-valid frame counts, regardless of class/id -- the
+         * UBX equivalent of the old "NMEA sentence assembled" count
+         * (GnssSentences, issue #16: it never moved, because nothing
+         * incremented it on a driver that had already moved from NMEA to
+         * UBX). This is deliberately broader than g_ubx_navpvt/g_ubx_ack:
+         * it is the general "the driver is parsing real frames" signal. */
+        g_sentences++;
 
     /* Dispatch on class/id. Anything else is ignored on purpose -- the frame
      * was well formed, we simply do not consume that message. */
@@ -469,10 +523,12 @@ static boolean gnss_ubx_decode (const uint8 *buffer, uint8 buffer_len, uint8 pay
         if (buffer[1] == UBX_ID_ACK_ACK)
         {
             g_ubx_ack++;
+            g_gnssCfgAcked = g_ubx_ack;
         }
         else if (buffer[1] == UBX_ID_ACK_NAK)
         {
             g_ubx_nak++;
+            g_gnssCfgNaked = g_ubx_nak;
         }
         else
         {
@@ -487,6 +543,7 @@ static boolean gnss_ubx_decode (const uint8 *buffer, uint8 buffer_len, uint8 pay
         {
             ubx_decode_navPvt(&buffer[UBX_PAYLOAD_OFFSET], Nav);
             g_ubx_navpvt++;
+            g_gnssUbxNavPvt = g_ubx_navpvt;
         }
     }
     else
@@ -585,6 +642,16 @@ boolean GnssM9N_init(void)
       g_ubx_navpvt      = 0u;
       g_detect_ack      = 0u;
 
+      /* bring-up instrumentation mirrors (issue #16) */
+      g_gnssCfgSent         = 0u;
+      g_gnssCfgExpectedAcks = 0u;
+      g_gnssCfgAcked        = 0u;
+      g_gnssCfgNaked        = 0u;
+      g_gnssCfgOk           = 0u;
+      g_gnssTxDiscards      = 0u;
+      g_gnssUbxNavPvt       = 0u;
+      g_gnssUbxSyncCount    = 0u;
+
       /* navigation solution */
       /* All-zero template, block scope: clears g_nav without memset (which
        * would pull in string.h) and without listing every field. */
@@ -642,6 +709,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
         (void)gnss_cfgValsetU2(1u           , CFG_RATE_NAV);
         (void)gnss_cfgValsetU1(UBX_DYNMODEL_AIR1, CFG_NAVSPG_DYNMODEL);
         gsv_cfg_sent = TRUE;
+        g_gnssCfgSent = 1u;
     }
 
     /* read from ring buffer */
@@ -649,7 +717,6 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
     while (g_ring_tail != head)
     {
         uint8 byte = g_ring_buffer[g_ring_tail];
-
 
        /*  decode statemachine for NMEA & UBX */
         switch (parse_state)
@@ -660,6 +727,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
                      (byte      == 0x62u) )
                 {
                     parse_state = GNSS_UBX;
+                    g_gnssUbxSyncCount++;
                 }
 
                 break;
@@ -725,6 +793,7 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
      * FALSE before the send too -- an unconfigured receiver is not "OK". */
     sample->cfgOk      = ((gsv_cfg_sent != FALSE) &&
                           (g_ubx_ack >= g_cfg_expected_acks)) ? 1u : 0u;
+    g_gnssCfgOk        = sample->cfgOk;
     sample->fixOk      = g_nav.fixOk;
     sample->timeOk     = g_nav.timeOk;
     sample->navOk      = g_nav.navOk;
