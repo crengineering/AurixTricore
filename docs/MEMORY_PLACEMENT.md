@@ -836,4 +836,42 @@ would otherwise have to emit. **Could not confirm the exact rule ID
 locally** (no `addons/misra.py` on this machine, the same local-cppcheck
 gap noted throughout this migration) — CI is the authority, as always; if
 it names a different rule, the suppression gets corrected to match, not
-guessed at twice.
+guessed at twice. **Confirmed on CI:** `misra.yml` (run `33160854101`)
+reported 216 findings, all covered by the baseline — zero new findings
+from either generated file.
+
+**This guard is enforced locally, at build time, not by CI — and cannot
+currently be otherwise.** `misra.yml` runs cppcheck (not TASKING);
+`unit_tests.yml` builds the host tests with gcc against fakes, never
+touching real firmware headers; `a2l.yml` runs `gen_a2l.py`, a pure text
+generator. None of the three invokes `ctc`. The TASKING compiler itself
+enforces this: it refuses to run outside the ADS IDE at all (`ctc F104:
+protection error: License does not support running as standalone`,
+hit directly while probing `_Static_assert` above) — no license for a
+headless CI runner, so a real TASKING compile in CI is not available
+without new licensing infrastructure this task does not have. Anyone
+assuming a green `misra.yml`/`unit_tests.yml`/`a2l.yml` on a PR means the
+struct layout was compiler-checked would be wrong: it means the *offline*
+checks passed. Only a local `build.bat` run compiles `LayoutAssert.c` and
+proves the layout.
+
+**And a local build alone was not enough — closed after Chris's review.**
+`amk`'s `.d`-based dependency tracking is the same unreliable mechanism
+`build.bat`'s own header comment already warns about (`amk` not reliably
+recompiling a `.c` file when only an included header changed); it was
+observed failing here specifically. With `LayoutAssert.c`'s old
+`.o`/`.src`/`.d` left in place from a previous build, changing a struct
+field and running `build.bat` reported `0 errors` on the *first* build —
+`amk` had not recompiled `LayoutAssert.c`, so the guard did not run in the
+exact scenario it exists for, and only fired once those three files were
+deleted by hand. Fix: `build.bat` now unconditionally deletes
+`LayoutAssert.{o,d,src}` before every build (`build.bat`, before the
+existing "delete old artifact" step), forcing that one TU to recompile
+every time regardless of what `amk`'s dependency tracking decides — cost
+measured well under 1 s against a ~6 s incremental build. Verified the
+same way as the perturbation test above, but this time *without* deleting
+anything by hand first: plain `build.bat` (no `clean` argument, stale
+`LayoutAssert.{o,d,src}` from a prior successful build still present)
+correctly recompiled `LayoutAssert.c` and failed with 45 errors, first one
+again at `layout_assert_Xcp_Data_accelX_offset`; reverted, plain
+`build.bat` again, clean, `check_memmap: OK`.

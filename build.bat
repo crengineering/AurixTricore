@@ -53,6 +53,23 @@ if errorlevel 1 (
 rem --- delete old artifact so a skipped build cannot look successful ---
 if exist "%ELF%" del "%ELF%"
 
+rem --- force LayoutAssert.c to recompile on every build, unconditionally ---
+rem docs/MEMORY_PLACEMENT.md part 13, the struct-offset guard: LayoutAssert.c
+rem compiles LayoutAssert_gen.h, ~170 compile-time offsetof()/sizeof() checks
+rem against every XCP struct. Its only trigger is one #include, so amk's
+rem normal .d-based dependency tracking is exactly the mechanism this file
+rem already documents as unreliable (line 11 above) -- and it was observed
+rem unreliable here specifically: editing a struct field with LayoutAssert's
+rem old .o/.src/.d left in place produced "0 errors" on the FIRST build,
+rem because amk did not recompile it, so the guard silently did not run in
+rem the one scenario it exists for. DO NOT remove this as "redundant with
+rem incremental build" -- it is the fix for that exact failure, and it is
+rem three files, not a clean build: measured well under 1 s against a ~6 s
+rem incremental build.
+for %%F in (o d src) do (
+    if exist "%BUILD_DIR%\src\bsw\LayoutAssert.%%F" del "%BUILD_DIR%\src\bsw\LayoutAssert.%%F"
+)
+
 echo === BUILD ===
 "%ADS%\AURIX-studioc.exe" --launcher.suppressErrors -nosplash ^
   -data "%WORKSPACE%" ^
