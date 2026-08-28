@@ -5,10 +5,17 @@
 #include "Uart.h"
 
 /* Calibration block at a fixed address so XCP masters can read/write it
- * without the map file. The XCP slave only permits writes inside this block. */
-volatile Xcp_Cal g_xcpCal __at(XCP_CAL_ADDR);
-
-extern volatile Xcp_Data g_xcpData;
+ * without the map file (docs/MEMORY_PLACEMENT.md T4: `#pragma section`, an
+ * absolute group at the unchanged LCF_XCP_CAL_START literal, not `__at()`).
+ * The XCP slave only permits writes inside this block. Guarded by `#if
+ * defined(__TASKING__)` -- see SharedRam.c for why (GCC -Werror). */
+#if defined(__TASKING__)
+#pragma section farbss "xcp_cal"
+#endif
+volatile Xcp_Cal g_xcpCal;
+#if defined(__TASKING__)
+#pragma section farbss restore
+#endif
 
 #define DIAG_NUM_CHECKS     12u
 #define DIAG_TICK_MS        100u    /* diagnosticsUpdate() call period       */

@@ -2,11 +2,14 @@
  * \file NavState.c
  * \brief NavState publish/get protocol -- see NavState.h.
  *
- * g_navState itself is defined (with __at()) in NavStatePlace.c, not here --
- * see that file for why mixing the placement with this file's logic broke
- * cppcheck's misra addon for every g_navState.field access below. This file
- * only ever sees g_navState through NavState.h's plain `extern` declaration,
- * so its symbol table is exactly as ordinary as any other BSW file's.
+ * g_navState itself is defined (with #pragma section) in SharedRam.c, not
+ * here -- docs/MEMORY_PLACEMENT.md T3 (formerly NavStatePlace.c and __at(),
+ * split out from this file after mixing the two broke cppcheck's misra
+ * addon for every g_navState.field access below; #pragma section has no
+ * such restriction, but the object still lives with its five LMU siblings
+ * rather than back in this file). This file only ever sees g_navState
+ * through NavState.h's plain `extern` declaration, so its symbol table is
+ * exactly as ordinary as any other BSW file's.
  *********************************************************************************************************************/
 #include "NavState.h"
 #include "SharedRam.h"

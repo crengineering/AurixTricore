@@ -9,6 +9,14 @@ Usage:
     <power-cycle or reset the board>
     python tools/nvm_test.py verify    # NVM marker survived, cal marker not
     python tools/nvm_test.py restore   # DFLT + SAVE: persist the defaults again
+
+⚠️ Between `save` and `verify` the board must be RESET, not RE-FLASHED with
+`flash.bat` -- that script passes `-erase on`, which wipes DFLASH and takes
+the record you just wrote with it, so `verify` fails for that reason alone
+on freshly-erased flash (found doing this, docs/MEMORY_PLACEMENT.md T5). A
+reset that does NOT erase:
+    AURIXFlasher.exe -hex <hex> -erase off -prog off -ver off
+(connects by reset&halt, starts by reset, no programming step -- ~450 ms).
 """
 import struct
 import sys

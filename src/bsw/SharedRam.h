@@ -32,17 +32,29 @@
  * the .lsl itself) -- if that ever changes, docs/CODEMAP.md §3 is where the
  * collision risk gets caught.
  *
- * Objects are placed here with the TASKING `__at()` extension, the same house
- * style as every XCP block (Measurements.c:23). Each `__at()` block must be
- * ALONE in its translation unit: cppcheck cannot parse `__at(ADDR)` at all,
- * it merely tolerates the FIRST such definition in a TU as a (harmless)
- * parse error and trips on a second one in the same file
- * (Measurements.c:28-36). SharedRam.c therefore holds ONLY the `__at()`
- * definitions for objects placed at SHARED_LMU_ADDR and nothing else -- no
- * logic. A later object that also needs `__at()` here (NavState, T10; the
- * three input latches and the DRDY edge handoff, T12/T15) gets its OWN .c
- * file for the same reason, at its own fixed offset in this block -- see
- * docs/CODEMAP.md §3 for the full occupant list and their addresses.
+ * Objects were originally placed here with the TASKING `__at()` extension,
+ * the same house style every XCP block used too (Measurements.c and
+ * friends) until docs/MEMORY_PLACEMENT.md T4 moved those onto the same
+ * `#pragma section` mechanism, and T5 deleted the last `XCP_*_ADDR` macro --
+ * `__at()` is gone from this entire tree now, not just this block.
+ * `__at()` blocks had to be ALONE in their translation unit: cppcheck cannot
+ * parse `__at(ADDR)` at all, and -- discovered only once this actually
+ * mattered -- its recovery from that syntax error discards the symbol table
+ * for the REST of the file too, not just the `__at()` line, so a shared TU
+ * left every later field access on every object in it unresolved to
+ * cppcheck's misra addon ("misra-config: Variable 'X' is unknown"). That is
+ * why NavState (T10), the three input latches (T12) and the DRDY edge
+ * handoff (T15) each used to get their own `.c` file.
+ *
+ * As of T3 (docs/MEMORY_PLACEMENT.md), all six objects in this block are
+ * `#pragma section farbss "shared_lmu.<name>"` into the linker-managed
+ * `shared_lmu` group (Lcf_Tasking_Tricore_Tc.lsl) instead -- `#pragma
+ * section` parses cleanly in cppcheck regardless of how many placed objects
+ * share a TU (measured, docs/MEMORY_PLACEMENT.md §7), so they all live
+ * together in SharedRam.c now and every one of them is visible to the MISRA
+ * gate. Addresses are locator-assigned, not literals -- read them from the
+ * `.map`, never hardcode one (`tools/xcp_read.py` resolves by name for
+ * exactly this reason). See docs/CODEMAP.md §3 for the full occupant list.
  *
  * Rules for anything placed in this block, restated from §2.4 (all four
  * planned crossings, not just this one):
@@ -69,15 +81,13 @@
 #ifndef SHAREDRAM_H
 #define SHAREDRAM_H
 
-/* top 64 K of lmuram (768 K total): 0xB00F0000 .. 0xB00FFFFF, non-cached
- * alias. Cached alias of the same physical RAM is 0x90040000-0x900FFFFF. */
-/* cppcheck-suppress misra-c2012-2.5 ; deviation: this IS used -- as the
- * __at() address for g_coreStats (SharedRam.c) -- but cppcheck's fragile
- * __at() parse tolerance (below) does not track a reference used only as a
- * macro's argument, so its unused-macro checker sees none. Every other
- * __at() site in this tree (NavStatePlace.c, Measurements.c) uses a bare
- * literal instead of composing one from this macro, for the same reason. */
-#define SHARED_LMU_ADDR   0xB00F0000u
+/* Top 64 K of lmuram_shared (Lcf_Tasking_Tricore_Tc.lsl), non-cached alias:
+ * 0xB00F0000 .. 0xB00FFFFF. Cached alias of the same physical RAM is
+ * 0x90040000-0x900FFFFF (deliberately not modelled as a memory region for
+ * this block -- see the .lsl). No C symbol for the base address as of T3
+ * (docs/MEMORY_PLACEMENT.md): the group owns placement, nothing in code
+ * needs the literal, and an unused one is a MISRA 2.5 finding waiting to
+ * happen. Read an object's actual address from the `.map`. */
 
 /* Ifx__dsync is NOT defined for TASKING in this iLLD tree -- it exists only
  * in IfxCpu_IntrinsicsDcc.h / ...Gcc.h / ...Gnuc.h / ...HighTec.h;

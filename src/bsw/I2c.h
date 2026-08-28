@@ -30,7 +30,8 @@
  * identical from the outside whether the device is silent or the master is
  * wedged -- these separate the two. Sits clear of the other pinned blocks
  * (cal 0x...100, nvm 0x...200, gpio 0x...300). */
-#define XCP_I2CDBG_ADDR   0x70030400u
+/* XCP_I2CDBG_ADDR deleted, T5 -- same reasoning as XCP_DATA_ADDR
+ * (Measurements.h). */
 #define XCP_I2CDBG_MAGIC  0x49324344u   /* "I2CD" */
 
 typedef struct

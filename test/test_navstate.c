@@ -7,8 +7,10 @@
  * without any iLLD header.
  *
  * What this test canNOT cover, and why:
- *  - The memory placement (__at(0xB00F0060)) and the DSYNC barrier itself --
- *    hardware/.src checks (see fakes/tasking_shim.h and NavState.src).
+ *  - The memory placement (a locator-assigned address in the `shared_lmu`
+ *    group, docs/MEMORY_PLACEMENT.md T3 -- originally __at(0xB00F0060),
+ *    before that migration) and the DSYNC barrier itself -- hardware/.src
+ *    checks (see fakes/tasking_shim.h and NavState.src).
  *  - The torn-read retry actually firing, and the final FALSE path. Both are
  *    ONLY reachable when gen changes between NavState_get's own read and its
  *    re-check -- which requires a second thread (or interrupt) actually

@@ -56,7 +56,9 @@ skill for PDFs.
 5. Bump `Version.h`, then **verify over XCP** — `amk` may not rebuild every
    includer (see `amk-stale-intermediates`: delete `.src` + `.o` + `.d`).
 
-Addresses are fixed via TASKING `__at`, so the A2L does not depend on the link.
+Addresses are fixed literals in `Lcf_Tasking_Tricore_Tc.lsl` (absolute `xcp_*`
+groups, docs/MEMORY_PLACEMENT.md T4 — formerly TASKING `__at`, same addresses,
+different mechanism), so the A2L does not depend on the link.
 Appending is safe; **inserting shifts every later offset** and silently breaks
 every A2L entry and GUI plot below it. Append.
 
@@ -170,6 +172,7 @@ wrong. See `docs/FUSION.md` §8 for the case where this bit.
 | `Xcp_Gpio` | `0x70030300` | RAM only | `gpio.h` |
 | `I2c_Debug` | `0x70030400` | RAM only | `I2c.h` |
 | `Xcp_Fusion` | `0x70030500` | RAM only | `Measurements.h` |
+| `Xcp_FusionCal` | `0x70030600` | RAM only | `FusionCal.h` |
 | `SharedRam` (LMU, non-XCP) | `0xB00F0000` | LMU, non-cached alias | `SharedRam.c`/`.h` |
 
 Blocks are 256 bytes apart. `Xcp_Data` is **full** — its last field ends within
@@ -181,27 +184,34 @@ block introduced in T9 (`docs/REFACTORING_PLAN.md` §2.4), separate from the
 `0x700300xx` XCP series above and not reachable by SHORT_UPLOAD. It sits in the
 top 64 K of `lmuram` (768 K total) at the **non-cached** alias so no coherency
 handling is needed on either side of a crossing; the cached alias of the same
-physical RAM is `0x90040000`-`0x900FFFFF`. Every object placed there gets its
-own `.c` file with a single `__at()` definition (cppcheck cannot parse a
-second one in the same translation unit — see `SharedRam.h`). Occupants so far
-(writer, then address):
+physical RAM is `0x90040000`-`0x900FFFFF`. As of T3
+(docs/MEMORY_PLACEMENT.md) all six occupants are `#pragma section` into a
+single linker-managed `shared_lmu` group and defined together in
+`SharedRam.c` — no object here uses `__at()` any more, and (per the T3
+finding recorded in that doc) that is what makes all six visible to
+cppcheck's misra addon at once, not just individually. **Addresses are
+locator-assigned, not literals** — read them from the `.map`
+(`tools/xcp_read.py` resolves by name for exactly this reason), and do not
+expect them to be stable across builds. Occupants, in the group's `select`
+order (also physical layout order, `ordered` group):
 
-| object | writer | address | defined in |
-|---|---|---|---|
-| `g_coreStats` | each core, own slot | `0xB00F0000`, 96 bytes | `CoreStats.h` / `SharedRam.c` |
-| `g_navState` | CPU1 (`NavTask_step`) | `0xB00F0060` | `NavState.h` / `NavStatePlace.c` |
-| `g_baroLatch` | CPU0 (`SensorTask_baro`) | `0xB00F0200`, 24 bytes | `FusionLatch.h` / `FusionLatchPlace.c` |
-| `g_gnssLatch` | CPU0 (`SensorTask_gnss`) | `0xB00F0300`, 40 bytes | `FusionLatch.h` / `FusionLatchPlace.c` |
-| `g_magLatch` | CPU0 (`SensorTask_mag`) | `0xB00F0400`, 24 bytes | `AhrsLatch.h` / `AhrsLatchPlace.c` |
-| `g_imuEdge` | CPU1 (`imuDrdyIsr`) | `0xB00F0500`, 8 bytes | `ImuEdge.h` / `ImuEdgePlace.c` |
+| object | writer | defined in |
+|---|---|---|
+| `g_coreStats` | each core, own slot | `CoreStats.h` / `SharedRam.c` |
+| `g_navState` | CPU1 (`NavTask_step`) | `NavState.h` / `SharedRam.c` |
+| `g_baroLatch` | CPU0 (`SensorTask_baro`) | `FusionLatch.h` / `SharedRam.c` |
+| `g_gnssLatch` | CPU0 (`SensorTask_gnss`) | `FusionLatch.h` / `SharedRam.c` |
+| `g_magLatch` | CPU0 (`SensorTask_mag`) | `AhrsLatch.h` / `SharedRam.c` |
+| `g_imuEdge` | CPU1 (`imuDrdyIsr`) | `ImuEdge.h` / `SharedRam.c` |
 
 The three latches (T12) are the "three input latches" of §2.4/§2.3 — moved off
 plain statics that a CPU0 writer and a CPU1 reader shared with no protocol.
-Each is 256 bytes clear of its neighbour, generously past `g_navState`'s own
-size, so a `NavState_t` growth cannot silently reach one without first
-crossing `0xB00F0060 + 256` — the same spacing convention as the XCP blocks
-above. Confirmed non-overlapping via the `.map` file, the same check T9/T10
-used for `g_navState`.
+Through T2 each was 256 bytes clear of its neighbour, a spacing convention
+that existed only to give hand-computed `__at()` addresses slack; the linker
+now owns spacing (8-byte aligned per SharedRam.h rule 2, packed with no gap
+between objects) and the convention is retired along with the arithmetic it
+protected. Confirmed contiguous and non-overlapping via the `.map` file after
+T3 — see docs/MEMORY_PLACEMENT.md.
 
 `g_imuEdge` (T15, §3.6) is the fourth crossing and the odd one out: writer
 (`imuDrdyIsr`) and reader (`NavTask_step`) are on the SAME core, both CPU1,

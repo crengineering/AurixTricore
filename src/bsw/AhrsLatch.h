@@ -26,8 +26,10 @@ typedef struct
     uint32  reserved;  /**< pads the object to a multiple of 8 bytes         */
 } MagLatch_t;
 
-/** Defined (with __at()) in AhrsLatchPlace.c -- see that file and
- *  SharedRam.h for why a shared object needs its own TU. */
+/** Defined (with #pragma section) in SharedRam.c -- docs/MEMORY_PLACEMENT.md
+ *  T3. Formerly its own file (AhrsLatchPlace.c, __at(0xB00F0400u)), required
+ *  while __at() poisoned cppcheck's symbol table for the rest of any TU it
+ *  appeared in; #pragma section has no such restriction. */
 extern volatile MagLatch_t g_magLatch;
 
 #endif /* AHRSLATCH_H */

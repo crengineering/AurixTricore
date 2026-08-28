@@ -158,6 +158,21 @@
 #define TRAPTAB4            (LCF_TRAPVEC4_START)
 #define TRAPTAB5            (LCF_TRAPVEC5_START)
 
+/* XCP block bases, docs/MEMORY_PLACEMENT.md T4. Hard external contract (A2L,
+ * AurixGUI, tools/xcp_read.py raw-address mode) -- these MUST NOT move; see
+ * the absolute `xcp_*` groups in the :vtc:linear section_layout below. Values
+ * unchanged from the XCP_*_ADDR macros in the C headers they replace as the
+ * placement mechanism (Measurements.h/Diagnostics.h/Nvm.h/gpio.h/I2c.h) --
+ * those macros are retained through T5 for the cal-write whitelist, just no
+ * longer used for placement. */
+#define LCF_XCP_DATA_START      0x70030000
+#define LCF_XCP_CAL_START       0x70030100
+#define LCF_XCP_NVM_START       0x70030200
+#define LCF_XCP_GPIO_START      0x70030300
+#define LCF_XCP_I2CDBG_START    0x70030400
+#define LCF_XCP_FUSION_START    0x70030500
+#define LCF_XCP_FUSIONCAL_START 0x70030600
+
 #define RESET LCF_STARTPTR_NC_CPU0
 
 #include "tc1v1_6_2.lsl"
@@ -453,15 +468,40 @@ derivative tc39
         map not_cached (dest=bus:sri, dest_offset=0xb0030000, reserved, size=64k);
     }
 
-    memory lmuram
+    memory lmuram                       /* 768K -> 704K, T1: top 64K carved
+                                            out into lmuram_shared below */
     {
         mau = 8;
-        size = 768K;
+        size = 704K;
         type = ram;
-        map     cached (dest=bus:sri, dest_offset=0x90040000,           size=768K);
-        map not_cached (dest=bus:sri, dest_offset=0xb0040000, reserved, size=768K);
+        map     cached (dest=bus:sri, dest_offset=0x90040000,           size=704K);
+        map not_cached (dest=bus:sri, dest_offset=0xb0040000, reserved, size=704K);
     }
-    
+
+    /* Cross-core LMU block (docs/MEMORY_PLACEMENT.md), top 64K of the same
+     * physical LMU as lmuram above -- carved out, not overlaid, so the
+     * locator never sees the same physical byte twice (part 3.1). Single
+     * map, non-cached alias only: docs/MEMORY_PLACEMENT.md 3.1 T0 spike
+     * measured that a dual cached/not_cached form (mirroring lmuram's own
+     * shape, cached view reserved) resolves a bare `run_addr = mem:X` group
+     * to the CACHED alias regardless of the `reserved` flag or map
+     * declaration order, and there is no valid map-qualifier syntax to force
+     * the non-cached one (`run_addr = mem:X:not_cached` is ltc E821). This
+     * shared block must never be cacheable (SharedRam.h), so the fix is to
+     * not declare a cached view of it at all: any future attempt to place
+     * something at 0x900f0000-0x900fffff then fails the link, loud, instead
+     * of silently landing cacheable. Sole occupant is the `shared_lmu` group
+     * below -- all six cross-core objects as of T3
+     * (docs/MEMORY_PLACEMENT.md); no __at() object lives in this memory
+     * any more. */
+    memory lmuram_shared
+    {
+        mau = 8;
+        size = 64K;
+        type = ram;
+        map not_cached (dest=bus:sri, dest_offset=0xb00f0000, size=64K);
+    }
+
     memory cpu4_dlmu
     {
         mau = 8;
@@ -1215,9 +1255,78 @@ derivative tc39
                     select "(.data.lmudata|.data.lmudata.*)";
                     select "(.bss.lmubss|.bss.lmubss.*)";
                 }
+                /* Cross-core LMU shared block, docs/MEMORY_PLACEMENT.md.
+                 * T2 moved g_imuEdge here alone (bridgehead); T3 moves the
+                 * remaining five in, in the order the block has always used
+                 * (SharedRam.c, formerly hand-picked __at() addresses):
+                 * g_coreStats, g_navState, g_baroLatch, g_gnssLatch,
+                 * g_magLatch, g_imuEdge. This group is now the SOLE occupant
+                 * of lmuram_shared -- no __at() objects remain in this
+                 * memory. `ordered` fixes this select sequence as the
+                 * physical layout order; `align = 8` on the group plus every
+                 * individual object already being a multiple of 8 bytes
+                 * (SharedRam.h rule 2) means each object also starts
+                 * 8-byte-aligned with no per-select align needed -- verify
+                 * this from the real .map after building, not from this
+                 * comment. Section names confirmed by build (T0/T2):
+                 * `#pragma section farbss "X"` emits exactly ".bss.X". */
+                group shared_lmu (ordered, align = 8, run_addr = mem:lmuram_shared)
+                {
+                    select "(.bss.shared_lmu.corestats|.bss.shared_lmu.corestats.*)";
+                    select "(.bss.shared_lmu.navstate|.bss.shared_lmu.navstate.*)";
+                    select "(.bss.shared_lmu.barolatch|.bss.shared_lmu.barolatch.*)";
+                    select "(.bss.shared_lmu.gnsslatch|.bss.shared_lmu.gnsslatch.*)";
+                    select "(.bss.shared_lmu.maglatch|.bss.shared_lmu.maglatch.*)";
+                    select "(.bss.shared_lmu.imuedge|.bss.shared_lmu.imuedge.*)";
+                }
+            }
+
+            /* XCP blocks, docs/MEMORY_PLACEMENT.md T4 -- absolute placement,
+             * addresses unchanged from the __at() literals they replace (hard
+             * external contract: A2L, AurixGUI, tools/xcp_read.py raw-address
+             * mode). One group per block, same form the trap vectors use for
+             * a literal run_addr (lines ~735-745, `run_addr=LCF_TRAPVEC0_START`)
+             * but WITHOUT a `section "..." (size=...)` wrapper: a sized
+             * section would emit fill bytes for what is otherwise a plain
+             * `.bss` block, and none is needed -- select claims exactly the
+             * one section per block. Placed here, ahead of the generic
+             * `group data(attributes=rw) { select "(.bss|.bss.*)"; ... }`
+             * catch-all further down (same section_layout, ~150 lines below)
+             * so these sections are claimed before that catch-all ever sees
+             * them -- verified in the .map, not assumed. */
+            group (ordered)
+            {
+                group xcp_data (run_addr = LCF_XCP_DATA_START)
+                {
+                    select "(.bss.xcp_data|.bss.xcp_data.*)";
+                }
+                group xcp_cal (run_addr = LCF_XCP_CAL_START)
+                {
+                    select "(.bss.xcp_cal|.bss.xcp_cal.*)";
+                }
+                group xcp_nvm (run_addr = LCF_XCP_NVM_START)
+                {
+                    select "(.bss.xcp_nvm|.bss.xcp_nvm.*)";
+                }
+                group xcp_gpio (run_addr = LCF_XCP_GPIO_START)
+                {
+                    select "(.bss.xcp_gpio|.bss.xcp_gpio.*)";
+                }
+                group xcp_i2cdbg (run_addr = LCF_XCP_I2CDBG_START)
+                {
+                    select "(.bss.xcp_i2cdbg|.bss.xcp_i2cdbg.*)";
+                }
+                group xcp_fusion (run_addr = LCF_XCP_FUSION_START)
+                {
+                    select "(.bss.xcp_fusion|.bss.xcp_fusion.*)";
+                }
+                group xcp_fusioncal (run_addr = LCF_XCP_FUSIONCAL_START)
+                {
+                    select "(.bss.xcp_fusioncal|.bss.xcp_fusioncal.*)";
+                }
             }
         }
-        
+
         /*Far Data Sections, selectable by toolchain*/
 #        if LCF_DEFAULT_HOST == LCF_CPU5
         group (ordered, contiguous, align = 4, attributes=rw, run_addr = mem:dsram5)

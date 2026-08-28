@@ -46,6 +46,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BSW = ROOT / "src" / "bsw"
 A2L_PATH = ROOT / "docs" / "AurixTricore.a2l"
 META_PATH = ROOT / "tools" / "a2l_meta.json"
+LSL_PATH = ROOT / "Lcf_Tasking_Tricore_Tc.lsl"
 
 # ---------------------------------------------------------------------------
 # C type model. Sizes and alignments are TriCore/TASKING: scalars are aligned
@@ -60,13 +61,18 @@ CTYPES = {
     "float32": (4, "FLOAT32_IEEE", "RL_FLOAT32"),
 }
 
+# block -> (header for the struct layout, .lsl define for the address).
+# T6 (docs/MEMORY_PLACEMENT.md) moved the address source here from the
+# header XCP_*_ADDR macros to the .lsl; T5 then deleted those macros
+# entirely, along with verify_dual_sources() (git history has both, if the
+# dual-source comparison is ever needed again for a similar migration).
 BLOCKS = {
-    "Xcp_Data": ("Measurements.h", "XCP_DATA_ADDR"),
-    "Xcp_Cal":  ("Diagnostics.h",  "XCP_CAL_ADDR"),
-    "Xcp_Nvm":  ("Nvm.h",          "XCP_NVM_ADDR"),
-    "Xcp_Gpio": ("gpio.h",         "XCP_GPIO_ADDR"),
-    "Xcp_Fusion": ("Measurements.h", "XCP_FUSION_ADDR"),
-    "Xcp_FusionCal": ("FusionCal.h", "XCP_FUSIONCAL_ADDR"),
+    "Xcp_Data": ("Measurements.h", "LCF_XCP_DATA_START"),
+    "Xcp_Cal":  ("Diagnostics.h",  "LCF_XCP_CAL_START"),
+    "Xcp_Nvm":  ("Nvm.h",          "LCF_XCP_NVM_START"),
+    "Xcp_Gpio": ("gpio.h",         "LCF_XCP_GPIO_START"),
+    "Xcp_Fusion": ("Measurements.h", "LCF_XCP_FUSION_START"),
+    "Xcp_FusionCal": ("FusionCal.h", "LCF_XCP_FUSIONCAL_START"),
 }
 
 
@@ -108,11 +114,17 @@ def strip_comments(text: str) -> str:
     return re.sub(r"//[^\n]*", " ", text)
 
 
-def read_define(header: Path, name: str) -> int:
-    """Value of a #define <name> 0x...u"""
-    m = re.search(rf"^#define\s+{name}\s+(0x[0-9A-Fa-f]+)u?", read(header), re.M)
+def read_lsl_define(name: str) -> int:
+    """Value of a #define <name> 0x... in the linker script.
+
+    T6 (docs/MEMORY_PLACEMENT.md): the address SOURCE for every XCP block.
+    Used to be a header macro (T5 deleted those); the .lsl has no 'u' suffix
+    (it is not C), otherwise the same shape. The .lsl is checked in, needs
+    no build, and since T5 is the ONLY place these addresses are written
+    down -- unlike the .map (gitignored, requires a build)."""
+    m = re.search(rf"^#define\s+{name}\s+(0x[0-9A-Fa-f]+)", read(LSL_PATH), re.M)
     if not m:
-        raise SystemExit(f"error: {name} not found in {header.name}")
+        raise SystemExit(f"error: {name} not found in {LSL_PATH.name}")
     return int(m.group(1), 16)
 
 
@@ -296,9 +308,9 @@ def emit_characteristic(entry: dict, field: Field, addr: int, warn: list[str]) -
 
 
 def block_objects(block: str, meta: dict, warn: list[str], kind: str) -> tuple[list[str], int]:
-    header, addr_macro = BLOCKS[block]
+    header, lsl_define = BLOCKS[block]
     hdr = BSW / header
-    base = read_define(hdr, addr_macro)
+    base = read_lsl_define(lsl_define)
     fields, size = parse_struct(hdr, block)
 
     out: list[str] = []
@@ -326,14 +338,16 @@ PREAMBLE = """\
  *     python tools/gen_a2l.py
  * CI runs 'python tools/gen_a2l.py --check' to catch a stale file.
  *
- * All objects live at fixed addresses (TASKING __at), so this file does not
- * depend on the link run:
- *   Xcp_Data  (measurements)          0x70030000, {data_size} bytes, Measurements.h
- *   Xcp_Cal   (calibration, RAM only) 0x70030100, {cal_size} bytes, Diagnostics.h
- *   Xcp_Nvm   (persistent, DFLASH)    0x70030200, {nvm_size} bytes, Nvm.h
- *   Xcp_Gpio  (GPIO control, RAM only) 0x70030300, {gpio_size} bytes, gpio.h
- *   Xcp_Fusion (navigation state)     0x70030500, {fusion_size} bytes, Measurements.h
- *   Xcp_FusionCal (estimator tuning)  0x70030600, {fcal_size} bytes, FusionCal.h
+ * All objects live at fixed addresses (absolute linker groups in
+ * Lcf_Tasking_Tricore_Tc.lsl, docs/MEMORY_PLACEMENT.md T4), so this file
+ * does not depend on the link run -- addresses below are read from the
+ * .lsl, not typed:
+ *   Xcp_Data  (measurements)          0x{data_addr:08X}, {data_size} bytes, Measurements.h
+ *   Xcp_Cal   (calibration, RAM only) 0x{cal_addr:08X}, {cal_size} bytes, Diagnostics.h
+ *   Xcp_Nvm   (persistent, DFLASH)    0x{nvm_addr:08X}, {nvm_size} bytes, Nvm.h
+ *   Xcp_Gpio  (GPIO control, RAM only) 0x{gpio_addr:08X}, {gpio_size} bytes, gpio.h
+ *   Xcp_Fusion (navigation state)     0x{fusion_addr:08X}, {fusion_size} bytes, Measurements.h
+ *   Xcp_FusionCal (estimator tuning)  0x{fcal_addr:08X}, {fcal_size} bytes, FusionCal.h
  * Transport: XCP on UDP/IP, port 5555, station 192.168.0.10.
  * DAQ: dynamic, 1 list, event channel 0 = 100 ms task.
  */
@@ -425,7 +439,13 @@ def generate() -> tuple[str, list[str]]:
     fusion_objs, fusion_size = block_objects("Xcp_Fusion", meta, warn, "meas")
     fcal_objs, fcal_size = block_objects("Xcp_FusionCal", meta, warn, "char")
 
-    diag_base = read_define(BSW / "Measurements.h", "XCP_DATA_ADDR")
+    data_addr = read_lsl_define("LCF_XCP_DATA_START")
+    cal_addr = read_lsl_define("LCF_XCP_CAL_START")
+    nvm_addr = read_lsl_define("LCF_XCP_NVM_START")
+    gpio_addr = read_lsl_define("LCF_XCP_GPIO_START")
+    fusion_addr = read_lsl_define("LCF_XCP_FUSION_START")
+    fcal_addr = read_lsl_define("LCF_XCP_FUSIONCAL_START")
+
     diag_fields, _ = parse_struct(BSW / "Measurements.h", "Xcp_Data")
     diag_off = next(f.offset for f in diag_fields if f.name == "diagStatus")
 
@@ -438,30 +458,126 @@ def generate() -> tuple[str, list[str]]:
             entry = dict(entry, name=macro,
                          desc=entry.get("desc", f"{macro} (no metadata)"))
             warn.append(f"{macro}: no metadata, using the macro name")
-        diag_objs.append(emit_bit_measurement(entry, diag_base + diag_off, mask))
+        diag_objs.append(emit_bit_measurement(entry, data_addr + diag_off, mask))
 
     parts = [PREAMBLE.format(version=parse_version(BSW / "Version.h"),
+                             data_addr=data_addr, cal_addr=cal_addr,
+                             nvm_addr=nvm_addr, gpio_addr=gpio_addr,
+                             fusion_addr=fusion_addr, fcal_addr=fcal_addr,
                              data_size=data_size, cal_size=cal_size,
                              nvm_size=nvm_size, gpio_size=gpio_size,
                              fusion_size=fusion_size, fcal_size=fcal_size)]
     parts.append("\n    /* ------------------------------------------------------------------ */"
-                 "\n    /* Measurements: Xcp_Data @ 0x70030000 (see Measurements.h)           */"
+                 f"\n    /* Measurements: Xcp_Data @ 0x{data_addr:08X} (see Measurements.h)         */"
                  "\n    /* ------------------------------------------------------------------ */\n")
     parts.append("\n\n".join(data_objs))
     parts.append("\n\n    /* individual diagnostics bits (BIT_MASK views on DiagStatus) */\n")
     parts.append("\n\n".join(diag_objs))
-    parts.append("\n\n    /* Calibration: Xcp_Cal @ 0x70030100, RAM only (see Diagnostics.h) */\n")
+    parts.append(f"\n\n    /* Calibration: Xcp_Cal @ 0x{cal_addr:08X}, RAM only (see Diagnostics.h) */\n")
     parts.append("\n\n".join(cal_objs))
-    parts.append("\n\n    /* Persistent: Xcp_Nvm @ 0x70030200, DFLASH (see Nvm.h) */\n")
+    parts.append(f"\n\n    /* Persistent: Xcp_Nvm @ 0x{nvm_addr:08X}, DFLASH (see Nvm.h) */\n")
     parts.append("\n\n".join(nvm_objs))
-    parts.append("\n\n    /* GPIO control: Xcp_Gpio @ 0x70030300, RAM only (see gpio.h) */\n")
+    parts.append(f"\n\n    /* GPIO control: Xcp_Gpio @ 0x{gpio_addr:08X}, RAM only (see gpio.h) */\n")
     parts.append("\n\n".join(gpio_objs))
-    parts.append("\n\n    /* Navigation state: Xcp_Fusion @ 0x70030500 (see Measurements.h) */\n")
+    parts.append(f"\n\n    /* Navigation state: Xcp_Fusion @ 0x{fusion_addr:08X} (see Measurements.h) */\n")
     parts.append("\n\n".join(fusion_objs))
-    parts.append("\n\n    /* Estimator tuning: Xcp_FusionCal @ 0x70030600, RAM only (FusionCal.h) */\n")
+    parts.append(f"\n\n    /* Estimator tuning: Xcp_FusionCal @ 0x{fcal_addr:08X}, RAM only (FusionCal.h) */\n")
     parts.append("\n\n".join(fcal_objs))
     parts.append("\n\n  /end MODULE\n/end PROJECT\n")
     return "".join(parts), warn
+
+
+# ---------------------------------------------------------------------------
+# Struct-offset guard (docs/MEMORY_PLACEMENT.md part 6): a generated C header
+# that makes the COMPILER confirm this generator's layout model, not just
+# cross-check the A2L against itself the way a2l.yml otherwise does.
+#
+# TASKING (--iso=99, this project's exact build flags) does not accept
+# _Static_assert -- confirmed by build, not assumed: it is a hard syntax
+# error under this dialect. The classic negative-array-size idiom
+# (`typedef char x[(cond) ? 1 : -1]`) works instead -- also confirmed by
+# build -- but with one real trap found doing it: wrapping it in a C macro
+# that ALSO uses `##` token-pasting (e.g. to build a unique name per
+# assertion) stops TASKING's preprocessor from expanding a DIFFERENT
+# parameter's own macro call first, even when that parameter is never
+# adjacent to the `##`. Concretely, `offsetof(Xcp_Data, accelX) == N` passed
+# as `cond` into a macro whose body pastes `name` into an identifier failed
+# to compile (ctc E286, "array size shall be greater than zero") even though
+# the exact same expression compiles cleanly as a bare, non-macro typedef.
+# So there is no C-side macro here at all -- each assertion is emitted
+# directly, already uniquely named by Python, which also sidesteps needing
+# one.
+#
+# Scope: one offset assertion per STRUCT FIELD (not per A2L-emitted signal,
+# not per array element) plus one sizeof assertion per struct. An array's
+# own elements are always contiguous in C with no possible extra padding
+# between them, so asserting the array field's own base offset already
+# covers every element it expands to in the A2L -- asserting each element
+# individually (which the six blocks' ~60 array-typed measurements would
+# turn into many hundreds of near-duplicate lines) would add bulk, not
+# coverage. Covering every field, not just the subset a2l_meta.json emits to
+# the A2L, means this check does not depend on that sidecar at all, and
+# catches a drift in a skipped/reserved field exactly as directly as one in
+# an emitted field -- ~167 assertions across the six blocks (matching the
+# field counts already measured in part 6), not the ~180 estimated there
+# for a per-A2L-object count.
+LAYOUT_ASSERT_PATH = BSW / "LayoutAssert_gen.h"
+
+LAYOUT_ASSERT_PREAMBLE = """\
+/* GENERATED by tools/gen_a2l.py -- do not edit by hand.
+ * Struct-offset guard, docs/MEMORY_PLACEMENT.md part 6: asserts the
+ * compiler's own offsetof()/sizeof() for every field in every XCP block
+ * agree with the layout this generator assumes when it writes
+ * docs/AurixTricore.a2l. Regenerate after changing a struct:
+ *     python tools/gen_a2l.py
+ * CI runs 'python tools/gen_a2l.py --check' to catch a stale file, same as
+ * the A2L itself.
+ *
+ * TASKING does not accept _Static_assert under this project's build flags
+ * (confirmed by build) -- this uses the negative-array-size idiom instead,
+ * with no C-side macro (see the generator for why). A failure here points
+ * at the exact line, and because each array's own name embeds the block and
+ * field, the exact field, whose real compiled offset stopped matching what
+ * the generator assumed.
+ *
+ * Included by exactly one translation unit: src/bsw/LayoutAssert.c.
+ */
+#ifndef AURIXTRICORE_LAYOUT_ASSERT_GEN_H
+#define AURIXTRICORE_LAYOUT_ASSERT_GEN_H
+
+#include <stddef.h>
+
+"""
+
+LAYOUT_ASSERT_POSTAMBLE = "#endif /* AURIXTRICORE_LAYOUT_ASSERT_GEN_H */\n"
+
+
+def generate_layout_assertions() -> str:
+    parts = [LAYOUT_ASSERT_PREAMBLE]
+
+    headers: list[str] = []
+    for header, _lsl_define in BLOCKS.values():
+        if header not in headers:
+            headers.append(header)
+    for h in headers:
+        parts.append(f'#include "{h}"\n')
+    parts.append("\n")
+
+    for block, (header, _lsl_define) in BLOCKS.items():
+        fields, size = parse_struct(BSW / header, block)
+        parts.append(f"/* {block} ({header}) */\n")
+        for f in fields:
+            parts.append(
+                f"typedef char layout_assert_{block}_{f.name}_offset"
+                f"[(offsetof({block}, {f.name}) == 0x{f.offset:X}u) ? 1 : -1];\n"
+            )
+        parts.append(
+            f"typedef char layout_assert_{block}_sizeof"
+            f"[(sizeof({block}) == 0x{size:X}u) ? 1 : -1];\n\n"
+        )
+
+    parts.append(LAYOUT_ASSERT_POSTAMBLE)
+    return "".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -524,9 +640,9 @@ def seed() -> None:
     by_addr, by_mask = a2l_objects(read(A2L_PATH))
 
     meta: dict = {}
-    for block, (hdr, addr_macro) in BLOCKS.items():
+    for block, (hdr, lsl_define) in BLOCKS.items():
         header = BSW / hdr
-        base = read_define(header, addr_macro)
+        base = read_lsl_define(lsl_define)
         fields, _ = parse_struct(header, block)
         meta[block] = {}
 
@@ -591,6 +707,7 @@ def main() -> int:
         return 0
 
     text, warn = generate()
+    layout_text = generate_layout_assertions()
     for w in warn:
         print(f"warning: {w}", file=sys.stderr)
 
@@ -599,25 +716,34 @@ def main() -> int:
         return 0
 
     if args.check:
-        current = read(A2L_PATH) if A2L_PATH.exists() else ""
-        if current == text:
-            print(f"{A2L_PATH.relative_to(ROOT)} is up to date")
-            return 0
-        print(f"error: {A2L_PATH.relative_to(ROOT)} is STALE.\n"
-              f"       Run 'python tools/gen_a2l.py' and commit the result.",
-              file=sys.stderr)
-        import difflib
-        diff = difflib.unified_diff(current.splitlines(True), text.splitlines(True),
-                                    "committed", "generated", n=2)
-        sys.stderr.writelines(list(diff)[:80])
-        return 1
+        failed = False
+        for path, generated, label in (
+            (A2L_PATH, text, "A2L"),
+            (LAYOUT_ASSERT_PATH, layout_text, "layout-assert header"),
+        ):
+            current = read(path) if path.exists() else ""
+            if current == generated:
+                print(f"{path.relative_to(ROOT)} is up to date")
+                continue
+            failed = True
+            print(f"error: {path.relative_to(ROOT)} is STALE ({label}).\n"
+                  f"       Run 'python tools/gen_a2l.py' and commit the result.",
+                  file=sys.stderr)
+            import difflib
+            diff = difflib.unified_diff(current.splitlines(True), generated.splitlines(True),
+                                        "committed", "generated", n=2)
+            sys.stderr.writelines(list(diff)[:80])
+        return 1 if failed else 0
 
     A2L_PATH.write_text(text, encoding="utf-8", newline="\n")
+    LAYOUT_ASSERT_PATH.write_text(layout_text, encoding="utf-8", newline="\n")
     n_meas = text.count("/begin MEASUREMENT")
     n_char = text.count("/begin CHARACTERISTIC")
+    n_assert = layout_text.count("typedef char layout_assert_")
     print(f"wrote {A2L_PATH.relative_to(ROOT)}: "
           f"{n_meas} measurements, {n_char} characteristics"
           + (f", {len(warn)} warnings" if warn else ""))
+    print(f"wrote {LAYOUT_ASSERT_PATH.relative_to(ROOT)}: {n_assert} assertions")
     return 0
 
 

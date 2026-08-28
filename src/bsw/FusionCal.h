@@ -34,7 +34,9 @@
 #include "Ifx_Types.h"
 
 /* Next free 256-byte slot after Xcp_Fusion (0x70030500). */
-#define XCP_FUSIONCAL_ADDR   0x70030600u
+/* XCP_FUSIONCAL_ADDR deleted, T5 (docs/MEMORY_PLACEMENT.md): Xcp.c's
+ * whitelist now uses (uint32)&g_fusionCal, so Lcf_Tasking_Tricore_Tc.lsl
+ * (LCF_XCP_FUSIONCAL_START) is the only place 0x70030600 is written down. */
 #define XCP_FUSIONCAL_MAGIC  0x4C414346u        /* "FCAL" */
 #define XCP_FUSIONCAL_SIZE   64u
 

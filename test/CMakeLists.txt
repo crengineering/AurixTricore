@@ -37,14 +37,15 @@ target_link_libraries(test_harness PRIVATE unity test_common)
 add_test(NAME harness COMMAND test_harness)
 
 #[[
-SharedRam.c (T9, docs/REFACTORING_PLAN.md §2.4): a single __at() line that
-places g_coreStats in the LMU shared block. __at() is a TASKING extension
-GCC does not know, so this one source file needs the same tasking_shim.h
--include the estimator sources use further down -- on the host it expands to
-nothing and the array simply lands in .bss.
+SharedRam.c (T9-T3, docs/REFACTORING_PLAN.md §2.4 / docs/MEMORY_PLACEMENT.md):
+holds all six LMU shared-block objects as of T3. Used to need the same
+tasking_shim.h -include the estimator sources use further down, for __at()
+(a TASKING extension GCC does not know). As of T3 the last __at() left this
+file -- every object is `#pragma section farbss "..."` now, which GCC just
+warns about and ignores (-Wunknown-pragmas, part of -Wall, not fatal), so no
+shim is needed here any more. Kept as a no-op-safe pattern would have been
+harmless either way; removed because nothing in this file needs it.
 ]]
-set_source_files_properties(${BSW}/SharedRam.c PROPERTIES
-    COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/fakes/tasking_shim.h")
 
 #[[
 CoreStats: braucht nur den Ifx_Types-Shim, keinen Fake. g_coreStats selbst
@@ -141,34 +142,35 @@ add_test(NAME imuint COMMAND test_imuint)
 #[[
 ImuEdge (T15, docs/REFACTORING_PLAN.md §3.6): the ISR->NavTask_step edge
 handoff protocol. ImuEdge_snapshot() is pure and iLLD-free (Ifx_Types.h only,
-same static-inline-in-the-header idiom as ImuInt_accumulate() above); only
-g_imuEdge's __at() placement (ImuEdgePlace.c) needs the tasking_shim
-treatment already set up for it above (test_navtask target).
+same static-inline-in-the-header idiom as ImuInt_accumulate() above); g_imuEdge
+lives in SharedRam.c, which as of T3 holds all six LMU shared-block objects
+and needs no shim (see the comment above) -- `#pragma section farbss "..."`
+is not a macro, GCC just warns "ignoring #pragma section"
+(-Wunknown-pragmas, part of -Wall, not fatal here) and the object lands in
+ordinary .bss, same as every other host-side global.
 ]]
 add_executable(test_imuedge
     test_imuedge.c
-    ${BSW}/ImuEdgePlace.c
+    ${BSW}/SharedRam.c
 )
 target_link_libraries(test_imuedge PRIVATE unity test_common)
 add_test(NAME imuedge COMMAND test_imuedge)
 
 #[[
 NavState (T10, docs/REFACTORING_PLAN.md §2.4/§4): the generation-counter
-publish/get protocol, still unwired to anything real. g_navState's __at()
-placement now lives in its own translation unit, NavStatePlace.c (split out
-after the MISRA gate found mixing __at() with this file's logic broke
-cppcheck's symbol table for every g_navState.field access -- see that file).
-NavState.c itself only needs Ifx__dsync() (via SharedRam.h) faked away;
-NavStatePlace.c only needs __at() faked away -- both need the same
-tasking_shim.h -include, harmlessly providing the macro the other doesn't use.
+publish/get protocol, still unwired to anything real. g_navState's placement
+lives in SharedRam.c now (docs/MEMORY_PLACEMENT.md T3 -- NavStatePlace.c is
+deleted; #pragma section needs no per-object TU the way __at() did, see the
+SharedRam.c comment above). NavState.c itself still needs Ifx__dsync() (via
+SharedRam.h) faked away -- SharedRam.c does not, it has no dsync call.
 ]]
-set_source_files_properties(${BSW}/NavState.c ${BSW}/NavStatePlace.c PROPERTIES
+set_source_files_properties(${BSW}/NavState.c PROPERTIES
     COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/fakes/tasking_shim.h")
 
 add_executable(test_navstate
     test_navstate.c
     ${BSW}/NavState.c
-    ${BSW}/NavStatePlace.c
+    ${BSW}/SharedRam.c
 )
 target_link_libraries(test_navstate PRIVATE unity test_common)
 add_test(NAME navstate COMMAND test_navstate)
@@ -179,30 +181,25 @@ AHRS_RUNNING/present gate -- the one piece of NavTask_step worth a host test.
 test_navtask.c #includes NavTask.c directly to reach navTask_dtValid (static),
 same reason test_GnssM9N.c #includes GnssM9N.c. That still means every symbol
 NavTask_init/NavTask_step reference must link even though this test never
-calls them: `estimator` supplies the real FusionCal/Ahrs/fusion, NavState.c
-and SysTime.c are the real (iLLD-free) implementations, fakes/IfxStm.c
-satisfies SysTime.c's own dependency -- only the genuinely target-only calls
-(IMU bus read, XCP publish, peripheral diagnostics) are stubbed inside
-test_navtask.c itself, purely to satisfy the linker. NavTask.c gained a
-g_imuDrdyStaleTicks/g_imuDrdyLastTicks reference in I5 (docs/IMU_INTERRUPT.md)
--- ImuInt.h's declarations are iLLD-free and included fine, but the real
-storage is in ImuInt.c, which pulls in ERU/SRC/Port headers with no host
-fakes, so those two globals (plus g_imuDrdyMissedEdges, T14) are stubbed
-directly in test_navtask.c instead, same treatment as the other target-only
-symbols there. T15 added a REAL dependency instead of a stub: ImuEdge.h's
-g_imuEdge is genuinely iLLD-free (Ifx_Types.h only) and ImuEdge_snapshot() is
-the same static-inline-in-the-header idiom as ImuInt_accumulate() -- only its
-__at() placement (ImuEdgePlace.c) needs the tasking_shim treatment, same as
-NavStatePlace.c below.
+calls them: `estimator` supplies the real FusionCal/Ahrs/fusion AND (as of
+T3) SharedRam.c -- so g_coreStats/g_navState/g_baroLatch/g_gnssLatch/
+g_magLatch/g_imuEdge all come from there; NavState.c and SysTime.c are the
+real (iLLD-free) implementations, fakes/IfxStm.c satisfies SysTime.c's own
+dependency -- only the genuinely target-only calls (IMU bus read, XCP
+publish, peripheral diagnostics) are stubbed inside test_navtask.c itself,
+purely to satisfy the linker. NavTask.c gained a g_imuDrdyStaleTicks/
+g_imuDrdyLastTicks reference in I5 (docs/IMU_INTERRUPT.md) -- ImuInt.h's
+declarations are iLLD-free and included fine, but the real storage is in
+ImuInt.c, which pulls in ERU/SRC/Port headers with no host fakes, so those
+two globals (plus g_imuDrdyMissedEdges, T14) are stubbed directly in
+test_navtask.c instead, same treatment as the other target-only symbols
+there. IMPORTANT: SharedRam.c is NOT listed as a source below -- it is
+already compiled once into `estimator` (below); listing it again here would
+link two definitions of g_coreStats et al. into the same executable.
 ]]
-set_source_files_properties(${BSW}/ImuEdgePlace.c PROPERTIES
-    COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/fakes/tasking_shim.h")
-
 add_executable(test_navtask
     test_navtask.c
     ${BSW}/NavState.c
-    ${BSW}/NavStatePlace.c
-    ${BSW}/ImuEdgePlace.c
     ${BSW}/SysTime.c
     fakes/IfxStm.c
 )
@@ -233,36 +230,35 @@ uebersetzt und gelinkt, aber NICHT gelesen: die Erwartungen stammen
 ausschliesslich aus docs/FUSION_SPEC.md und den Headern. Siehe die Warnung
 oben in FUSION_SPEC.md.
 
-Zwei Dinge fehlen dem Host:
-  __at()     TASKING-Erweiterung, mit der g_fusionCal auf eine feste Adresse
-             gelegt wird. Auf dem Host ein leeres Makro -- das Objekt landet
-             einfach im BSS.
+Ein Ding fehlt dem Host:
   NULL_PTR   kommt auf dem Target aus iLLDs Ifx_Types.h; fakes/Ifx_Types.h
              liefert es jetzt mit.
+(g_fusionCal's Platzierung -- __at() bis T4, seither `#pragma section` --
+brauchte frueher ebenfalls das __at()-Leermakro hier; docs/MEMORY_PLACEMENT.md
+T5 loeschte das letzte __at() im ganzen Baum, GCC ignoriert die unbekannte
+Pragma-Zeile jetzt einfach mit einer Warnung, kein Makro noetig.)
 
 g_xcpNvm (Hard-Iron-Kalibrierung) kommt aus fakes/Nvm.c.
 -m ist noetig, weil die Estimator-Mathematik gegen libm linkt (sinf, atan2f...).
 ]]
 #[[
-T12 (docs/REFACTORING_PLAN.md 2.4): the three input latches moved off plain
-statics into their own LMU __at() objects (FusionLatchPlace.c/
-AhrsLatchPlace.c), each in its own translation unit per SharedRam.h's
-cppcheck constraint. No separate tasking_shim.h wiring needed here: both
-land in the `estimator` target below, which already applies
-`-include tasking_shim.h` to every one of its sources.
-
-FusionLatchPlace.c later split further into FusionLatchPlace.c (g_baroLatch
-only) + GnssLatchPlace.c (g_gnssLatch) -- CI MISRA run 33090973650 found a
-second `__at()` in one TU (misra-c2012-8.5); both still need to be built into
-`estimator`, just from two files instead of one.
+T12 (docs/REFACTORING_PLAN.md 2.4): the three input latches (g_baroLatch,
+g_gnssLatch, g_magLatch) that fusion.c/Ahrs.c read and write. Through T2 these
+lived in their own LMU __at() objects (FusionLatchPlace.c/GnssLatchPlace.c/
+AhrsLatchPlace.c), one per TU per SharedRam.h's then-cppcheck constraint. As
+of T3 (docs/MEMORY_PLACEMENT.md) all three moved into SharedRam.c along with
+g_coreStats/g_navState/g_imuEdge -- those three *Place.c files are deleted,
+SharedRam.c replaces them here. `-include tasking_shim.h` below is still
+needed for fusion.c/Ahrs.c's own Ifx__dsync() calls -- the shim's __at()
+entry is gone (docs/MEMORY_PLACEMENT.md T5 deleted the last __at() in the
+tree); SharedRam.c doesn't need the shim at all any more, but picking up
+the blanket -include here is harmless.
 ]]
 add_library(estimator STATIC
     ${BSW}/fusion.c
     ${BSW}/Ahrs.c
     ${BSW}/FusionCal.c
-    ${BSW}/FusionLatchPlace.c
-    ${BSW}/GnssLatchPlace.c
-    ${BSW}/AhrsLatchPlace.c
+    ${BSW}/SharedRam.c
     fakes/Nvm.c
 )
 target_include_directories(estimator PUBLIC fakes ${BSW})

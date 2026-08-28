@@ -16,6 +16,18 @@ Uses iLLD for GPIO and STM timer. No RTOS, no HAL beyond iLLD.
 
 Build config: **TriCore Debug (TASKING)** — outputs `AurixTricore.elf`.
 
+⚠️ **`Project → Clean` above is the ordinary CDT clean — safe.** ADS's
+separate **"Clean AURIX Project"** action (and the library-restore action
+next to it) is not: `.ads/clean-libraries.json` lists both `.lsl` files
+(`Lcf_Tasking_Tricore_Tc.lsl`, `Lcf_Gnuc_Tricore_Tc.lsl`) as `"type":
+"DELETE"`, and `.ads/backup-libraries.json` restores them from the toolchain
+template — silently reverting any edit made to either, including the
+`LCF_XCP_*_START` defines and the `shared_lmu`/`xcp_*` groups
+(`docs/MEMORY_PLACEMENT.md`). Losing the edited `.lsl` this way is a loud
+failure (the next build cannot locate the new sections), not a flight bug,
+and it is recoverable from git — but do not run "Clean AURIX Project" on
+this branch's tree without knowing that is what it does.
+
 ---
 
 ## Project Layout

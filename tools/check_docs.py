@@ -34,6 +34,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BSW = ROOT / "src" / "bsw"
+LSL_PATH = ROOT / "Lcf_Tasking_Tricore_Tc.lsl"
 
 problems: list[str] = []
 checked = 0
@@ -109,26 +110,41 @@ def check_version() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. documented XCP block addresses match the headers
+# 3. documented XCP block addresses match the .lsl (docs/MEMORY_PLACEMENT.md
+#    T6: the address SSoT moved from the header XCP_*_ADDR macros -- deleted,
+#    T5 -- to the LCF_XCP_*_START defines in Lcf_Tasking_Tricore_Tc.lsl)
 # ---------------------------------------------------------------------------
 def check_block_addresses() -> None:
     global checked
     addrs: dict[str, str] = {}
-    for header in BSW.glob("*.h"):
-        for name, val in re.findall(
-                r"#define\s+(XCP_[A-Z_]*ADDR)\s+(0x[0-9A-Fa-f]+)u?",
-                read(header)):
-            addrs[name] = val.lower()
+    for name, val in re.findall(
+            r"#define\s+(LCF_XCP_[A-Z_]*_START)\s+(0x[0-9A-Fa-f]+)",
+            read(LSL_PATH)):
+        addrs[name] = val.lower()
 
-    # struct tag -> the macro that pins it
+    # struct tag -> the .lsl define that pins it
     pairs = {
-        "Xcp_Data": "XCP_DATA_ADDR",
-        "Xcp_Cal": "XCP_CAL_ADDR",
-        "Xcp_Nvm": "XCP_NVM_ADDR",
-        "Xcp_Gpio": "XCP_GPIO_ADDR",
-        "Xcp_Fusion": "XCP_FUSION_ADDR",
-        "Xcp_FusionCal": "XCP_FUSIONCAL_ADDR",
+        "Xcp_Data": "LCF_XCP_DATA_START",
+        "Xcp_Cal": "LCF_XCP_CAL_START",
+        "Xcp_Nvm": "LCF_XCP_NVM_START",
+        "Xcp_Gpio": "LCF_XCP_GPIO_START",
+        "Xcp_Fusion": "LCF_XCP_FUSION_START",
+        "Xcp_FusionCal": "LCF_XCP_FUSIONCAL_START",
     }
+
+    # T6: a define missing from the .lsl means the SSoT itself is broken --
+    # that must fail loudly, not leave every per-block check below silently
+    # skipped the way a missing header macro used to (found during T6: this
+    # checker quietly stopped checking a block whose macro had already been
+    # deleted, rather than reporting anything wrong -- worse than failing).
+    checked += 1
+    missing = sorted(macro for macro in pairs.values() if macro not in addrs)
+    if missing:
+        fail(LSL_PATH.name,
+             "missing define(s), address cross-check cannot run: "
+             + ", ".join(missing))
+        return
+
     # Longest tag first, and matched with a right-hand word boundary, so
     # Xcp_Fusion never matches inside Xcp_FusionCal. That false positive is
     # exactly the kind that gets a hook switched off.
@@ -141,9 +157,7 @@ def check_block_addresses() -> None:
             # block and a different address ("Xcp_Data had 8 bytes left, so it
             # went to 0x70030500") is not an assertion about that block.
             for tag, macro in ordered:
-                want = addrs.get(macro)
-                if want is None:
-                    continue
+                want = addrs[macro]
                 # Only SEPARATORS may sit between the tag and the address --
                 # backticks, spaces, an @, a dash, "at". Prose in between means
                 # the line is telling a story, not binding a block to an

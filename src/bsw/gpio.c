@@ -34,8 +34,17 @@ static uint16                s_gpioPwmPeriod[GPIO_P_00_END];
 
 /* XCP control block at a fixed address (see gpio.h). RAM only: a reset
  * returns every pin to firmware control. The XCP slave only permits writes
- * to the state[] and duty[] arrays (magic and mode[] are protected). */
-volatile Xcp_Gpio g_xcpGpio __at(XCP_GPIO_ADDR);
+ * to the state[] and duty[] arrays (magic and mode[] are protected). Off
+ * __at() onto `#pragma section` (docs/MEMORY_PLACEMENT.md T4) -- an absolute
+ * group at the unchanged LCF_XCP_GPIO_START literal. Guarded by `#if
+ * defined(__TASKING__)` -- see SharedRam.c for why (GCC -Werror). */
+#if defined(__TASKING__)
+#pragma section farbss "xcp_gpio"
+#endif
+volatile Xcp_Gpio g_xcpGpio;
+#if defined(__TASKING__)
+#pragma section farbss restore
+#endif
 /******************************************************************************/
 /*--------------------------Local Function Implementations--------------------*/
 /******************************************************************************/

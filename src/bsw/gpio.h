@@ -96,7 +96,9 @@ typedef enum {
  * (gpio_cfg_t.userControllable); reserved pins ignore it, so the user can
  * never drive them from XCP. Which pins are reserved is fixed in firmware,
  * NOT selectable over the protocol. */
-#define XCP_GPIO_ADDR           0x70030300u
+/* XCP_GPIO_ADDR deleted, T5 (docs/MEMORY_PLACEMENT.md): Xcp.c's whitelist
+ * now uses (uint32)&g_xcpGpio, so Lcf_Tasking_Tricore_Tc.lsl
+ * (LCF_XCP_GPIO_START) is the only place 0x70030300 is written down. */
 #define XCP_GPIO_MAGIC          0x4F495047u
 #define XCP_GPIO_SIZE           52u  /* 4 + 3*16; must equal sizeof(Xcp_Gpio) */
 #define XCP_GPIO_STATE_OFFSET   4u   /* writable: state[16]                   */

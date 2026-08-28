@@ -70,34 +70,55 @@
 
 /* Writes are only allowed inside the calibration block or the persistent
  * parameter block (each skipping its magic word, which only the slave
- * itself may set) — protects the rest of RAM. */
+ * itself may set) — protects the rest of RAM.
+ *
+ * Bases used to be the XCP_*_ADDR macros (hand-typed literals matching the
+ * .lsl by convention only); docs/MEMORY_PLACEMENT.md T5 deletes those
+ * macros and switches this whitelist to the real objects' own addresses,
+ * so there is exactly one place -- Lcf_Tasking_Tricore_Tc.lsl -- where any
+ * of these addresses is written down. Each `&g_xcp*`/`&g_fusionCal` cast
+ * below is a MISRA 11.4 (pointer-to-integer conversion) deviation, justified
+ * the same way at every site: every object is real, has external linkage,
+ * a fixed address for the life of the program (an absolute linker group),
+ * and is never reinterpreted as another type -- taking its address is what
+ * makes this comparison correct BY CONSTRUCTION instead of by two literals
+ * happening to agree. */
 static boolean xcpWriteAllowed(uint32 addr, uint32 len)
 {
     boolean allowed = FALSE;
+    /* cppcheck-suppress misra-c2012-11.4 ; deviation: see the function
+     * comment above -- applies to this cast and the three below it. */
+    const uint32 calAddr = (uint32)&g_xcpCal;
+    /* cppcheck-suppress misra-c2012-11.4 ; deviation: see above. */
+    const uint32 nvmAddr = (uint32)&g_xcpNvm;
+    /* cppcheck-suppress misra-c2012-11.4 ; deviation: see above. */
+    const uint32 fusionCalAddr = (uint32)&g_fusionCal;
+    /* cppcheck-suppress misra-c2012-11.4 ; deviation: see above. */
+    const uint32 gpioAddr = (uint32)&g_xcpGpio;
 
-    if ((addr >= (XCP_CAL_ADDR + 4u)) && ((addr + len) <= (XCP_CAL_ADDR + XCP_CAL_SIZE)))
+    if ((addr >= (calAddr + 4u)) && ((addr + len) <= (calAddr + XCP_CAL_SIZE)))
     {
         allowed = TRUE;
     }
-    else if ((addr >= (XCP_NVM_ADDR + 4u)) && ((addr + len) <= (XCP_NVM_ADDR + XCP_NVM_SIZE)))
+    else if ((addr >= (nvmAddr + 4u)) && ((addr + len) <= (nvmAddr + XCP_NVM_SIZE)))
     {
         allowed = TRUE;
     }
-    else if ((addr >= (XCP_FUSIONCAL_ADDR + 4u))
-             && ((addr + len) <= (XCP_FUSIONCAL_ADDR + XCP_FUSIONCAL_SIZE)))
+    else if ((addr >= (fusionCalAddr + 4u))
+             && ((addr + len) <= (fusionCalAddr + XCP_FUSIONCAL_SIZE)))
     {
         /* Estimator tuning. RAM only, so the worst a bad write can do is spoil
          * the estimate until the next power cycle. The magic word at offset 0
          * stays firmware-owned, hence the +4. */
         allowed = TRUE;
     }
-    else if ((addr >= (XCP_GPIO_ADDR + XCP_GPIO_STATE_OFFSET))
-             && ((addr + len) <= (XCP_GPIO_ADDR + XCP_GPIO_MODE_OFFSET)))
+    else if ((addr >= (gpioAddr + XCP_GPIO_STATE_OFFSET))
+             && ((addr + len) <= (gpioAddr + XCP_GPIO_MODE_OFFSET)))
     {
         allowed = TRUE;                 /* GPIO state[] — mode[] stays protected */
     }
-    else if ((addr >= (XCP_GPIO_ADDR + XCP_GPIO_DUTY_OFFSET))
-             && ((addr + len) <= (XCP_GPIO_ADDR + XCP_GPIO_SIZE)))
+    else if ((addr >= (gpioAddr + XCP_GPIO_DUTY_OFFSET))
+             && ((addr + len) <= (gpioAddr + XCP_GPIO_SIZE)))
     {
         allowed = TRUE;                 /* GPIO duty[] */
     }

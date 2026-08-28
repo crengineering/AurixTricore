@@ -30,7 +30,9 @@
  *   0x38  float32  fsVddp3        [V]     monitor-ADC full scale VDDP3
  *   0x3C  float32  fsVext         [V]     monitor-ADC full scale VEXT
  */
-#define XCP_CAL_ADDR    0x70030100u
+/* XCP_CAL_ADDR deleted, T5 (docs/MEMORY_PLACEMENT.md): Xcp.c's whitelist
+ * now uses (uint32)&g_xcpCal, so Lcf_Tasking_Tricore_Tc.lsl
+ * (LCF_XCP_CAL_START) is the only place 0x70030100 is written down. */
 #define XCP_CAL_MAGIC   0x4C414358u
 #define XCP_CAL_SIZE    64u
 
