@@ -181,37 +181,34 @@ block introduced in T9 (`docs/REFACTORING_PLAN.md` §2.4), separate from the
 `0x700300xx` XCP series above and not reachable by SHORT_UPLOAD. It sits in the
 top 64 K of `lmuram` (768 K total) at the **non-cached** alias so no coherency
 handling is needed on either side of a crossing; the cached alias of the same
-physical RAM is `0x90040000`-`0x900FFFFF`. Five of the six occupants below
-still get their own `.c` file with a single `__at()` definition (cppcheck
-cannot parse a second one in the same translation unit — see `SharedRam.h`);
-`g_imuEdge` is the first to move onto a linker-managed group instead
-(docs/MEMORY_PLACEMENT.md, T2) and lives in `SharedRam.c`. Occupants so far
-(writer, then address):
+physical RAM is `0x90040000`-`0x900FFFFF`. As of T3
+(docs/MEMORY_PLACEMENT.md) all six occupants are `#pragma section` into a
+single linker-managed `shared_lmu` group and defined together in
+`SharedRam.c` — no object here uses `__at()` any more, and (per the T3
+finding recorded in that doc) that is what makes all six visible to
+cppcheck's misra addon at once, not just individually. **Addresses are
+locator-assigned, not literals** — read them from the `.map`
+(`tools/xcp_read.py` resolves by name for exactly this reason), and do not
+expect them to be stable across builds. Occupants, in the group's `select`
+order (also physical layout order, `ordered` group):
 
-| object | writer | address | defined in |
-|---|---|---|---|
-| `g_coreStats` | each core, own slot | `0xB00F0000`, 96 bytes | `CoreStats.h` / `SharedRam.c` |
-| `g_navState` | CPU1 (`NavTask_step`) | `0xB00F0060` | `NavState.h` / `NavStatePlace.c` |
-| `g_baroLatch` | CPU0 (`SensorTask_baro`) | `0xB00F0200`, 24 bytes | `FusionLatch.h` / `FusionLatchPlace.c` |
-| `g_gnssLatch` | CPU0 (`SensorTask_gnss`) | `0xB00F0300`, 40 bytes | `FusionLatch.h` / `FusionLatchPlace.c` |
-| `g_magLatch` | CPU0 (`SensorTask_mag`) | `0xB00F0400`, 24 bytes | `AhrsLatch.h` / `AhrsLatchPlace.c` |
-| `g_imuEdge` | CPU1 (`imuDrdyIsr`) | linker-assigned, 8 bytes† | `ImuEdge.h` / `SharedRam.c` |
+| object | writer | defined in |
+|---|---|---|
+| `g_coreStats` | each core, own slot | `CoreStats.h` / `SharedRam.c` |
+| `g_navState` | CPU1 (`NavTask_step`) | `NavState.h` / `SharedRam.c` |
+| `g_baroLatch` | CPU0 (`SensorTask_baro`) | `FusionLatch.h` / `SharedRam.c` |
+| `g_gnssLatch` | CPU0 (`SensorTask_gnss`) | `FusionLatch.h` / `SharedRam.c` |
+| `g_magLatch` | CPU0 (`SensorTask_mag`) | `AhrsLatch.h` / `SharedRam.c` |
+| `g_imuEdge` | CPU1 (`imuDrdyIsr`) | `ImuEdge.h` / `SharedRam.c` |
 
 The three latches (T12) are the "three input latches" of §2.4/§2.3 — moved off
 plain statics that a CPU0 writer and a CPU1 reader shared with no protocol.
-Each is 256 bytes clear of its neighbour, generously past `g_navState`'s own
-size, so a `NavState_t` growth cannot silently reach one without first
-crossing `0xB00F0060 + 256` — the same spacing convention as the XCP blocks
-above. Confirmed non-overlapping via the `.map` file, the same check T9/T10
-used for `g_navState`.
-
-† `g_imuEdge` moved off `__at()` onto a linker-managed `shared_lmu` group in
-`Lcf_Tasking_Tricore_Tc.lsl` (docs/MEMORY_PLACEMENT.md, T2) — its address is
-no longer a literal in this table and is not guaranteed stable across builds;
-read it from the `.map` (`tools/xcp_read.py`), never hardcode it. The other
-five objects above are still on `__at()` at the fixed addresses shown and
-move in a later step (docs/MEMORY_PLACEMENT.md T3); this row and the "256
-bytes apart" convention below apply to those five only until then.
+Through T2 each was 256 bytes clear of its neighbour, a spacing convention
+that existed only to give hand-computed `__at()` addresses slack; the linker
+now owns spacing (8-byte aligned per SharedRam.h rule 2, packed with no gap
+between objects) and the convention is retired along with the arithmetic it
+protected. Confirmed contiguous and non-overlapping via the `.map` file after
+T3 — see docs/MEMORY_PLACEMENT.md.
 
 `g_imuEdge` (T15, §3.6) is the fourth crossing and the odd one out: writer
 (`imuDrdyIsr`) and reader (`NavTask_step`) are on the SAME core, both CPU1,

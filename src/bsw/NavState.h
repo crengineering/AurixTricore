@@ -3,11 +3,12 @@
  * \brief CPU1 -> CPU0 navigation-state snapshot -- the cross-core contract
  *        that NavTask (T11/T12) publishes and Housekeeping (T11) reads.
  *
- * Lives in the LMU shared block (SharedRam.h), non-cached alias, at
- * SHARED_LMU_ADDR + 0x60 -- right after the six g_coreStats slots
- * (0xB00F0000..0xB00F005F), 8-byte aligned. Single writer (the nav core),
- * any number of readers. See docs/REFACTORING_PLAN.md §2.4 for the full
- * argument; this header states the contract for this one object.
+ * Lives in the LMU shared block (SharedRam.h), non-cached alias, in the
+ * linker-managed `shared_lmu` group (docs/MEMORY_PLACEMENT.md T3) -- address
+ * is locator-assigned, not a literal; read it from the `.map`. Single writer
+ * (the nav core), any number of readers. See docs/REFACTORING_PLAN.md §2.4
+ * for the full argument; this header states the contract for this one
+ * object.
  *
  * Every field is 32-bit: LMU SRAM has no sub-word write (SharedRam.h rule 2).
  * `imuPresent` was a `uint8 imuPresent; uint8 reserved[3];` pair in the
@@ -75,14 +76,21 @@ typedef struct
                                  *   after T15, one in twenty at 1 kHz). */
 } NavState_t;
 
-/** Defined (with __at()) in NavStatePlace.c, not here -- see SharedRam.h and
- *  that file's header comment for why a second LMU __at() object needs its
- *  own translation unit. */
+/** Defined (with #pragma section) in SharedRam.c, not here --
+ *  docs/MEMORY_PLACEMENT.md T3. Formerly its own file (NavStatePlace.c,
+ *  __at(0xB00F0060u)), required while __at() poisoned cppcheck's symbol
+ *  table for the rest of any TU it appeared in; #pragma section has no such
+ *  restriction. */
 extern volatile NavState_t g_navState;
 
-/** Zero the block. CPU1 only, once at boot -- __at() storage is not
+/** Zero the block. CPU1 only, once at boot. Kept even though `g_navState`
+ *  left __at() in T3 (docs/MEMORY_PLACEMENT.md): whether the `shared_lmu`
+ *  group's `.bss.shared_lmu.*` sections are covered by the startup's
+ *  auto-zero table the way ordinary .bss groups are is NOT verified either
+ *  way -- explicit init is correct and cheap regardless, so it stays.
+ *  __at() storage (still true for the XCP blocks, T4) is definitely NOT
  *  guaranteed pre-zeroed the way ordinary .bss is (Measurements.c's
- *  g_xcpData needs the same explicit init, for the same reason). */
+ *  g_xcpData needs the same explicit init, for that reason). */
 void NavState_init(void);
 
 /** Publish one snapshot. CPU1 (the nav core) ONLY.

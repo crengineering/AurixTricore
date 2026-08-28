@@ -53,7 +53,9 @@ typedef struct
     uint32 aliveCounter;  /**< +1 per window; frozen => core is stuck       */
 } CoreStats_t;
 
-/* Defined (with __at()) in SharedRam.c, not here -- see SharedRam.h. */
+/* Defined (with #pragma section) in SharedRam.c, not here -- see
+ * SharedRam.h. Off __at(SHARED_LMU_ADDR) as of T3 (docs/MEMORY_PLACEMENT.md);
+ * address is locator-assigned, not a literal -- read it from the `.map`. */
 extern volatile CoreStats_t g_coreStats[CORESTATS_NUM_CORES];
 
 /** Reset one core's slot. Call from that core before its scheduler loop. */

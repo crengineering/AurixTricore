@@ -28,11 +28,11 @@ Three of the four costs raised are real; one is not.
   documents a human doing 0xB00F0000 + 0x60 because `g_coreStats` is 96 B, and
   the "256 bytes apart" convention in `docs/CODEMAP.md` exists only to give
   that arithmetic slack. Growing `CoreStats_t` needs a human to redo it.
-- **Real.** Seven placement TUs (`src/bsw/SharedRam.c`,
-  `src/bsw/NavStatePlace.c`, `src/bsw/FusionLatchPlace.c`,
-  `src/bsw/GnssLatchPlace.c`, `src/bsw/AhrsLatchPlace.c`, `ImuEdgePlace.c`
-  (deleted in T2 -- see below), `src/bsw/XcpFusionPlace.c`) exist purely as a
-  cppcheck workaround and cost two CI failures in #15.
+- **Real.** Seven placement TUs (`src/bsw/SharedRam.c`, `NavStatePlace.c`,
+  `FusionLatchPlace.c`, `GnssLatchPlace.c`, `AhrsLatchPlace.c`,
+  `ImuEdgePlace.c` (all five deleted, T2/T3 -- see below),
+  `src/bsw/XcpFusionPlace.c`) exist purely as a cppcheck workaround and cost
+  two CI failures in #15.
 - **Not real — checked twice, from two directions.** The claim that
   `tools/gen_a2l.py` hardcodes the bases a third time is **false**, in both the
   form given in the brief (lines 15-19) and the form in the XCPlite research
@@ -294,6 +294,13 @@ with its module again.
 > is gone, which may not be the same step as when a given object physically
 > moves there. Worth checking file-by-file when T3/T4 land, not assumed from
 > the object list alone.
+>
+> **T3 update:** confirmed exactly as predicted. `SharedRam.c` had zero
+> `__at()` objects left after T3 (`g_coreStats` was the last one) and its
+> cppcheck symbol table went from 0 bound globals to all six objects bound.
+> T4's target files (`Measurements.c`, `Diagnostics.c`, `Nvm.c`, `gpio.c`,
+> `I2c.c`, `FusionCal.c`) each need the same file-by-file check when they
+> land — do not assume "the object moved there" means "cppcheck can see it".
 
 ---
 
@@ -670,7 +677,12 @@ Each task builds and flies on its own. T0 is throwaway.
 > for the architect/Chris to decide whether to amend the T2 row here or treat
 > this as accepted T3 scope — not changed unilaterally, since it is a design
 > decision about where an object lives, not an implementation bug.
-| **T3** | `src/bsw/SharedRam.c`; delete `src/bsw/NavStatePlace.c`, `src/bsw/FusionLatchPlace.c`, `src/bsw/GnssLatchPlace.c`, `src/bsw/AhrsLatchPlace.c`; `src/bsw/NavState.h`, `src/bsw/FusionLatch.h`, `src/bsw/AhrsLatch.h`, `.cproject`, `.lsl` group | Move the remaining five LMU objects in, in the documented order. **The one task where addresses change by design** — list the five in the commit message. | Builds from clean. `.map`: six objects contiguous from 0xB00F0000, 0x1B0 total, 8-byte aligned, all inside `lmuram_shared`. Boot self-check passes. **Bench/flight run: nav converges; baro, GNSS and mag latches all update.** MISRA green, zero `misra-config` for all six. |
+>
+> **Resolved: accepted as T3 scope (Chris, after T2 hardware verification).**
+> T3's own row below confirms the prediction: with `g_coreStats`'s `__at()`
+> gone, `misra-config` is gone for all six objects, verified directly via
+> `cppcheck --dump`, not just the aggregate local pass.
+| **T3** | `src/bsw/SharedRam.c`; deleted `NavStatePlace.c`, `FusionLatchPlace.c`, `GnssLatchPlace.c`, `AhrsLatchPlace.c`; `src/bsw/NavState.h`, `src/bsw/FusionLatch.h`, `src/bsw/AhrsLatch.h`, `src/bsw/CoreStats.h`, `src/bsw/NavState.c`, `src/bsw/Cpu0_Main.c`, `docs/CODEMAP.md`, `test/CMakeLists.txt`, `.lsl` group | **DONE (build/host-tests/MISRA; hardware pending).** Moved the remaining five LMU objects in, in the documented order (`select` order: corestats, navstate, barolatch, gnsslatch, maglatch, imuedge). No `.cproject` edit needed (same reason as T2). `test/CMakeLists.txt` needed the same fix as T2 across four targets: `test_navstate`/`test_navtask`/`estimator` built the deleted `*Place.c` files directly; `estimator` now supplies `SharedRam.c` (and `test_navtask`, which links `estimator`, had to STOP compiling `SharedRam.c` itself or get a duplicate-symbol link error). | Clean build: 0 errors, 0 new warnings. Symbol diff vs. T2: **five expected changes**, not empty (by design) — `g_baroLatch` `0xB00F0200`→`0xB00F0150`, `g_gnssLatch` `0xB00F0300`→`0xB00F0168`, `g_magLatch` `0xB00F0400`→`0xB00F0190`; `g_coreStats` `0xB00F0000`→`0xB00F0000` and `g_navState` `0xB00F0060`→`0xB00F0060` (both **unchanged**, already at the front of the pack); `g_imuEdge` moves a second time, `0xB00F0150` (T2) → `0xB00F01A8` (now last in `select` order, after `g_magLatch`). Nothing else in the 1012-symbol table changed. **`.map` verified**: all six contiguous from `0xB00F0000`, exactly `0x1B0` (432 B) total, zero gaps (`_lc_gb_shared_lmu`=`0xB00F0000`, `_lc_ge_shared_lmu`=`0xB00F01B0`). **64-bit-line rule verified from real offsets/sizes**, not assumed: every object's start address is a multiple of 8 AND every object's own size (`0x60`/`0xf0`/`0x18`/`0x28`/`0x18`/`0x08`) is *also* a multiple of 8, so packed contiguously with zero padding, no object's last byte and the next object's first byte can ever share a doubleword. **dsync ordering verified in the actual generated `.src`** for all four dsync-guarded writers (`NavState_publish`/`NavState_init`, `Fusion_setBaroAlt`, the gnss latch writer, the mag latch writer, all unchanged files): payload store(s) → `dsync` → gen load/increment/store, in that order, every time. **MISRA: `misra-config` gone for all six**, confirmed directly (not just via the aggregate local pass, which was misleading at T2) — a raw `cppcheck --dump` on `SharedRam.c` now reports zero syntax errors and every one of the six objects has a proper `varId`/`variable=` binding at both its `extern` declaration and its definition, matching the design's own part 7 methodology. Local `misra_check.py`: 0 findings. 17/17 host tests pass. **Hardware verification not yet done — pending flash.** |
 | **T4** | `src/bsw/Measurements.c`, `src/bsw/Diagnostics.c`, `src/bsw/Nvm.c`, `src/bsw/gpio.c`, `src/bsw/I2c.c`, `src/bsw/FusionCal.c`, delete `src/bsw/XcpFusionPlace.c`, `.lsl`, `.cproject` | Seven `xcp_*` groups at the `LCF_XCP_*_START` defines; the seven objects move to `#pragma section` in their own modules. The `XCP_*_ADDR` macros are **retained** this step, no longer used for placement. | **Symbol diff EMPTY.** `a2l.yml` green with no regeneration. Flash + `tools/xcp_test.py` + a GUI session: every block reads as before. Expect and fix new MISRA findings. |
 | **T5** | `src/bsw/Xcp.c`, `src/bsw/Measurements.h`, `src/bsw/Diagnostics.h`, `src/bsw/Nvm.h`, `src/bsw/gpio.h`, `src/bsw/I2c.h`, `src/bsw/FusionCal.h` | Delete the seven `XCP_*_ADDR` macros. The `Xcp.c` whitelist switches to `(uint32)&g_xcpCal` and friends, one documented 11.4 deviation each. | Builds. Host tests green. Flash: a write inside each cal block still succeeds, one outside still rejects. |
 | **T6** | `tools/gen_a2l.py`, `tools/check_docs.py` | Bases read from the `.lsl` defines instead of the header macros; fix the addresses hardcoded in the generated comment header. | `python tools/gen_a2l.py --check` passes **on a clean clone with no build**. `python tools/check_docs.py` passes. `a2l.yml` green. |

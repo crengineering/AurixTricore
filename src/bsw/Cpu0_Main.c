@@ -81,12 +81,14 @@ int core0_main(void)
     Uart_init();
     Uart_println("CPU0 started, SW v" SW_VERSION_STRING);
 
-    /* T9 boot self-check (docs/REFACTORING_PLAN.md §2.4, Risk 2): confirm the
-     * LMU shared block really landed in a non-cacheable segment. A cachable
-     * address here means the __at(SHARED_LMU_ADDR) alias is wrong and every
-     * cross-core read of this block -- g_coreStats today, NavState from T10
-     * on -- could see stale data. g_coreStats is the first object in the
-     * block and its own address is what we are actually placing. */
+    /* T9 boot self-check (docs/REFACTORING_PLAN.md §2.4, Risk 2; mechanism
+     * updated T3, docs/MEMORY_PLACEMENT.md): confirm the LMU shared block
+     * really landed in a non-cacheable segment. A cachable address here
+     * means the `shared_lmu` group (Lcf_Tasking_Tricore_Tc.lsl) resolved to
+     * the wrong alias and every cross-core read of this block -- all six
+     * objects, not just g_coreStats -- could see stale data. g_coreStats is
+     * the group's first member and its own address is what we are actually
+     * placing. */
     /* cppcheck-suppress misra-c2012-11.8 ; deviation: IfxCpu_isAddressCachable
      * takes a plain void* (vendor header, not editable); g_coreStats is
      * volatile only because it is cross-core shared state, not because this

@@ -475,8 +475,10 @@ derivative tc39
      * shared block must never be cacheable (SharedRam.h), so the fix is to
      * not declare a cached view of it at all: any future attempt to place
      * something at 0x900f0000-0x900fffff then fails the link, loud, instead
-     * of silently landing cacheable. First (and so far only) occupant is the
-     * `shared_lmu` group below (T2, g_imuEdge). */
+     * of silently landing cacheable. Sole occupant is the `shared_lmu` group
+     * below -- all six cross-core objects as of T3
+     * (docs/MEMORY_PLACEMENT.md); no __at() object lives in this memory
+     * any more. */
     memory lmuram_shared
     {
         mau = 8;
@@ -1238,21 +1240,28 @@ derivative tc39
                     select "(.data.lmudata|.data.lmudata.*)";
                     select "(.bss.lmubss|.bss.lmubss.*)";
                 }
-                /* Cross-core LMU shared block, docs/MEMORY_PLACEMENT.md T2.
-                 * Sole member for now: g_imuEdge, moved off __at() as the
-                 * bridgehead object. The other five occupants of this block
-                 * (g_coreStats, g_navState, g_baroLatch, g_gnssLatch,
-                 * g_magLatch) stay on __at() at their existing fixed
-                 * addresses until T3 -- confirmed by the T0 spike that
-                 * absolute and locator-placed allocation coexist correctly
-                 * in the same memory, with the locator filling the first
-                 * free gap between the __at() objects. Section name
-                 * confirmed by build: `#pragma section farbss "X"` emits
-                 * exactly ".bss.X", so no `.g_imuEdge`-style suffix is
-                 * needed in the pattern; the trailing `*` is cheap
-                 * insurance kept anyway. */
+                /* Cross-core LMU shared block, docs/MEMORY_PLACEMENT.md.
+                 * T2 moved g_imuEdge here alone (bridgehead); T3 moves the
+                 * remaining five in, in the order the block has always used
+                 * (SharedRam.c, formerly hand-picked __at() addresses):
+                 * g_coreStats, g_navState, g_baroLatch, g_gnssLatch,
+                 * g_magLatch, g_imuEdge. This group is now the SOLE occupant
+                 * of lmuram_shared -- no __at() objects remain in this
+                 * memory. `ordered` fixes this select sequence as the
+                 * physical layout order; `align = 8` on the group plus every
+                 * individual object already being a multiple of 8 bytes
+                 * (SharedRam.h rule 2) means each object also starts
+                 * 8-byte-aligned with no per-select align needed -- verify
+                 * this from the real .map after building, not from this
+                 * comment. Section names confirmed by build (T0/T2):
+                 * `#pragma section farbss "X"` emits exactly ".bss.X". */
                 group shared_lmu (ordered, align = 8, run_addr = mem:lmuram_shared)
                 {
+                    select "(.bss.shared_lmu.corestats|.bss.shared_lmu.corestats.*)";
+                    select "(.bss.shared_lmu.navstate|.bss.shared_lmu.navstate.*)";
+                    select "(.bss.shared_lmu.barolatch|.bss.shared_lmu.barolatch.*)";
+                    select "(.bss.shared_lmu.gnsslatch|.bss.shared_lmu.gnsslatch.*)";
+                    select "(.bss.shared_lmu.maglatch|.bss.shared_lmu.maglatch.*)";
                     select "(.bss.shared_lmu.imuedge|.bss.shared_lmu.imuedge.*)";
                 }
             }
