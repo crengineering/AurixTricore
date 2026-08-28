@@ -82,13 +82,9 @@
  * several SHORT_UPLOADs — AurixGUI already does this for the IMU sub-block.
  * DAQ has room: 8 ODTs x 63 B = 504 B (see XCP_DAQ_MAX_ODTS in Xcp.c).
  */
-/* cppcheck-suppress misra-c2012-2.5 ; deviation: genuinely unused as of T4
- * (docs/MEMORY_PLACEMENT.md) -- placement moved to the linker (`#pragma
- * section`, Measurements.c), and Xcp_Data is read-only over XCP so nothing
- * needs this address in a runtime whitelist the way XCP_CAL_ADDR/
- * XCP_NVM_ADDR/XCP_GPIO_ADDR/XCP_FUSIONCAL_ADDR are still used in Xcp.c.
- * Retained deliberately through T5, not deleted here -- see the task list. */
-#define XCP_DATA_ADDR   0x70030000u
+/* XCP_DATA_ADDR deleted, T5 (docs/MEMORY_PLACEMENT.md): the linker script
+ * (Lcf_Tasking_Tricore_Tc.lsl, LCF_XCP_DATA_START) is now the only place
+ * 0x70030000 is written down anywhere in the tree. */
 #define XCP_DATA_MAGIC  0x41555258u
 
 typedef struct
@@ -267,11 +263,7 @@ extern volatile Xcp_Data g_xcpData;
  * Total 0xF4 = 244 bytes, leaving 12 before the next slot at 0x70030600.
  * Exceeds XCP MAX_CTO (64), so clients read it in several SHORT_UPLOADs.
  * --------------------------------------------------------------------------- */
-/* cppcheck-suppress misra-c2012-2.5 ; deviation: genuinely unused as of T4
- * (docs/MEMORY_PLACEMENT.md) -- same reasoning as XCP_DATA_ADDR above:
- * placement moved to the linker, Xcp_Fusion is read-only over XCP, no
- * runtime whitelist references this address. Retained through T5. */
-#define XCP_FUSION_ADDR   0x70030500u
+/* XCP_FUSION_ADDR deleted, T5 -- same reasoning as XCP_DATA_ADDR above. */
 #define XCP_FUSION_MAGIC  0x4E535546u
 
 typedef struct

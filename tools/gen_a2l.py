@@ -61,28 +61,19 @@ CTYPES = {
     "float32": (4, "FLOAT32_IEEE", "RL_FLOAT32"),
 }
 
-# block -> (header for the struct layout, header macro, .lsl define). The
-# header macro column is a T5/T6 transition artefact (docs/MEMORY_PLACEMENT.md):
-# T6 switches the ADDRESS SOURCE to the .lsl below, T5 (which follows
-# immediately) deletes the header macros entirely. Keeping the macro name
-# here a little longer is what lets verify_dual_sources() below assert the
-# two sources agree before the macro is deleted -- remove that column, and
-# the verification call in main(), as part of T5; nothing else in this file
-# reads it once T5 lands.
+# block -> (header for the struct layout, .lsl define for the address).
+# T6 (docs/MEMORY_PLACEMENT.md) moved the address source here from the
+# header XCP_*_ADDR macros to the .lsl; T5 then deleted those macros
+# entirely, along with verify_dual_sources() (git history has both, if the
+# dual-source comparison is ever needed again for a similar migration).
 BLOCKS = {
-    "Xcp_Data": ("Measurements.h", "XCP_DATA_ADDR", "LCF_XCP_DATA_START"),
-    "Xcp_Cal":  ("Diagnostics.h",  "XCP_CAL_ADDR", "LCF_XCP_CAL_START"),
-    "Xcp_Nvm":  ("Nvm.h",          "XCP_NVM_ADDR", "LCF_XCP_NVM_START"),
-    "Xcp_Gpio": ("gpio.h",         "XCP_GPIO_ADDR", "LCF_XCP_GPIO_START"),
-    "Xcp_Fusion": ("Measurements.h", "XCP_FUSION_ADDR", "LCF_XCP_FUSION_START"),
-    "Xcp_FusionCal": ("FusionCal.h", "XCP_FUSIONCAL_ADDR", "LCF_XCP_FUSIONCAL_START"),
+    "Xcp_Data": ("Measurements.h", "LCF_XCP_DATA_START"),
+    "Xcp_Cal":  ("Diagnostics.h",  "LCF_XCP_CAL_START"),
+    "Xcp_Nvm":  ("Nvm.h",          "LCF_XCP_NVM_START"),
+    "Xcp_Gpio": ("gpio.h",         "LCF_XCP_GPIO_START"),
+    "Xcp_Fusion": ("Measurements.h", "LCF_XCP_FUSION_START"),
+    "Xcp_FusionCal": ("FusionCal.h", "LCF_XCP_FUSIONCAL_START"),
 }
-
-# Not one of the six blocks the A2L exposes (I2c_Debug is diagnostic-only,
-# never in the A2L), but its address is pinned in both sources the same way
-# -- included in the T6 dual-source verification for completeness (all
-# seven XCP objects, matching docs/MEMORY_PLACEMENT.md T4's LCF_XCP_* set).
-I2C_DEBUG_ADDR = ("I2c.h", "XCP_I2CDBG_ADDR", "LCF_XCP_I2CDBG_START")
 
 
 class Field:
@@ -123,50 +114,18 @@ def strip_comments(text: str) -> str:
     return re.sub(r"//[^\n]*", " ", text)
 
 
-def read_define(header: Path, name: str) -> int:
-    """Value of a #define <name> 0x...u"""
-    m = re.search(rf"^#define\s+{name}\s+(0x[0-9A-Fa-f]+)u?", read(header), re.M)
-    if not m:
-        raise SystemExit(f"error: {name} not found in {header.name}")
-    return int(m.group(1), 16)
-
-
 def read_lsl_define(name: str) -> int:
     """Value of a #define <name> 0x... in the linker script.
 
-    T6 (docs/MEMORY_PLACEMENT.md): the address SOURCE for every XCP block --
-    same shape as read_define() above, but no 'u' suffix (the .lsl is not C)
-    and a different file. The .lsl is checked in, needs no build, and after
-    T5 is the ONLY place these addresses are written down -- unlike the .map
-    (gitignored, requires a build) or the header macros (deleted, T5)."""
+    T6 (docs/MEMORY_PLACEMENT.md): the address SOURCE for every XCP block.
+    Used to be a header macro (T5 deleted those); the .lsl has no 'u' suffix
+    (it is not C), otherwise the same shape. The .lsl is checked in, needs
+    no build, and since T5 is the ONLY place these addresses are written
+    down -- unlike the .map (gitignored, requires a build)."""
     m = re.search(rf"^#define\s+{name}\s+(0x[0-9A-Fa-f]+)", read(LSL_PATH), re.M)
     if not m:
         raise SystemExit(f"error: {name} not found in {LSL_PATH.name}")
     return int(m.group(1), 16)
-
-
-def verify_dual_sources() -> None:
-    """T6 window only: while the header macros (about to be deleted, T5) and
-    the .lsl LCF_XCP_*_START defines (T4) both exist, assert they agree
-    before anything switches over. This is the one point in the whole
-    migration where both sources are simultaneously available to compare --
-    delete this function and its call in main() as part of T5, alongside the
-    macros it reads; read_define() on a deleted macro raises SystemExit, so
-    leaving this in place after T5 would fail every invocation, not
-    silently pass. Covers all seven XCP objects (the six A2L blocks plus
-    I2c_Debug, which is not in the A2L but is pinned the same way)."""
-    pairs = dict(BLOCKS)
-    pairs["I2c_Debug"] = I2C_DEBUG_ADDR
-    mismatches = []
-    for block, (header, macro, lsl_name) in pairs.items():
-        macro_addr = read_define(BSW / header, macro)
-        lsl_addr = read_lsl_define(lsl_name)
-        if macro_addr != lsl_addr:
-            mismatches.append(f"{block}: {macro}=0x{macro_addr:08X} "
-                              f"(header) vs {lsl_name}=0x{lsl_addr:08X} (.lsl)")
-    if mismatches:
-        raise SystemExit("error: header macro and .lsl define disagree for "
-                         "the following block(s):\n  " + "\n  ".join(mismatches))
 
 
 def parse_struct(header: Path, tag: str) -> tuple[list[Field], int]:
@@ -349,7 +308,7 @@ def emit_characteristic(entry: dict, field: Field, addr: int, warn: list[str]) -
 
 
 def block_objects(block: str, meta: dict, warn: list[str], kind: str) -> tuple[list[str], int]:
-    header, _addr_macro, lsl_define = BLOCKS[block]
+    header, lsl_define = BLOCKS[block]
     hdr = BSW / header
     base = read_lsl_define(lsl_define)
     fields, size = parse_struct(hdr, block)
@@ -588,7 +547,7 @@ def seed() -> None:
     by_addr, by_mask = a2l_objects(read(A2L_PATH))
 
     meta: dict = {}
-    for block, (hdr, _addr_macro, lsl_define) in BLOCKS.items():
+    for block, (hdr, lsl_define) in BLOCKS.items():
         header = BSW / hdr
         base = read_lsl_define(lsl_define)
         fields, _ = parse_struct(header, block)
@@ -649,8 +608,6 @@ def main() -> int:
     ap.add_argument("--seed", action="store_true",
                     help="dump descriptions from the existing A2L, for migration")
     args = ap.parse_args()
-
-    verify_dual_sources()
 
     if args.seed:
         seed()

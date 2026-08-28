@@ -44,7 +44,9 @@
  * All functions must be called from CPU0 only (no cross-core locking); a
  * save blocks the caller for the erase + program time (a few ms).
  */
-#define XCP_NVM_ADDR    0x70030200u
+/* XCP_NVM_ADDR deleted, T5 (docs/MEMORY_PLACEMENT.md): Xcp.c's whitelist
+ * now uses (uint32)&g_xcpNvm, so Lcf_Tasking_Tricore_Tc.lsl
+ * (LCF_XCP_NVM_START) is the only place 0x70030200 is written down. */
 #define XCP_NVM_MAGIC   0x4D564E58u
 #define XCP_NVM_SIZE    44u
 
