@@ -2,8 +2,9 @@
  * \file CoreStats.c
  * \brief Per-core execution-time accounting — see CoreStats.h.
  *
- * g_coreStats itself is defined in SharedRam.c (LMU shared block, __at()) --
- * not here. This file only owns the logic that touches it.
+ * g_coreStats itself is defined in SharedRam.c (LMU shared block, `#pragma
+ * section`, docs/MEMORY_PLACEMENT.md T3) -- not here. This file only owns
+ * the logic that touches it.
  *********************************************************************************************************************/
 #include "CoreStats.h"
 

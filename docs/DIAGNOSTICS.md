@@ -131,7 +131,10 @@ Basisadresse `0x70030100`, 64 Bytes, alle Werte `float32` little-endian.
 Schreibzugriffe per XCP (`DOWNLOAD`/`SHORT_DOWNLOAD`) sind **nur** innerhalb
 dieses Blocks und des NVM-Blocks (s. u.) erlaubt (jeweils ab Offset 0x04 —
 die Magic-Wörter setzt nur die Firmware). Alle anderen Adressen antworten
-mit `ERR_WRITE_PROTECTED (0x25)`.
+mit `ERR_WRITE_PROTECTED (0x25)`. ⚠️ pyXCP nennt denselben Code
+`ERR_ACCESS_LOCKED` in seiner eigenen Fehlertabelle — gleicher Wert `0x25`,
+andere Bezeichnung; nicht mit einem zweiten Fehler verwechseln (gefunden bei
+der T5-Verifikation auf Hardware, docs/MEMORY_PLACEMENT.md).
 Der Block liegt **nur im RAM**: Nach einem Reset gelten wieder die
 Defaults. Persistente Parameter leben strikt getrennt im NVM-Block.
 

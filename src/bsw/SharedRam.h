@@ -33,8 +33,10 @@
  * collision risk gets caught.
  *
  * Objects were originally placed here with the TASKING `__at()` extension,
- * the same house style still used for every XCP block (Measurements.c:23,
- * unaffected by this -- that migration is T4, docs/MEMORY_PLACEMENT.md).
+ * the same house style every XCP block used too (Measurements.c and
+ * friends) until docs/MEMORY_PLACEMENT.md T4 moved those onto the same
+ * `#pragma section` mechanism, and T5 deleted the last `XCP_*_ADDR` macro --
+ * `__at()` is gone from this entire tree now, not just this block.
  * `__at()` blocks had to be ALONE in their translation unit: cppcheck cannot
  * parse `__at(ADDR)` at all, and -- discovered only once this actually
  * mattered -- its recovery from that syntax error discards the symbol table

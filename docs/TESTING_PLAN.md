@@ -238,13 +238,15 @@ everything below testable.
 Here because it needs every seam technique at once — but the payoff is the
 debounce logic, which is the best A4 example in the repo.
 
-**The blocker is `__at()`**, a TASKING extension for absolute placement
-(`Diagnostics.c:9`), unknown to GCC. It appears in five files, so solve it once
-and properly: neutralise it *in the build*, not in the source —
-`target_compile_definitions(test_diagnostics PRIVATE "__at(x)=")`. On the host
-it becomes an ordinary variable; the target build is untouched. An
-`#ifdef TESTING` in `Diagnostics.c` would be the worse answer to the same
-problem.
+**Was the blocker: `__at()`**, a TASKING extension for absolute placement,
+unknown to GCC. `docs/MEMORY_PLACEMENT.md` (T4/T5) removed `__at()` from this
+entire tree, `Diagnostics.c` included -- `g_xcpCal` is `#pragma section
+farbss "xcp_cal"` now, guarded by `#if defined(__TASKING__)` (same idiom
+`SharedRam.c` uses), so on GCC that guard compiles out to nothing and
+`g_xcpCal` is an ordinary global with no special handling needed at all. No
+`target_compile_definitions(... "__at(x)=")` workaround required if this
+stage is picked up now -- the seam this section describes may already be
+free.
 
 Then the fakes, about 40 lines total: a definition of `volatile Xcp_Data
 g_xcpData` (this *is* your input lever — the test writes the measurements),

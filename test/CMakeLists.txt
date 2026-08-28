@@ -230,12 +230,13 @@ uebersetzt und gelinkt, aber NICHT gelesen: die Erwartungen stammen
 ausschliesslich aus docs/FUSION_SPEC.md und den Headern. Siehe die Warnung
 oben in FUSION_SPEC.md.
 
-Zwei Dinge fehlen dem Host:
-  __at()     TASKING-Erweiterung, mit der g_fusionCal auf eine feste Adresse
-             gelegt wird. Auf dem Host ein leeres Makro -- das Objekt landet
-             einfach im BSS.
+Ein Ding fehlt dem Host:
   NULL_PTR   kommt auf dem Target aus iLLDs Ifx_Types.h; fakes/Ifx_Types.h
              liefert es jetzt mit.
+(g_fusionCal's Platzierung -- __at() bis T4, seither `#pragma section` --
+brauchte frueher ebenfalls das __at()-Leermakro hier; docs/MEMORY_PLACEMENT.md
+T5 loeschte das letzte __at() im ganzen Baum, GCC ignoriert die unbekannte
+Pragma-Zeile jetzt einfach mit einer Warnung, kein Makro noetig.)
 
 g_xcpNvm (Hard-Iron-Kalibrierung) kommt aus fakes/Nvm.c.
 -m ist noetig, weil die Estimator-Mathematik gegen libm linkt (sinf, atan2f...).
@@ -248,10 +249,10 @@ AhrsLatchPlace.c), one per TU per SharedRam.h's then-cppcheck constraint. As
 of T3 (docs/MEMORY_PLACEMENT.md) all three moved into SharedRam.c along with
 g_coreStats/g_navState/g_imuEdge -- those three *Place.c files are deleted,
 SharedRam.c replaces them here. `-include tasking_shim.h` below is still
-needed for fusion.c/Ahrs.c/FusionCal.c's own Ifx__dsync()/`__at()` calls (the
-g_fusionCal placement, unaffected by this -- that migration is T4); SharedRam.c
-itself needs neither macro any more (no __at() left in that file) but picking
-up the blanket -include here is harmless.
+needed for fusion.c/Ahrs.c's own Ifx__dsync() calls -- the shim's __at()
+entry is gone (docs/MEMORY_PLACEMENT.md T5 deleted the last __at() in the
+tree); SharedRam.c doesn't need the shim at all any more, but picking up
+the blanket -include here is harmless.
 ]]
 add_library(estimator STATIC
     ${BSW}/fusion.c

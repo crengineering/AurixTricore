@@ -172,6 +172,7 @@ wrong. See `docs/FUSION.md` §8 for the case where this bit.
 | `Xcp_Gpio` | `0x70030300` | RAM only | `gpio.h` |
 | `I2c_Debug` | `0x70030400` | RAM only | `I2c.h` |
 | `Xcp_Fusion` | `0x70030500` | RAM only | `Measurements.h` |
+| `Xcp_FusionCal` | `0x70030600` | RAM only | `FusionCal.h` |
 | `SharedRam` (LMU, non-XCP) | `0xB00F0000` | LMU, non-cached alias | `SharedRam.c`/`.h` |
 
 Blocks are 256 bytes apart. `Xcp_Data` is **full** — its last field ends within

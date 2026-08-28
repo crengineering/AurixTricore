@@ -229,10 +229,20 @@ Two traps worth knowing before adding an object here:
   wraps the compiler builtin. A missing barrier fails **silently**, as a rare
   torn read under load, never as a build error, so the acceptance check greps
   the generated `.src` for a real `DSYNC` instruction.
-- **One `__at()` object per `.c` file.** cppcheck cannot parse the extension
-  and silently loses its symbol table for the rest of the file, so a second
-  object in the same translation unit stops half that file being analysed
-  without saying so. Hence the `*Place.c` files.
+- **Use `#pragma section farbss "shared_lmu.<name>"`, not `__at()`** (see
+  `SharedRam.c`). `__at()` used to be the placement mechanism here, and
+  cppcheck cannot parse it at all — worse, its recovery from that syntax
+  error discards the symbol table for the *rest of the file*, not just the
+  `__at()` line, so a second object (or any other logic) sharing that TU
+  went unanalysed without saying so; that is why this block used to be six
+  separate `*Place.c` files. `docs/MEMORY_PLACEMENT.md` (T0-T5) replaced
+  `__at()` with `#pragma section` everywhere in this tree — it has no such
+  restriction, so every object in the shared block now lives together in
+  `SharedRam.c`. Guard the pragma with `#if defined(__TASKING__)` (the
+  vendor iLLD's own idiom, `IfxCpu_Trap.c:316`): GCC only *warns* about an
+  unrecognised `#pragma section` under a plain build, but CI's
+  `unit_tests.yml` "Warnings" jobs add `-Werror`, which turns that warning
+  into a build failure.
 
 The XCP blocks are **not** part of this and must not move: `Xcp_Data` lives at
 `0x70030000` in CPU0's DSPR, which is a second, independent reason publishing

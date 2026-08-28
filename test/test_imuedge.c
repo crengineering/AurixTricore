@@ -13,8 +13,10 @@
  * This suite is single-threaded, so every call observes a quiescent object
  * and succeeds on the first attempt. Left unexercised here, same honesty
  * test_navstate.c applies, rather than faking it by instrumenting the
- * function under test. The memory placement (__at(0xB00F0500)) is a
- * hardware/.map check, not a host one (see the T15 report). */
+ * function under test. The memory placement (a locator-assigned address in
+ * the `shared_lmu` group, docs/MEMORY_PLACEMENT.md T2 -- originally
+ * __at(0xB00F0500), before that migration) is a hardware/.map check, not a
+ * host one (see the T15 report). */
 
 void setUp(void)
 {

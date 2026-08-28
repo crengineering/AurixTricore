@@ -1,9 +1,12 @@
 /* Host-Fake fuer Nvm.c.
  *
  * Ahrs.c liest g_xcpNvm (Hard-Iron-Offsets, Soft-Iron-Skalen, Deklination).
- * Die echte Definition benutzt die TASKING-Erweiterung __at() und laesst sich
- * auf dem Host nicht uebersetzen; hier steht deshalb nur das Objekt selbst,
- * ohne DFLASH und ohne Kommandoverarbeitung.
+ * Die echte Nvm.c braucht IfxFlash.h (DFLASH-Zugriff), das es auf dem Host
+ * nicht gibt, und laesst sich deshalb nicht mituebersetzen -- unabhaengig
+ * von der Platzierung von g_xcpNvm selbst (seit docs/MEMORY_PLACEMENT.md T5
+ * `#pragma section`, davor `__at()`; beides TASKING-Erweiterungen, die GCC
+ * nicht kennt, aber das war nie der blockierende Grund). Hier steht deshalb
+ * nur das Objekt selbst, ohne DFLASH und ohne Kommandoverarbeitung.
  *
  * The identity calibration (zero offset, unit scale, zero declination) is what
  * a freshly provisioned board has, so it is the default a test sees unless it
