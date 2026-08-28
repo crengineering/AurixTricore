@@ -80,6 +80,19 @@ def run_cppcheck(exe):
         "--platform=unix32",
         "--inline-suppr",
         "--suppress=*:Libraries/*",
+        # LayoutAssert_gen.h (docs/MEMORY_PLACEMENT.md part 6) is GENERATED,
+        # by tools/gen_a2l.py, not hand-written: ~170 negative-array-size
+        # static-assert typedefs, the portable/MISRA-known idiom for a
+        # compile-time check on a toolchain without _Static_assert
+        # (confirmed unavailable here under this project's exact build
+        # flags). Every one of those typedefs is, by the nature of the
+        # idiom, never referenced anywhere -- misra-c2012-2.3 ("a project
+        # should not contain unused type declarations") is expected to fire
+        # on every single line. One blanket suppression for this one
+        # generated file, not ~170 repeated inline comments the generator
+        # would also have to emit -- the file's own header already says
+        # "do not edit by hand" and states why this pattern exists.
+        "--suppress=misra-c2012-2.3:src/bsw/LayoutAssert_gen.h",
         "--template={file}|{line}|{id}|{message}",
         "--quiet",
     ]

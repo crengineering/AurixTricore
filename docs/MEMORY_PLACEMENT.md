@@ -757,3 +757,83 @@ found rather than smoothed over: T5 and T6 swapped order (T6's part in this
 file), and `#pragma section` needs a `#if defined(__TASKING__)` guard or it
 is a `-Werror` failure on the host build (T0/T4's findings, now also in
 `README.md`).
+
+---
+
+## 13. The struct-offset guard — done, same branch, separate from placement
+
+Part 6 above flagged this as a separate, smaller change and it landed that
+way: no address, no linker script, no placement mechanism touched.
+`tools/gen_a2l.py` now also generates `src/bsw/LayoutAssert_gen.h`, compiled
+by the one new TU `src/bsw/LayoutAssert.c`, asserting that the compiler's own
+`offsetof()`/`sizeof()` for every field in every XCP block agree with the
+offset this generator assumed when it last wrote the A2L.
+
+**`_Static_assert` — measured, not assumed, and the answer is no.** Under
+this project's exact build flags (`--iso=99`, confirmed by adding it to a
+real file and building), `_Static_assert` is a hard syntax error (`ctc
+E208`). The negative-array-size fallback (`typedef char x[(cond) ? 1 :
+-1]`) works — also confirmed by build — but with a real trap found doing
+it: wrapping the idiom in a C macro that uses `##` to build a unique name
+per assertion breaks it. `offsetof(Xcp_Data, accelX) == N` passed as the
+macro's `cond` argument failed to compile (`ctc E286`, "array size shall be
+greater than zero") even though the *exact same expression*, written as a
+bare typedef with no macro, compiled cleanly — bisected down to: any `##`
+anywhere in a macro body stops TASKING's preprocessor from expanding a
+*different* parameter's own macro call (`offsetof(...)`) before
+substitution, even though that parameter is never adjacent to the `##`.
+Fix: no macro at all. Each assertion is emitted directly by Python, already
+uniquely and descriptively named (`layout_assert_<Block>_<field>_offset`) —
+simpler than the macro it replaces, and immune to the quirk since there is
+no `##` anywhere in the generated file.
+
+**Where it lives and how it's compiled.** `src/bsw/LayoutAssert_gen.h`
+(generated), included by exactly one TU, `src/bsw/LayoutAssert.c` (hand-
+written, one `#include`, nothing else — same placement-only convention as
+`SharedRam.c`). `.cproject`'s `sourceEntries` picks it up automatically,
+same as every file added since T2 (excludes only `test|SCR|MCS|HSM`, not a
+per-file list) — verified by it actually compiling in the real build, not
+assumed.
+
+**Coverage: every struct field, not every A2L-emitted signal, not every
+array element.** One offset assertion per field (whether or not
+`a2l_meta.json` marks it `skip`) plus one `sizeof` per block — **173** total
+across the six blocks (167 fields + 6 sizes), close to part 6's ~180
+estimate. Deliberately *not* one assertion per A2L-emitted measurement:
+array elements are always contiguous in C with no possible padding between
+them, so asserting an array field's own base offset already covers every
+element the A2L expands it into — a per-element scheme would turn the six
+blocks' ~60 array-typed fields into several hundred near-duplicate lines for
+zero extra coverage. Covering every field rather than only the emitted
+subset means the guard needs no dependency on `a2l_meta.json` at all, and
+catches drift in a skipped/reserved field exactly as directly as in an
+emitted one, rather than only indirectly through whatever emitted field
+happens to follow it.
+
+**Regenerate-and-commit.** `gen_a2l.py --check` now checks both generated
+files (the A2L and the layout header) in one pass, so `a2l.yml` — already
+running exactly that command — catches drift in either without any change
+to the workflow file itself; `gen_a2l.py` (no flags) writes both.
+
+**Proved the way T7 was proved: perturbed a real struct, watched the build
+fail, named the field, reverted.** Grew `Measurements.h`'s `imuReserved[3]`
+to `[4]` — the design's own example — *without* regenerating the header
+(the realistic failure mode: someone edits a struct and forgets to
+regenerate). Clean build: **45 errors**, first one `ctc E286` at
+`LayoutAssert_gen.h`'s `layout_assert_Xcp_Data_accelX_offset` line (the
+field immediately after the grown array — `imuReserved`'s *own* offset
+assertion still passed, correctly, since growing an array does not move its
+own start) cascading through every one of `Xcp_Data`'s remaining fields.
+Reverted; clean build again, `check_memmap: OK`, `gen_a2l.py --check` up to
+date for both files.
+
+**MISRA.** The negative-array-size idiom is a well-known trigger for
+misra-c2012-2.3 ("a project should not contain unused type declarations") —
+every one of the ~170 typedefs is, by construction, never referenced. One
+blanket `--suppress=misra-c2012-2.3:src/bsw/LayoutAssert_gen.h` in
+`tools/misra_check.py`, not ~170 repeated inline comments the generator
+would otherwise have to emit. **Could not confirm the exact rule ID
+locally** (no `addons/misra.py` on this machine, the same local-cppcheck
+gap noted throughout this migration) — CI is the authority, as always; if
+it names a different rule, the suppression gets corrected to match, not
+guessed at twice.
