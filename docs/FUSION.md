@@ -172,6 +172,11 @@ behaves exactly as it did before the fields existed.
 
 ### Result on this board, 2026-08-26
 
+This set is versioned in **`calibration/board.json`** — after any reflash
+(`flash.bat` erases DFLASH) restore it with
+`python tools/mag_cal.py --restore-from calibration/board.json`, which also
+verifies by read-back. A later `--write` updates the JSON automatically.
+
 | | |
 |---|---|
 | hard iron | X **−0.1940**, Y **−0.0722**, Z **−0.8510** G |

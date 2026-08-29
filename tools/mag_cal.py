@@ -33,7 +33,14 @@ Usage
     python tools/mag_cal.py                 # collect, fit, print. Writes nothing.
     python tools/mag_cal.py --seconds 90
     python tools/mag_cal.py --write         # also store to NVM and SAVE
+                                            # (and update calibration/board.json)
     python tools/mag_cal.py --decl 3.9      # set magnetic declination too
+    python tools/mag_cal.py --export F.json # persist the fit to a file
+    python tools/mag_cal.py --restore-from calibration/board.json
+                                            # push a saved set back to NVM +
+                                            # SAVE, then read it back. This is
+                                            # the restore step after a reflash
+                                            # (flash.bat erases DFLASH).
 
 While it collects, turn the board slowly through as many orientations as you
 can -- all six faces up, and tumble it between them. The fit needs the samples
@@ -45,6 +52,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import datetime
+import json
+import pathlib
 import struct
 import sys
 import time
@@ -98,6 +108,61 @@ def write_f32(x, addr, value):
 def write_u32(x, addr, value):
     x.setMta(addr, 0)
     x.download(struct.pack("<I", int(value)))
+
+
+def read_f32s(x, addr, n):
+    raw = bytes(x.shortUpload(4 * n, addr, 0))
+    return struct.unpack("<" + "f" * n, raw[: 4 * n])
+
+
+# The versioned home of the board's calibration (gap fix 2026-08-29): DFLASH
+# is erased on every reflash, so the values must exist OUTSIDE the chip too.
+BOARD_JSON = pathlib.Path(__file__).resolve().parent.parent / "calibration" / "board.json"
+
+
+def export_fit(path, centre, scale, residual, cov, samples, decl, note):
+    data = {
+        "date": datetime.date.today().isoformat(),
+        "note": note,
+        "hard_iron_G": {"x": float(centre[0]), "y": float(centre[1]), "z": float(centre[2])},
+        "soft_iron": {"x": float(scale[0]), "y": float(scale[1]), "z": float(scale[2])},
+        "declination_deg": decl,
+        "fit_residual_pct": round(float(residual), 2),
+        "octant_coverage_pct": round(100.0 * cov, 0),
+        "samples": int(samples),
+    }
+    p = pathlib.Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    print(f"fit exported to {p}")
+
+
+def restore_from(conf, path):
+    """Push a saved calibration set to NVM + SAVE, then read it back.
+
+    This is the board-discipline restore step after any reflash: verify the
+    read-back matches the file before trusting heading."""
+    data = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    hi, si = data["hard_iron_G"], data["soft_iron"]
+    with Master("eth", config=conf) as x:
+        x.connect()
+        for i, axis in enumerate("xyz"):
+            write_f32(x, NVM_MAG_OFF_X + 4 * i, hi[axis])
+            write_f32(x, NVM_MAG_SCALE_X + 4 * i, si[axis])
+        if data.get("declination_deg") is not None:
+            write_f32(x, NVM_MAG_DECL, data["declination_deg"])
+        write_u32(x, NVM_COMMAND, NVM_CMD_SAVE)
+        off = read_f32s(x, NVM_MAG_OFF_X, 3)
+        scl = read_f32s(x, NVM_MAG_SCALE_X, 3)
+    want = [hi["x"], hi["y"], hi["z"], si["x"], si["y"], si["z"]]
+    got = list(off) + list(scl)
+    ok = all(abs(w - g) < 1e-4 for w, g in zip(want, got))
+    print(f"restored from {path} ({data.get('date')}, note: {data.get('note')})")
+    print(f"read-back offsets {off}  scales {scl}")
+    print("read-back MATCHES the file -- heading may be trusted." if ok else
+          "!! READ-BACK MISMATCH -- do not trust heading; investigate before flying.")
+    if not ok:
+        sys.exit(1)
 
 
 def fit_sphere(p: np.ndarray):
@@ -208,12 +273,22 @@ def main():
                     help="where to dump the raw samples (always written)")
     ap.add_argument("--load", default=None,
                     help="re-fit a previous dump instead of collecting")
+    ap.add_argument("--export", default=None, metavar="FILE",
+                    help="persist the fit result as JSON (a --write always "
+                         f"also updates {BOARD_JSON.name} in calibration/)")
+    ap.add_argument("--restore-from", default=None, metavar="FILE",
+                    help="write a saved calibration set to NVM + SAVE and "
+                         "verify by read-back (the after-reflash restore)")
     args = ap.parse_args()
 
     conf = create_application_from_config({
         "Transport": {"Eth": {"host": HOST, "port": PORT,
                               "protocol": "UDP", "ipv6": False}},
     })
+
+    if args.restore_from:
+        restore_from(conf, args.restore_from)
+        return
 
     if args.load:
         # Re-fit a previous dump with no hardware attached. This is what makes
@@ -224,7 +299,10 @@ def main():
         centre, scale, residual, err = fit_ellipsoid(p)
         if err:
             sys.exit(f"fit failed: {err}")
-        report(p, centre, scale, residual)
+        cov = report(p, centre, scale, residual)
+        if args.export:
+            export_fit(args.export, centre, scale, residual, cov, len(p),
+                       args.decl, f"re-fit of {args.load}")
         return
 
     pts = []
@@ -331,8 +409,16 @@ def main():
             print("\nwritten to NVM and SAVE issued -- survives a power cycle.")
             print("Verify: rotate the board and watch MagFieldCorrected "
                   "(0x7003054C) stay put.")
+            # A set that went to NVM is the board's truth -- persist it
+            # OUTSIDE the chip too, unconditionally: flash.bat erases DFLASH,
+            # and calibration/board.json is what --restore-from reads back.
+            export_fit(BOARD_JSON, centre, scale, residual, cov, len(p),
+                       args.decl, "live fit, written to NVM")
         else:
             print("\n(nothing written -- re-run with --write to store it)")
+        if args.export:
+            export_fit(args.export, centre, scale, residual, cov, len(p),
+                       args.decl, "live fit" + (", written to NVM" if args.write else ""))
 
 
 if __name__ == "__main__":
