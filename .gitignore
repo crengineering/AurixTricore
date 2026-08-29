@@ -90,3 +90,6 @@ test/build*/
 # host unit-test build trees
 test/build*/
 test/ref/__pycache__/
+
+# magnetometer calibration raw dumps (tools/mag_cal.py --save; re-fit with --load)
+mag_points*.csv
