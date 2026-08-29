@@ -25,7 +25,7 @@ on:
   workflow_dispatch:
 
 concurrency:  # supersede an in-flight run when new commits land on the same ref
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 # Least privilege: every job here only reads the checkout. Declared
