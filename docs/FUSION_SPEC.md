@@ -1,5 +1,7 @@
 # Sensor fusion — behavioural specification
 
+**ASPICE:** SWE.1 (pre-ASPICE) — behavioural spec of the estimator, to be absorbed into SWR-FW items · parent SYS-NAV-001/002, SYS-VER-001 · process: QuadSE/requirements/README.md
+
 **This document exists to be tested against.** It states what the estimator must
 do, never how it does it. Nothing here is derived from reading `fusion.c`,
 `Ahrs.c` or `FusionCal.c`; it comes from Kalman filter theory, rigid-body

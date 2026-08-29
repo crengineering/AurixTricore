@@ -1,0 +1,10 @@
+{
+  "date": "2026-08-26",
+  "note": "seeded 2026-08-29 from docs/FUSION.md 'Result on this board, 2026-08-26' (fw v1.19.10 era); values were live in NVM at that date. Raw samples were mag_points.csv (repo root, gitignored) -- a --restore-from run pushes these back after any reflash.",
+  "hard_iron_G": { "x": -0.1940, "y": -0.0722, "z": -0.8510 },
+  "soft_iron": { "x": 1.0, "y": 1.0, "z": 1.0 },
+  "declination_deg": 3.9,
+  "fit_residual_pct": 3.51,
+  "octant_coverage_pct": null,
+  "samples": null
+}

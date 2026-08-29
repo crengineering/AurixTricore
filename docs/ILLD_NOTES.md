@@ -1,5 +1,7 @@
 # iLLD Notes — TC39x
 
+**ASPICE:** SWE.3 supporting reference — iLLD driver knowledge base (BSW) · baseline — parent TBD · process: QuadSE/requirements/README.md
+
 Distilled reference for the iLLD subset this project actually uses. **Read this
 instead of grepping `Libraries/iLLD/` (801 files).** Only open vendor source when
 this file has a gap — and when you do, write the answer back here.

@@ -1,5 +1,7 @@
 # Sensor fusion — attitude and navigation
 
+**ASPICE:** SWE.3 — detailed design, estimator (`Ahrs.c` + `fusion.c`) + SYS.4 bench evidence · realizes SYS-NAV-001/002, SYS-TIM-001/002 · process: QuadSE/requirements/README.md
+
 How five sensors become one state. Read `src/bsw/Ahrs.h` and `src/bsw/fusion.h`
 alongside this; the headers carry the derivations, this file carries the
 bench numbers, the failure modes and the calibration procedure.
@@ -169,6 +171,11 @@ survive a power cycle, and default to a **no-op** so an uncalibrated board
 behaves exactly as it did before the fields existed.
 
 ### Result on this board, 2026-08-26
+
+This set is versioned in **`calibration/board.json`** — after any reflash
+(`flash.bat` erases DFLASH) restore it with
+`python tools/mag_cal.py --restore-from calibration/board.json`, which also
+verifies by read-back. A later `--write` updates the JSON automatically.
 
 | | |
 |---|---|

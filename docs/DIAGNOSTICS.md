@@ -1,5 +1,7 @@
 # Board Diagnostics (XCP)
 
+**ASPICE:** SWE.3 — detailed design, diagnostics + cal blocks · baseline — parent TBD (serves R-008 groundstation visibility) · process: QuadSE/requirements/README.md
+
 Firmware ab **v1.2.0**. Der Diagnose-Task läuft alle 100 ms auf CPU0,
 vergleicht die Messwerte gegen kalibrierbare Grenzwerte und meldet
 Verletzungen als 32-Bit-Bitmaske `diagStatus` im zyklischen XCP-Datenblock.
@@ -44,15 +46,25 @@ Adresse: `Xcp_Data + 0x24` (Basis `0x70030000`, also `0x70030024`).
 | 24 | `0x01000000` | **MMC5983MA Kommunikations-Timeout** | > 1 s kein erfolgreicher Read |
 | 25 | `0x02000000` | **MMC5983MA Daten eingefroren** | > 5 s bit-identischer Wert |
 | 26 | `0x04000000` | **MMC5983MA unplausibel** — \|B\| außerhalb 0,15…2,0 G. Das ist der schärfste Test im ganzen Wort: \|B\| ist eine Eigenschaft des **Ortes**, nicht der Lage, muss also beim Drehen des Boards konstant bleiben (~0,48 G in München). Ein Wert, der um einen glatten Faktor daneben liegt, bedeutet falsche Skalierung oder falsch zusammengesetztes 18-Bit-Wort | > 1 s außerhalb |
+| 27 | `0x08000000` | **GNSS antwortet nie** (`DIAG_GNSS_NO_RESPONSE`, `Diagnostics.h:95`) | s. `Diagnostics.c` |
+| 28 | `0x10000000` | **GNSS Kommunikations-Timeout** (`DIAG_GNSS_TIMEOUT`) | s. `Diagnostics.c` |
+| 29 | `0x20000000` | **GNSS Daten eingefroren** (`DIAG_GNSS_STUCK_DATA`) | s. `Diagnostics.c` |
+| 30 | `0x40000000` | **GNSS unplausibel** (`DIAG_GNSS_IMPLAUSIBLE`) | s. `Diagnostics.c` |
 | 31 | `0x80000000` | Kalibrierblock ungültig — Defaults wurden neu geladen | Magic-Wort zerstört |
 
-⚠️ **Bits 27–30 sind die LETZTEN vier freien Bits** — Platz für genau **ein**
-weiteres Gerät. Es fehlen noch GNSS (NEO-M9N), Flight-IMU (ICM-42688-P) und
-4× ESC-Telemetrie: sechs Geräte, die 24 Bits bräuchten. **Vor dem übernächsten
-Gerät** müssen die gerätespezifischen Fehler aus diesem gemeinsamen Wort heraus
-in ein Status-Array pro Peripherie (indiziert über `PeriphDiag_Id`) wandern;
-`diagStatus` bleibt dann für Board-Fehler. Das ändert `Xcp_Data`, das A2L und
-die `BIT_MASK`-Zeilen der GUI gemeinsam.
+## Resource budgets (SSoT — korrigiert 2026-08-29)
+
+Diese Tabelle ist die **einzige** maßgebliche Buchführung; andere Dokumente
+verweisen hierher statt eigene Stände zu führen.
+
+| Ressource | Stand | Konsequenz |
+|---|---|---|
+| `diagStatus` | **VOLL — 32/32 Bits belegt** (0–26 Board+Peripherie, 27–30 GNSS seit der NEO-M9N-Integration, 31 Cal) | Das **nächste** Gerät (Flight-IMU-Slots, 4× ESC-Telemetrie) erzwingt die Migration der gerätespezifischen Fehler in ein Status-Array pro Peripherie (`PeriphDiag_Id`-indiziert); `diagStatus` bleibt dann für Board-Fehler. Ändert `Xcp_Data`, A2L und die `BIT_MASK`-Zeilen der GUI gemeinsam |
+| `Xcp_Data` | letztes Feld endet **`0xF8`** → **8 Bytes frei** vor `Xcp_Cal` @`0x…100` (IMU_INTERRUPT.md §, REFACTORING_PLAN.md §) | praktisch voll — jedes echte Gerät braucht mehr; Erweiterung heißt Block-Umbau per CODEMAP |
+
+*(Der frühere Hinweis an dieser Stelle — „Bits 27–30 sind die letzten vier
+freien" — war seit der GNSS-Integration veraltet; ebenso ist der Kommentar
+`Diagnostics.h:101` „Still to come are the GNSS" stale.)*
 
 > **Ab v1.14.0:** Der Barometer-Slot (Bits 15–18) wird vom **BMP581** (I2C0
 > `0x47`) bedient — die Bitbelegung ist unverändert. Der **IMU-Slot (Bits

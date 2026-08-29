@@ -1,5 +1,7 @@
 # MEMORY_PLACEMENT — moving fixed placement from `__at()` to the linker
 
+**ASPICE:** SWE.2 — memory architecture (linker-owned placement) · baseline — parent TBD · process: QuadSE/requirements/README.md
+
 Design draft for a PR **after** #15 merges. Nothing here is implemented.
 Written 2026-08-28 against `feature/refactoring` @ e276764.
 
