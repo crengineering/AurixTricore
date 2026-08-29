@@ -32,9 +32,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import kf  # noqa: E402
 
 # --- compiled defaults, read out of FusionCal_init() at run time -------------
+# sigmaAccD/sigmaAccH are PSDs [m/s^2/sqrt(Hz)], not per-tick sigmas, since the
+# Q reparametrisation (docs/NAV_TUNING.md) -- 0.0424/0.0707 == 0.3/0.5 *
+# sqrt(0.02), the 50 Hz-equivalent conversion.
 CAL = dict(
-    sigmaAccD=0.3, sigmaBaro=0.0197, sigmaBaroRw=0.025, tauBaroBias=600.0,
-    sigmaAccH=0.5, sigmaGnssVel=0.3, gnssPosRScale=8.0,
+    sigmaAccD=0.0424, sigmaBaro=0.0197, sigmaBaroRw=0.025, tauBaroBias=600.0,
+    sigmaAccH=0.0707, sigmaGnssVel=0.3, gnssPosRScale=8.0,
     gateSigmaSq=25.0, gateMinM=2.0,
 )
 DT = 0.005

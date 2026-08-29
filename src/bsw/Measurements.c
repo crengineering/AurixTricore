@@ -393,6 +393,9 @@ void measurementsSetFusion(const FusionValues *fusion, const Ahrs_Values *ahrs,
     }
 
     g_xcpFusion.navDropped = fusion->dropped;
+
+    g_xcpFusion.innovVelN = fusion->innovVelN;
+    g_xcpFusion.innovVelE = fusion->innovVelE;
 }
 
 void measurementsUpdate(void)

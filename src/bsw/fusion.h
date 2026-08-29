@@ -72,6 +72,8 @@ typedef struct
     float32 accBiasE;   /**< estimated accelerometer bias, east  [m/s^2]     */
     float32 innovN;     /**< last GNSS north innovation [m]                  */
     float32 innovE;     /**< last GNSS east innovation [m]                   */
+    float32 innovVelN;  /**< last GNSS velocity innovation, north [m/s]      */
+    float32 innovVelE;  /**< last GNSS velocity innovation, east  [m/s]      */
     float32 pNN;        /**< variance of posN [m^2]                          */
 
     /* --- tangent-plane origin ----------------------------------------- */

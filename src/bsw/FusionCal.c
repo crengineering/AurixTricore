@@ -29,13 +29,22 @@ volatile Xcp_FusionCal g_fusionCal;
 #define FCAL_TWO_KP_MAG        (0.5f)
 #define FCAL_TWO_KI            (0.02f)
 
-#define FCAL_SIGMA_ACC_D       (0.3f)
+/* PSD, not a per-tick sigma -- see fusion.c FUSION_SIGMA_A_D/A_H for the
+ * derivation (0.3 * sqrt(0.02), the 50 Hz-equivalent conversion) and
+ * docs/NAV_TUNING.md for why the old per-tick parametrisation was rate-
+ * dependent. Units m/s^2/sqrt(Hz). */
+#define FCAL_SIGMA_ACC_D       (0.0424f)
 #define FCAL_SIGMA_BARO        (0.0197f)
 #define FCAL_SIGMA_BARO_RW     (0.025f)
 #define FCAL_TAU_BARO_BIAS     (600.0f)
 
-#define FCAL_SIGMA_ACC_H       (0.5f)
+#define FCAL_SIGMA_ACC_H       (0.0707f)
 #define FCAL_SIGMA_GNSS_VEL    (0.3f)
+
+/* Accelerometer bias random walk, shared by all three channels -- see
+ * fusion.c FUSION_SIGMA_ACC_RW. Already rate-invariant; wired to the cal
+ * block only so it can be swept live (docs/NAV_TUNING.md section 4.3). */
+#define FCAL_SIGMA_ACC_RW      (1.0e-4f)
 
 /* GNSS position R multiplier. 1.0 means "trust hAcc as an independent
  * measurement", which the outdoor run on 2026-08-26 showed is wrong: varN
@@ -72,7 +81,9 @@ void FusionCal_init(void)
     g_fusionCal.gateSigmaSq   = FCAL_GATE_SIGMA_SQ;
     g_fusionCal.gateMinM      = FCAL_GATE_MIN_M;
 
-    for (i = 0u; i < 3u; i++)
+    g_fusionCal.sigmaAccRw    = FCAL_SIGMA_ACC_RW;
+
+    for (i = 0u; i < 2u; i++)
     {
         g_fusionCal.reserved[i] = 0.0f;
     }

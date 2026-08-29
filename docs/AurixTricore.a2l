@@ -14,7 +14,7 @@
  *   Xcp_Cal   (calibration, RAM only) 0x70030100, 64 bytes, Diagnostics.h
  *   Xcp_Nvm   (persistent, DFLASH)    0x70030200, 44 bytes, Nvm.h
  *   Xcp_Gpio  (GPIO control, RAM only) 0x70030300, 52 bytes, gpio.h
- *   Xcp_Fusion (navigation state)     0x70030500, 244 bytes, Measurements.h
+ *   Xcp_Fusion (navigation state)     0x70030500, 252 bytes, Measurements.h
  *   Xcp_FusionCal (estimator tuning)  0x70030600, 64 bytes, FusionCal.h
  * Transport: XCP on UDP/IP, port 5555, station 192.168.0.10.
  * DAQ: dynamic, 1 list, event channel 0 = 100 ms task.
@@ -1378,6 +1378,18 @@ ASAP2_VERSION 1 61
       ECU_ADDRESS 0x700305F0
     /end MEASUREMENT
 
+    /begin MEASUREMENT NavInnovVelNorth "last GNSS velocity innovation, north. Published so the velocity NIS (var(y)/(P+R)) becomes computable - see docs/NAV_TUNING.md, which is what motivated the Q reparametrisation this field ships alongside"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -200 200
+      ECU_ADDRESS 0x700305F4
+      PHYS_UNIT "m/s"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT NavInnovVelEast "last GNSS velocity innovation, east. Published so the velocity NIS (var(y)/(P+R)) becomes computable - see docs/NAV_TUNING.md, which is what motivated the Q reparametrisation this field ships alongside"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 -200 200
+      ECU_ADDRESS 0x700305F8
+      PHYS_UNIT "m/s"
+    /end MEASUREMENT
+
     /* Estimator tuning: Xcp_FusionCal @ 0x70030600, RAM only (FusionCal.h) */
     /begin CHARACTERISTIC FusKpAccel "TUNING - attitude: how hard the accelerometer pulls the gyro integral back toward gravity. Higher = tracks gravity faster but inherits vibration; lower = smoother but gyro drift shows. Fixes ROLL and PITCH only"
       VALUE 0x70030604 RL_FLOAT32 20 NO_COMPU_METHOD 0 20
@@ -1394,9 +1406,9 @@ ASAP2_VERSION 1 61
       PHYS_UNIT "1/s^2"
     /end CHARACTERISTIC
 
-    /begin CHARACTERISTIC FusSigmaAccDown "TUNING - vertical: how much the filter distrusts the accelerometer when predicting altitude. THE knob to raise once motors are running, because vibration is not in the 0.3 measured on a desk"
-      VALUE 0x70030610 RL_FLOAT32 20 NO_COMPU_METHOD 0.001 20
-      PHYS_UNIT "m/s^2"
+    /begin CHARACTERISTIC FusSigmaAccDownPsd "TUNING - vertical: how much the filter distrusts the accelerometer when predicting altitude, as a PSD. THE knob to raise once motors are running, because vibration is not in the 0.0424 measured on a desk. RENAMED from FusSigmaAccDown (docs/NAV_TUNING.md): the reparametrisation from a per-tick sigma to a PSD changes the meaning by ~32x at this board's tick rate - a stale saved tuning file under the old name must fail to find this field, not silently write a 32x-wrong value"
+      VALUE 0x70030610 RL_FLOAT32 5 NO_COMPU_METHOD 0.0001 5
+      PHYS_UNIT "m/s^2/sqrt(Hz)"
     /end CHARACTERISTIC
 
     /begin CHARACTERISTIC FusSigmaBaro "TUNING - vertical: barometer noise. MEASURED (0.0197 m); R is this value SQUARED. Changing the BMP581 IIR setting invalidates it - re-measure, do not guess"
@@ -1414,9 +1426,9 @@ ASAP2_VERSION 1 61
       PHYS_UNIT "s"
     /end CHARACTERISTIC
 
-    /begin CHARACTERISTIC FusSigmaAccHoriz "TUNING - horizontal: accelerometer distrust for north/east. Larger than the vertical one because horizontal acceleration is contaminated by ATTITUDE error - one degree of tilt error tips 0.17 m/s^2 of gravity into the horizontal plane"
-      VALUE 0x70030620 RL_FLOAT32 20 NO_COMPU_METHOD 0.001 20
-      PHYS_UNIT "m/s^2"
+    /begin CHARACTERISTIC FusSigmaAccHorizPsd "TUNING - horizontal: accelerometer distrust for north/east, as a PSD. Larger than the vertical one because horizontal acceleration is contaminated by ATTITUDE error - one degree of tilt error tips 0.17 m/s^2 of gravity into the horizontal plane. RENAMED from FusSigmaAccHoriz (docs/NAV_TUNING.md): the reparametrisation from a per-tick sigma to a PSD changes the meaning by ~32x at this board's tick rate - a stale saved tuning file under the old name must fail to find this field, not silently write a 32x-wrong value"
+      VALUE 0x70030620 RL_FLOAT32 5 NO_COMPU_METHOD 0.0001 5
+      PHYS_UNIT "m/s^2/sqrt(Hz)"
     /end CHARACTERISTIC
 
     /begin CHARACTERISTIC FusSigmaGnssVel "TUNING - horizontal: GNSS velocity noise. Currently pessimistic at 0.3 against a receiver good to about 0.05 - this is Doppler-derived and is the best measurement available for a position loop"
@@ -1435,6 +1447,11 @@ ASAP2_VERSION 1 61
     /begin CHARACTERISTIC FusGateMinMetres "TUNING - absolute floor on the barometer gate. Without it the gate converges to +/-0.1 m and starts rejecting real motion: a 30 cm hand lift already reached 62 percent of it. The gate is for CORRUPT readings, not for manoeuvres"
       VALUE 0x70030630 RL_FLOAT32 1000 NO_COMPU_METHOD 0.01 1000
       PHYS_UNIT "m"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC FusSigmaAccBiasRw "TUNING - accelerometer bias random walk, shared by all three channels. Already rate-invariant (unlike sigmaAccDPsd/sigmaAccHPsd), so this only wires the fusion.c compile-time constant into the live block. Measured: the down-axis bias moved 0.0003 m/s^2 across 60 s at constant temperature"
+      VALUE 0x70030634 RL_FLOAT32 1 NO_COMPU_METHOD 0.000001 1
+      PHYS_UNIT "m/s^2/sqrt(s)"
     /end CHARACTERISTIC
 
   /end MODULE
