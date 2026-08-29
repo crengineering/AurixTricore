@@ -1,5 +1,7 @@
 # NAV_TUNING.md — outdoor tuning pass on the navigation filter
 
+**ASPICE:** SWE.3 — tuning proposal, navigation filter + V&V evidence (MF4 traces) · realizes SYS-NAV-001/002 · process: QuadSE/requirements/README.md
+
 Design draft. Status: **proposal, nothing implemented.** Evidence is the five
 MF4 traces flown 2026-08-28 (`t1_5minutes_still`, `t2_rechteck_20_10`,
 `t3_50m`, `t4_figure_8`, `t5_stop_and_go_20m`) plus a Riccati replay of

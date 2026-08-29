@@ -129,11 +129,30 @@ over `src/` on every push/PR. Legacy findings are grandfathered in
 - Intentional re-baseline: `python tools/misra_check.py --update-baseline`
   (requires local cppcheck; set `CPPCHECK` env var if not on PATH)
 
+## Agent Protocol (PLAN-001)
+
+The multi-agent workflow, the requirements chain (ASPICE: `R-nnn` →
+`SYS-…` → `SWR-FW-…`), the agent definitions and the `/ritem` skill live in
+the **system-engineering repo `C:\Users\chris\Projects\QuadSE`** — its
+`CLAUDE.md` is the protocol SSoT; work sessions start there. This repo
+keeps only what co-changes with the code: `docs/architecture/
+SWE2_SWARC-FW.md` (SWE.2) and the SWE.3 module docs, each with an
+`**ASPICE:**` trace line.
+
+Board discipline for agents (flash-safety gate, one XCP master, calibration
+restore after reflash): `QuadSE/plans/PLAN-001-agents.md` §4.
+
+**Git exception (2026-08-27):** the `flight-dev` agent may commit/push on
+`feature/*`/`fix/*` branches of this repo, one commit per step, explicit
+paths, never `main`, never a PR/merge/rebase. All other agents: change,
+describe, stop.
+
 ## Git Workflow Rules
 
 **Never run `git commit` or `git push` unless the user explicitly asks.**
 Make code changes, describe what was done, and wait. Only commit/push when
 the user gives a direct instruction such as "commit", "push", or "commit and push".
+(Sole exception: the `flight-dev` agent rule above.)
 
 ---
 

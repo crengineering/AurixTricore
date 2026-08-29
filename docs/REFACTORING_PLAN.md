@@ -1,5 +1,7 @@
 # Refactoring plan — Cpu0_Main.c and the core partition
 
+**ASPICE:** archive — implemented design history (core partition); as-built architecture now in `docs/architecture/SWE2_SWARC-FW.md` · process: QuadSE/requirements/README.md
+
 Status: T1-T16 implemented, built and flashed (0 errors, 0 warnings; host
 tests and MISRA green); T17 closes the one open T15 hardware finding. Branch
 `feature/refactoring`. **§3 re-costed 2026-08-27** against the measured IMU

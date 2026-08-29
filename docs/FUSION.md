@@ -1,5 +1,7 @@
 # Sensor fusion — attitude and navigation
 
+**ASPICE:** SWE.3 — detailed design, estimator (`Ahrs.c` + `fusion.c`) + SYS.4 bench evidence · realizes SYS-NAV-001/002, SYS-TIM-001/002 · process: QuadSE/requirements/README.md
+
 How five sensors become one state. Read `src/bsw/Ahrs.h` and `src/bsw/fusion.h`
 alongside this; the headers carry the derivations, this file carries the
 bench numbers, the failure modes and the calibration procedure.

@@ -1,5 +1,7 @@
 # GNSS — u-blox UBX protocol (NEO-M9N)
 
+**ASPICE:** SWE.3 reference — UBX protocol notes (GNSS driver) · realizes SYS-NAV-002, supports R-010 · process: QuadSE/requirements/README.md
+
 Source: `docs/NEO-M9N_InterfaceDescription_UBX-19035940.pdf` (R03, interface
 version **32.01**, 247 pages) — §3 UBX protocol, §5 Configuration interface.
 Distilled 2026-08-20. Re-extract if the receiver's protocol version changes.

@@ -1,5 +1,7 @@
 # MMC5983MA.md — MEMSIC MMC5983MA magnetometer, wiring & bring-up
 
+**ASPICE:** SWE.3 — driver detailed design + bring-up evidence · supports R-010 · process: QuadSE/requirements/README.md
+
 Wiring and bring-up notes for the **MMC5983MA** 3-axis magnetometer on **I2C0**,
 joining the BMP581 on the shared sensor bus.
 

@@ -1,5 +1,7 @@
 # CODEMAP — where things live, and what a change touches
 
+**ASPICE:** supporting process — impact/traceability map across code, A2L, GUI, docs · serves all levels · process: QuadSE/requirements/README.md
+
 Navigation aid, not an authority. It exists for the one thing `grep` cannot do:
 follow a chain **whose name changes at each hop** (a pin → a driver → an
 `Xcp_Data` field → an A2L entry → a GUI plot).
