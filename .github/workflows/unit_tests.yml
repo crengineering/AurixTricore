@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 concurrency:  # if commits getting staged and pipeline is not finished, it stops and only runs on the newest commit.
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 # Least privilege: every job here only reads the checkout. Declared
