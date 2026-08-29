@@ -190,6 +190,61 @@ void test_process_noise_zero_is_exact_free_integration(void)
     TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.05f, 0.5f * aD * T * T, f.a_d, msg);
 }
 
+void test_process_noise_psd_growth_is_rate_invariant(void)
+{
+    /* Issue #19 / docs/NAV_TUNING.md: this is the defect itself, pinned down
+     * directly. fusion_chanPredict's Q used to be specified per TICK, so
+     * covering the same wall-clock second at a higher tick rate silently
+     * divided the effective acceleration PSD by the rate ratio (raising the
+     * estimator from 50 Hz to ~1014 Hz in PR #15 divided it by 20.3). The
+     * fix reparametrises Q as a genuine PSD, integrated in closed form --
+     * q*dt^3/3, q*dt^2/2, q*dt -- which is rate-invariant by construction:
+     * covering the same interval in more, smaller steps must grow p00 by
+     * (very nearly) the same amount, because the continuous integral does
+     * not care how it was sliced. This test drives the DOWN channel with a
+     * pure predict (no measurements, so p00 growth is Q and nothing else)
+     * over exactly one second at three different tick rates and checks the
+     * results agree -- the property the old per-tick parametrisation
+     * violated, and the property that would have caught PR #15's defect
+     * before it reached hardware. */
+    static const float32 dts[3] = { 0.02f, 0.001f, 0.0005f };  /* 50/1000/2000 Hz */
+    float32 p00[3];
+    unsigned r;
+
+    for (r = 0u; r < 3u; r++)
+    {
+        FusionValues f; memset(&f, 0, sizeof f);
+        const int steps = (int)((1.0f / dts[r]) + 0.5f);   /* exactly 1 s */
+        int k;
+
+        FusionCal_init();
+        Fusion_init();
+
+        for (k = 0; k < steps; k++)
+        {
+            Fusion_update(&f, ZERO3, dts[r], TRUE);
+        }
+        p00[r] = f.p00;
+
+        char what[80];
+        (void)snprintf(what, sizeof what, "rate-invariance run, dt=%g (%d steps)",
+                       (double)dts[r], steps);
+        assertFusionSane(&f, what);
+    }
+
+    for (r = 1u; r < 3u; r++)
+    {
+        const float32 relErr = fabsf(p00[r] - p00[0]) / p00[0];
+        char msg[220];
+        (void)snprintf(msg, sizeof msg,
+            "p00 after 1 s at dt=%g (%.9g) vs dt=%g (%.9g): relative "
+            "difference %.4g -- Q is not rate-invariant",
+            (double)dts[r], (double)p00[r], (double)dts[0], (double)p00[0],
+            (double)relErr);
+        TEST_ASSERT_TRUE_MESSAGE(relErr < 0.01f, msg);
+    }
+}
+
 void test_baro_noise_to_zero_snaps_the_measured_combination(void)
 {
     /* Spec 3.3: "measurement noise -> 0: the position estimate must equal the
@@ -408,11 +463,12 @@ void test_nan_from_outside_does_not_propagate(void)
     volatile float32 *fields[] = {
         &g_fusionCal.sigmaAccD, &g_fusionCal.sigmaBaro, &g_fusionCal.sigmaBaroRw,
         &g_fusionCal.tauBaroBias, &g_fusionCal.sigmaAccH, &g_fusionCal.sigmaGnssVel,
-        &g_fusionCal.gnssPosRScale, &g_fusionCal.gateSigmaSq, &g_fusionCal.gateMinM
+        &g_fusionCal.gnssPosRScale, &g_fusionCal.gateSigmaSq, &g_fusionCal.gateMinM,
+        &g_fusionCal.sigmaAccRw
     };
     static const char *names[] = {
         "sigmaAccD", "sigmaBaro", "sigmaBaroRw", "tauBaroBias", "sigmaAccH",
-        "sigmaGnssVel", "gnssPosRScale", "gateSigmaSq", "gateMinM"
+        "sigmaGnssVel", "gnssPosRScale", "gateSigmaSq", "gateMinM", "sigmaAccRw"
     };
     static const float poison[] = { NAN, INFINITY, -INFINITY, 0.0f, -1.0f };
     static const char *poisonName[] = { "NaN", "+inf", "-inf", "zero", "negative" };
@@ -655,6 +711,7 @@ int main(void)
     RUN_TEST(test_predict_does_not_decrease_variance);
     RUN_TEST(test_measurement_update_does_not_increase_variance);
     RUN_TEST(test_process_noise_zero_is_exact_free_integration);
+    RUN_TEST(test_process_noise_psd_growth_is_rate_invariant);
     RUN_TEST(test_baro_noise_to_zero_snaps_the_measured_combination);
     RUN_TEST(test_gnss_noise_to_zero_snaps_position_and_variance);
     RUN_TEST(test_constant_input_converges_and_stops_moving);

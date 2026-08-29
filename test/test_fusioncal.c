@@ -91,7 +91,8 @@ void test_defaults_are_sane(void)
         g_fusionCal.twoKpAcc, g_fusionCal.twoKpMag, g_fusionCal.twoKi,
         g_fusionCal.sigmaAccD, g_fusionCal.sigmaBaro, g_fusionCal.sigmaBaroRw,
         g_fusionCal.tauBaroBias, g_fusionCal.sigmaAccH, g_fusionCal.sigmaGnssVel,
-        g_fusionCal.gnssPosRScale, g_fusionCal.gateSigmaSq, g_fusionCal.gateMinM
+        g_fusionCal.gnssPosRScale, g_fusionCal.gateSigmaSq, g_fusionCal.gateMinM,
+        g_fusionCal.sigmaAccRw
     };
     unsigned i;
     for (i = 0u; i < sizeof v / sizeof v[0]; ++i)

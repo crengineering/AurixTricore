@@ -193,7 +193,9 @@ typedef char layout_assert_Xcp_Fusion_om_ist_offset[(offsetof(Xcp_Fusion, om_ist
 typedef char layout_assert_Xcp_Fusion_p_ned_ist_offset[(offsetof(Xcp_Fusion, p_ned_ist) == 0xD8u) ? 1 : -1];
 typedef char layout_assert_Xcp_Fusion_v_b_ist_offset[(offsetof(Xcp_Fusion, v_b_ist) == 0xE4u) ? 1 : -1];
 typedef char layout_assert_Xcp_Fusion_navDropped_offset[(offsetof(Xcp_Fusion, navDropped) == 0xF0u) ? 1 : -1];
-typedef char layout_assert_Xcp_Fusion_sizeof[(sizeof(Xcp_Fusion) == 0xF4u) ? 1 : -1];
+typedef char layout_assert_Xcp_Fusion_innovVelN_offset[(offsetof(Xcp_Fusion, innovVelN) == 0xF4u) ? 1 : -1];
+typedef char layout_assert_Xcp_Fusion_innovVelE_offset[(offsetof(Xcp_Fusion, innovVelE) == 0xF8u) ? 1 : -1];
+typedef char layout_assert_Xcp_Fusion_sizeof[(sizeof(Xcp_Fusion) == 0xFCu) ? 1 : -1];
 
 /* Xcp_FusionCal (FusionCal.h) */
 typedef char layout_assert_Xcp_FusionCal_magic_offset[(offsetof(Xcp_FusionCal, magic) == 0x0u) ? 1 : -1];
@@ -209,7 +211,8 @@ typedef char layout_assert_Xcp_FusionCal_sigmaGnssVel_offset[(offsetof(Xcp_Fusio
 typedef char layout_assert_Xcp_FusionCal_gnssPosRScale_offset[(offsetof(Xcp_FusionCal, gnssPosRScale) == 0x28u) ? 1 : -1];
 typedef char layout_assert_Xcp_FusionCal_gateSigmaSq_offset[(offsetof(Xcp_FusionCal, gateSigmaSq) == 0x2Cu) ? 1 : -1];
 typedef char layout_assert_Xcp_FusionCal_gateMinM_offset[(offsetof(Xcp_FusionCal, gateMinM) == 0x30u) ? 1 : -1];
-typedef char layout_assert_Xcp_FusionCal_reserved_offset[(offsetof(Xcp_FusionCal, reserved) == 0x34u) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_sigmaAccRw_offset[(offsetof(Xcp_FusionCal, sigmaAccRw) == 0x34u) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_reserved_offset[(offsetof(Xcp_FusionCal, reserved) == 0x38u) ? 1 : -1];
 typedef char layout_assert_Xcp_FusionCal_sizeof[(sizeof(Xcp_FusionCal) == 0x40u) ? 1 : -1];
 
 #endif /* AURIXTRICORE_LAYOUT_ASSERT_GEN_H */

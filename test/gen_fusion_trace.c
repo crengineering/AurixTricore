@@ -66,6 +66,7 @@ static void setCal(const char *name, double v)
     else if (!strcmp(name, "gnssPosRScale")) { g_fusionCal.gnssPosRScale = x; }
     else if (!strcmp(name, "gateSigmaSq"))   { g_fusionCal.gateSigmaSq = x; }
     else if (!strcmp(name, "gateMinM"))      { g_fusionCal.gateMinM = x; }
+    else if (!strcmp(name, "sigmaAccRw"))    { g_fusionCal.sigmaAccRw = x; }
     else { fprintf(stderr, "unknown cal field '%s'\n", name); exit(2); }
 }
 

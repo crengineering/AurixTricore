@@ -10,18 +10,32 @@
 
 /* --- tuning: vertical channel -------------------------------------------- */
 
-/* Accelerometer uncertainty driving the DOWN prediction [m/s^2]. Well above
- * the measured noise floor (0.0144 m/s^2 over a 30 s bench record) because the
- * dominant error is not the sensor: it is attitude error feeding into the
+/* Accelerometer process noise driving the DOWN prediction, as a POWER
+ * SPECTRAL DENSITY [m/s^2/sqrt(Hz)] -- NOT a per-tick sigma. This used to be
+ * "the acceleration error held over one interval", which made the effective
+ * noise inversely proportional to the update rate: raising the estimator
+ * from 50 Hz to 1014 Hz (PR #15) silently divided it by 20.3 and stretched
+ * the velocity correction time constant from 1.5 s to 6 s. See
+ * docs/NAV_TUNING.md. The continuous white-noise-acceleration model used
+ * below (fusion_chanPredict) integrates this PSD exactly, so the same value
+ * now gives the same covariance growth at any tick rate.
+ *
+ * 0.0424 = 0.3 * sqrt(0.02): the old 50 Hz-tuned per-tick sigma (0.3 m/s^2 at
+ * dt = 0.02 s) converted to the PSD it was equivalent to, which is well above
+ * the measured noise floor (0.0144 m/s^2 over a 30 s bench record) because
+ * the dominant error is not the sensor: it is attitude error feeding into the
  * projection, plus whatever the airframe does that a constant-acceleration
  * model does not describe. Raise it if the estimate lags, lower it if the
  * output is as noisy as the raw barometer. */
-#define FUSION_SIGMA_A_D        (0.3f)
+#define FUSION_SIGMA_A_D        (0.0424f)
 
-/* Accelerometer bias random walk [m/s^2 per sqrt(s)]. Measured: the down-axis
- * bias moved 0.0003 m/s^2 across 60 s at constant temperature, i.e. about
- * 4e-5. Set higher so the state can also follow thermal drift, which the bench
- * record was too short and too isothermal to show. */
+/* Accelerometer bias random walk [m/s^2 per sqrt(s)]. Already rate-invariant
+ * (applied as *dt below), unlike FUSION_SIGMA_A_D/A_H above -- untouched by
+ * the PSD reparametrisation. Measured: the down-axis bias moved 0.0003 m/s^2
+ * across 60 s at constant temperature, i.e. about 4e-5. Set higher so the
+ * state can also follow thermal drift, which the bench record was too short
+ * and too isothermal to show. Fallback for g_fusionCal.sigmaAccRw, which
+ * makes this live-tunable (docs/NAV_TUNING.md section 4.3). */
 #define FUSION_SIGMA_ACC_RW     (1.0e-4f)
 
 /* Barometer noise [m], MEASURED on this board: 30 s at rest gave a standard
@@ -59,12 +73,15 @@
 
 /* --- tuning: horizontal channels ----------------------------------------- */
 
-/* Accelerometer uncertainty driving the NORTH/EAST prediction [m/s^2]. Larger
- * than the vertical because the error source is different: horizontal
- * acceleration is contaminated by ATTITUDE error, and one degree of roll or
- * pitch error tips 0.17 m/s^2 of gravity straight into the horizontal plane.
- * This number is really a statement about how well the AHRS is doing. */
-#define FUSION_SIGMA_A_H        (0.5f)
+/* Accelerometer process noise driving the NORTH/EAST prediction, as a PSD
+ * [m/s^2/sqrt(Hz)] -- see FUSION_SIGMA_A_D above for why this is a PSD and
+ * not a per-tick sigma. 0.0707 = 0.5 * sqrt(0.02), the same 50 Hz-equivalent
+ * conversion. Larger than the vertical because the error source is
+ * different: horizontal acceleration is contaminated by ATTITUDE error, and
+ * one degree of roll or pitch error tips 0.17 m/s^2 of gravity straight into
+ * the horizontal plane. This number is really a statement about how well the
+ * AHRS is doing. */
+#define FUSION_SIGMA_A_H        (0.0707f)
 
 /* GNSS velocity noise [m/s]. UBX-NAV-PVT carries an sAcc field that this
  * driver does not decode; until it does, a fixed value covers a NEO-M9N with a
@@ -144,7 +161,8 @@
 #define FUSION_INPUT_MAX        (1.0e6f)
 #define FUSION_ALT_MAX          (1.0e6f)
 
-/* Sanity bounds on dt [s]. The IMU task runs at 50 Hz. The lower bound keeps a
+/* Sanity bounds on dt [s]. The IMU task measures ~1014 Hz on this board (was
+ * 50 Hz before PR #15 -- this comment was stale). The lower bound keeps a
  * double call from dividing by nothing; the upper bound matters at boot, where
  * the first measured interval is whatever the STM counter happened to hold. */
 #define FUSION_DT_MIN           (0.0001f)
@@ -344,12 +362,22 @@ static void fusion_chanPredict(Fusion_Chan *ch, float32 a, float32 dt)
 {
     const float32 dt2  = dt * dt;
     /* Process noise is read from the calibration block every tick. ch->sigmaA
-     * selects WHICH parameter this channel uses; the value itself is live. */
+     * selects WHICH parameter this channel uses; the value itself is live.
+     * sa is a PSD [m/s^2/sqrt(Hz)], not a per-tick sigma -- see
+     * FUSION_SIGMA_A_D/A_H. qa = sa^2 is therefore the PSD proper,
+     * [m^2/s^3], and the Q terms below (qa*dt^3/3, qa*dt^2/2, qa*dt) are the
+     * exact continuous-time white-noise-acceleration integral, rate-invariant
+     * by construction. */
     const float32 sa   = FusionCal_positive(*ch->sigmaA, 0.0f, ch->sigmaADefault);
     const float32 sm   = (ch->sigmaMeasRw != NULL_PTR)
                        ? FusionCal_positive(*ch->sigmaMeasRw, 0.0f,
                                             FUSION_SIGMA_BARO_RW)
                        : 0.0f;
+    /* Accelerometer bias random walk. One cal field shared by all three
+     * channels (unlike sigmaA above) because it is a statement about the
+     * SENSOR, not about which axis is being predicted. */
+    const float32 rw   = FusionCal_positive(g_fusionCal.sigmaAccRw, 0.0f,
+                                            FUSION_SIGMA_ACC_RW);
     const float32 qa   = sa * sa;
     const float32 qm   = sm * sm;
     const float32 f01  = dt;
@@ -400,15 +428,23 @@ static void fusion_chanPredict(Fusion_Chan *ch, float32 a, float32 dt)
         ch->p[i][FS_MEASB] = f33 * t[i][FS_MEASB];
     }
 
-    /* Q. One acceleration error feeds both position and velocity — sigma*dt
-     * into velocity and sigma*dt^2/2 into position — and the entries are the
-     * products of those two, hence dt^4/4, dt^3/2 and dt^2. The two bias
-     * states get random walks instead, which grow linearly in dt. */
-    ch->p[FS_POS][FS_POS]     += (qa * dt2 * dt2) / 4.0f;
-    ch->p[FS_POS][FS_VEL]     += (qa * dt2 * dt) / 2.0f;
+    /* Q, continuous white-noise-acceleration model: acceleration is white
+     * noise with PSD qa, and pos/vel are its first two integrals, so their
+     * covariance growth over one tick is the exact integral of that PSD
+     * through the state-transition matrix --
+     *   p[pos][pos] += qa*dt^3/3, p[pos][vel] += qa*dt^2/2, p[vel][vel] += qa*dt
+     * -- rate-invariant by construction: half the tick at twice the rate
+     * gives the same total over one second, unlike the old piecewise-
+     * constant-acceleration form this replaces (qa*dt2*dt2/4 etc., which
+     * silently divided the effective PSD by the tick rate -- see
+     * docs/NAV_TUNING.md and FUSION_SIGMA_A_D/A_H above). The two bias states
+     * still get random walks, which grow linearly in dt regardless of this
+     * change. */
+    ch->p[FS_POS][FS_POS]     += (qa * dt2 * dt) / 3.0f;
+    ch->p[FS_POS][FS_VEL]     += (qa * dt2) / 2.0f;
     ch->p[FS_VEL][FS_POS]      = ch->p[FS_POS][FS_VEL];
-    ch->p[FS_VEL][FS_VEL]     += qa * dt2;
-    ch->p[FS_ACCB][FS_ACCB]   += FUSION_SIGMA_ACC_RW * FUSION_SIGMA_ACC_RW * dt;
+    ch->p[FS_VEL][FS_VEL]     += qa * dt;
+    ch->p[FS_ACCB][FS_ACCB]   += rw * rw * dt;
     ch->p[FS_MEASB][FS_MEASB] += qm * dt;
 
     /* Numerical health check, and it earns its keep: a variance that has gone
@@ -654,6 +690,8 @@ void Fusion_init(void)
     s_navState.accBiasE     = 0.0f;
     s_navState.innovN       = 0.0f;
     s_navState.innovE       = 0.0f;
+    s_navState.innovVelN    = 0.0f;
+    s_navState.innovVelE    = 0.0f;
     s_navState.pNN          = FUSION_P_POS_INIT;
     s_navState.originLatDeg = 0.0f;
     s_navState.originLonDeg = 0.0f;
@@ -972,12 +1010,19 @@ static void fusion_correctGnss(void)
         const float32 vN   = s_gnssSpeed * cosf(headRad);
         const float32 vE   = s_gnssSpeed * sinf(headRad);
         const float32 gateMinVelSq = 25.0f;   /* 5 m/s: a corrupt fix, not a manoeuvre */
-        float32 yv = 0.0f;
+        float32 yvN = 0.0f;
+        float32 yvE = 0.0f;
 
+        /* Published rather than discarded: without these the velocity NIS
+         * (var(y)/(P+R)) cannot be computed, and the velocity channel is
+         * exactly the one the PSD reparametrisation above retunes. */
         (void)fusion_chanUpdate(&s_chN, hVel, vN, rVel, FUSION_GATE_SIGMA_SQ,
-                                gateMinVelSq, &yv);
+                                gateMinVelSq, &yvN);
         (void)fusion_chanUpdate(&s_chE, hVel, vE, rVel, FUSION_GATE_SIGMA_SQ,
-                                gateMinVelSq, &yv);
+                                gateMinVelSq, &yvE);
+
+        s_navState.innovVelN = yvN;
+        s_navState.innovVelE = yvE;
     }
 
     /* GNSS altitude, which is what makes the BAROMETER bias observable: the

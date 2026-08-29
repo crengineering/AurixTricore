@@ -542,7 +542,9 @@ partly this, not only sensor lag.
   substitutes, because the sensor genuinely is measuring the pressure it is
   exposed to.
 - **Motor vibration** on the accelerometer will force `FUSION_SIGMA_A_D` up from
-  0.3 and may need the ICM-42688-P's own anti-alias filtering revisited.
+  0.0424 (a PSD, m/s²/sqrt(Hz) — see `docs/NAV_TUNING.md`, not the per-tick
+  sigma this used to be) and may need the ICM-42688-P's own anti-alias
+  filtering revisited.
 
 ---
 
@@ -563,9 +565,13 @@ way, so a NaN arriving over XCP takes the compiled default instead of poisoning
 a covariance.
 
 The A2L descriptions carry the reasoning for each knob, so the GUI shows *why* a
-parameter exists, not just its name. `FusSigmaAccDown` is the one to reach for
-first once motors are turning: 0.3 was measured on a desk and vibration is not
-in it.
+parameter exists, not just its name. `FusSigmaAccDownPsd` is the one to reach
+for first once motors are turning: 0.0424 (a PSD, m/s²/sqrt(Hz) — see
+`docs/NAV_TUNING.md`) was measured on a desk and vibration is not in it.
+Renamed from `FusSigmaAccDown`/`FusSigmaAccHoriz` when the process noise was
+reparametrised from a per-tick sigma to a PSD, so a stale saved tuning file
+under the old name fails to find the field instead of writing a value ~32x
+too large.
 
 **`gnssPosRScale` defaults to 8.0**, not 1.0 — see §7. It is a stopgap with an
 honest justification, not a derived constant: the correct fix is a GNSS

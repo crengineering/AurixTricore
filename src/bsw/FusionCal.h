@@ -49,12 +49,17 @@
  *   0x08  float32 twoKpMag      magnetometer correction gain [1/s]
  *   0x0C  float32 twoKi         gyro-bias integral gain [1/s^2]
  *   --- vertical channel (fusion.c) ---
- *   0x10  float32 sigmaAccD     accel process noise, down [m/s^2]
+ *   0x10  float32 sigmaAccD     accel process noise PSD, down [m/s^2/sqrt(Hz)]
+ *                               ⚠️ was a per-tick sigma [m/s^2] before the
+ *                               PSD reparametrisation (docs/NAV_TUNING.md);
+ *                               A2L characteristic renamed so a stale saved
+ *                               tuning file cannot write the old 32x value
  *   0x14  float32 sigmaBaro     barometer noise [m] (R is this SQUARED)
  *   0x18  float32 sigmaBaroRw   barometer bias random walk [m/sqrt(s)]
  *   0x1C  float32 tauBaroBias   barometer bias mean-reversion [s]
  *   --- horizontal channels (fusion.c) ---
- *   0x20  float32 sigmaAccH     accel process noise, horizontal [m/s^2]
+ *   0x20  float32 sigmaAccH     accel process noise PSD, horizontal
+ *                               [m/s^2/sqrt(Hz)] -- same ⚠️ as sigmaAccD
  *   0x24  float32 sigmaGnssVel  GNSS velocity noise [m/s]
  *   0x28  float32 gnssPosRScale multiplies the GNSS position R. >1 tells the
  *                               filter its position fixes are less independent
@@ -62,7 +67,13 @@
  *   --- gates (both) ---
  *   0x2C  float32 gateSigmaSq   outlier gate, in sigma squared
  *   0x30  float32 gateMinM      absolute floor on the barometer gate [m]
- *   0x34  float32 reserved[3]
+ *   --- accelerometer bias (fusion.c), taken from reserved[0] -- no offset
+ *       change, no field movement ---
+ *   0x34  float32 sigmaAccRw    accel bias random walk [m/s^2/sqrt(s)],
+ *                               shared by all three channels. Already
+ *                               rate-invariant, unlike sigmaAccD/sigmaAccH
+ *                               above, so this is only a live-tuning wire-up
+ *   0x38  float32 reserved[2]
  */
 typedef struct
 {
@@ -84,7 +95,8 @@ typedef struct
     float32 gateSigmaSq;
     float32 gateMinM;
 
-    float32 reserved[3];
+    float32 sigmaAccRw;
+    float32 reserved[2];
 } Xcp_FusionCal;
 
 extern volatile Xcp_FusionCal g_fusionCal;

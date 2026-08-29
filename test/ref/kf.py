@@ -20,8 +20,12 @@ fusion.h and docs/FUSION_SPEC.md describe, and nothing else:
              [0,  0,  1,      0 ],
              [0,  0,  0,      exp(-dt/tau)]]
 
-        Q = G G' * sigmaAcc^2  with G = [dt^2/2, dt, 0, 0]'   (discrete white
-                                                               noise accel)
+        Q, continuous white-noise-acceleration (rate-invariant PSD, docs/
+        NAV_TUNING.md; sigmaAcc is now itself a PSD [accel/sqrt(Hz)], not a
+        per-tick sigma):
+            Q[0][0] = sigmaAcc^2 * dt^3/3
+            Q[0][1] = Q[1][0] = sigmaAcc^2 * dt^2/2
+            Q[1][1] = sigmaAcc^2 * dt
           + q_ab * dt          on the accelBias diagonal
           + sigmaBaroRw^2 * dt on the measBias diagonal       (FusionCal.h:
                                                                "[m/sqrt(s)]")
@@ -91,10 +95,14 @@ def F_matrix(dt, tau):
 
 
 def Q_matrix(dt, sigma_acc, q_ab, sigma_rw):
-    """Discrete white-noise-acceleration Q, plus the two random walks."""
-    g = [0.5 * dt * dt, dt, 0.0, 0.0]
+    """Continuous white-noise-acceleration Q (sigma_acc is a PSD, rate-
+    invariant by construction -- docs/NAV_TUNING.md), plus the two random
+    walks."""
     s2 = sigma_acc * sigma_acc
-    Q = [[g[i] * g[j] * s2 for j in range(N)] for i in range(N)]
+    Q = zeros()
+    Q[0][0] = s2 * dt * dt * dt / 3.0
+    Q[0][1] = Q[1][0] = s2 * dt * dt / 2.0
+    Q[1][1] = s2 * dt
     Q[2][2] += q_ab * dt
     Q[3][3] += sigma_rw * sigma_rw * dt
     return Q
@@ -178,9 +186,10 @@ def basis_predict_p00(steps, dt, tau):
 
     sigmaAcc^2 is fitted rather than taken from FusionCal even though the value
     IS specified, because that is what makes the fit diagnostic: recovering the
-    documented 0.09 / 0.25 confirms that the accelerometer noise enters Q the
-    way the model says (G*G'*sigma^2 with G = [dt^2/2, dt, 0, 0]'). Recovering
-    something else is a finding.
+    documented ~0.0018 / ~0.005 (sigmaAccD^2 / sigmaAccH^2, the PSD -- docs/
+    NAV_TUNING.md) confirms that the accelerometer noise enters Q the way the
+    model says (Q[0][0]=dt^3/3, Q[0][1]=Q[1][0]=dt^2/2, Q[1][1]=dt, all times
+    sigmaAcc^2). Recovering something else is a finding.
 
     The measBias states (index 3) never feed p00 during a predict -- F has no
     coupling from measBias into position -- so sigmaBaroRw and tau do not
@@ -194,8 +203,10 @@ def basis_predict_p00(steps, dt, tau):
         M[i][i] = 1.0
         return M
 
-    g = [0.5 * dt * dt, dt, 0.0, 0.0]
-    dQ_acc = [[g[i] * g[j] for j in range(N)] for i in range(N)]
+    dQ_acc = zeros()
+    dQ_acc[0][0] = dt * dt * dt / 3.0
+    dQ_acc[0][1] = dQ_acc[1][0] = dt * dt / 2.0
+    dQ_acc[1][1] = dt
     dQ_ab = zeros()
     dQ_ab[2][2] = dt
 
