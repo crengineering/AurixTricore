@@ -9,7 +9,7 @@ joining the BMP581 on the shared sensor bus.
 the board schematic).
 
 > **Pin-allocation SSoT:** the authoritative MCU-side pin map is
-> **`PINNING.md` §2.3** (I2C0 SCL/SDA) and **§2.5** (electrical). This file
+> **[PINNING.md §2.3](PINNING.md)** (I2C0 SCL/SDA) and **§2.5** (electrical). This file
 > covers the *breakout side* and does not allocate MCU pins.
 
 Driver: `src/bsw/Mmc5983.{c,h}`, firmware **v1.15.0**.

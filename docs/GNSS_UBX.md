@@ -6,7 +6,7 @@ Source: `docs/NEO-M9N_InterfaceDescription_UBX-19035940.pdf` (R03, interface
 version **32.01**, 247 pages) — §3 UBX protocol, §5 Configuration interface.
 Distilled 2026-08-20. Re-extract if the receiver's protocol version changes.
 
-Driver: `src/bsw/GnssM9N.c` (ASCLIN4, 38400 8N1). Wiring: `docs/PINNING.md` §2.7.
+Driver: `src/bsw/GnssM9N.c` (ASCLIN4, 38400 8N1). Wiring: [PINNING.md §2.7](PINNING.md).
 
 > The PDF is gitignored (`docs/*.pdf`). Re-download if missing; u-blox's own
 > `content.u-blox.com` path 404s, the working copy came from a mirror.
