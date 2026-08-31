@@ -1,6 +1,6 @@
 # Implementation Plan — MCMCAN and EVADC
 
-**ASPICE:** MAN.3 — plan, not started; needs a parent R-item before dispatch · process: QuadSE/requirements/README.md
+**ASPICE:** MAN.3 — plan, not started; needs a parent SYS1-item before dispatch · process: QuadSE/requirements/README.md
 
 Status: **planned, not started** (2026-07-15). Hardware validation blocked until
 test hardware is available; code can be written and build/MISRA-verified before that.

@@ -1,6 +1,6 @@
 # Unit Tests & CI/CD — Learning Plan
 
-**ASPICE:** SWE.4 — unit verification strategy (host tests, fakes, CI) · serves all SWR-FW items · process: QuadSE/requirements/README.md
+**ASPICE:** SWE.4 — unit verification strategy (host tests, fakes, CI) · serves all SWE1-FW items · process: QuadSE/requirements/README.md
 
 Part A is the transferable part: principles that hold for any C/C++ project.
 Part B is the first exercise — host-run unit tests for this firmware.

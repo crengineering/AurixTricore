@@ -1,6 +1,6 @@
 # Board Diagnostics (XCP)
 
-**ASPICE:** SWE.3 — detailed design, diagnostics + cal blocks · baseline — parent TBD (serves R-008 groundstation visibility) · process: QuadSE/requirements/README.md
+**ASPICE:** SWE.3 — detailed design, diagnostics + cal blocks · baseline — parent TBD (serves SYS1-008 groundstation visibility) · process: QuadSE/requirements/README.md
 
 Firmware ab **v1.2.0**. Der Diagnose-Task läuft alle 100 ms auf CPU0,
 vergleicht die Messwerte gegen kalibrierbare Grenzwerte und meldet

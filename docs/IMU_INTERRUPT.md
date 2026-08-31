@@ -1,6 +1,6 @@
 # IMU_INTERRUPT.md — ICM-42688-P data-ready interrupt: pin, wiring, measurement
 
-**ASPICE:** SWE.3 — detailed design, IMU DRDY chain + SYS.4 evidence (§5.6 measurements) · realizes SYS-TIM-001 · process: QuadSE/requirements/README.md
+**ASPICE:** SWE.3 — detailed design, IMU DRDY chain + SYS.4 evidence (§5.6 measurements) · realizes SYS2-TIM-001 · process: QuadSE/requirements/README.md
 
 **Status: design only.** Nothing under `src/` is changed by this document.
 Purpose: bring the ICM-42688-P's `INT1` (data-ready) out to a TC399 pin and

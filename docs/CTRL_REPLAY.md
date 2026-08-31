@@ -1,6 +1,6 @@
 # Flight-Controller Vector Replay
 
-**ASPICE:** SWE.5/6 — SW integration/qualification harness (vector replay, UDP 5556) · realizes SYS-VER-001, SYS-IF-001 · process: QuadSE/requirements/README.md
+**ASPICE:** SWE.5/6 — SW integration/qualification harness (vector replay, UDP 5556) · realizes SYS2-VER-001, SYS2-IF-001 · process: QuadSE/requirements/README.md
 
 Vektor-Replay-Test für den in Simulink verifizierten Kaskadenregler
 (`flight_ctrl.c`) auf dem TC399: der Host schickt pro Reglertakt einen

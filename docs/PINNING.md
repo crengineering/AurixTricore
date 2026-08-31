@@ -1,6 +1,6 @@
 # PINNING.md — TC399 TriBoard pin map (single source of truth)
 
-**ASPICE:** SYS.3 — hardware pin allocation (SSoT), part of the system architecture (`QuadSE/architecture/SYS3_SYSARC.md` E1/E2) · realizes SYS-TIM-001; SYS-ACT-001 when decided · process: QuadSE/requirements/README.md
+**ASPICE:** SYS.3 — hardware pin allocation (SSoT), part of the system architecture (`QuadSE/architecture/SYS3_SYSARC.md` E1/E2) · realizes SYS2-TIM-001; SYS2-ACT-001 when decided · process: QuadSE/requirements/README.md
 
 **Authoritative pin allocation** for this project on the **TriBoard TC3X9
 (TC399, LFBGA‑516)**. When a pin question arises, this file wins. The detailed

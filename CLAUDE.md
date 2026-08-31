@@ -131,8 +131,8 @@ over `src/` on every push/PR. Legacy findings are grandfathered in
 
 ## Agent Protocol (PLAN-001)
 
-The multi-agent workflow, the requirements chain (ASPICE: `R-nnn` →
-`SYS-…` → `SWR-FW-…`), the agent definitions and the `/ritem` skill live in
+The multi-agent workflow, the requirements chain (ASPICE: `SYS1-nnn` →
+`SYS-…` → `SWE1-FW-…`), the agent definitions and the `/ritem` skill live in
 the **system-engineering repo `C:\Users\chris\Projects\QuadSE`** — its
 `CLAUDE.md` is the protocol SSoT; work sessions start there. This repo
 keeps only what co-changes with the code: `docs/architecture/

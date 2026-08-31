@@ -1,7 +1,7 @@
 # Firmware Software Architecture — SWARC-FW (ASPICE SWE.2)
 
 **ASPICE:** SWE.2 — software architecture, AurixTricore firmware · realizes
-SYS-TIM-001/002, SYS-NAV-001/002, SYS-IF-001, SYS-COM-001 (SAF/ACT/CTRL
+SYS2-TIM-001/002, SYS2-NAV-001/002, SYS2-IF-001, SYS2-COM-001 (SAF/ACT/CTRL
 items pending design) · process: QuadSE/requirements/README.md
 
 Owned by `flight-architect`. This file allocates modules and budgets; the
@@ -66,6 +66,6 @@ no unbounded wait (iLLD spins hung CPU0 before — bounded in-house engines).
 
 ## Open architectural work (waiting on requirements)
 
-Disarm/failsafe path (SYS-SAF-001/002 — mechanism is a user decision),
-motor interface (SYS-ACT-001 — ESC/protocol open), altitude/position hold
-loop closure on target (SYS-CTRL-001/002).
+Disarm/failsafe path (SYS2-SAF-001/002 — mechanism is a user decision),
+motor interface (SYS2-ACT-001 — ESC/protocol open), altitude/position hold
+loop closure on target (SYS2-CTRL-001/002).
