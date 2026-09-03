@@ -239,6 +239,18 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 | ESC current sense (Pad C) | AN7 | EVADC **G0CH7** | X703·19 | plan |
 | ESC telemetry RX (Pad T) | P23.3 | ASCLIN6 RXA (`IfxAsclin6_RXA_P23_3_IN`) | X702·24 | plan |
 
+> **2026-09-03 audit** (ESC arrival pre-check, `docs/ESC_AM32.md`): the Flywoo
+> GOKU G55M's full pad row is **`G V 1 2 3 4 C T`** — this section only
+> documents C and T because those are the only two pads that reach the
+> AURIX. **G is common ground** (any X702/X703 GND pin). **V is the ESC's
+> own VBAT pass-through/sense pad and is deliberately NOT wired to
+> anything on the AURIX** — it can carry the full pack voltage (up to
+> ~16.8 V at 4S), which exceeds every AURIX pad's absolute maximum. Pack
+> voltage for this project comes from the KISS telemetry frame on Pad T
+> instead (decided 2026-09-03, `dispatch/SYS1-012.md` §10). Full pad-by-pad
+> electrical detail, on-arrival checklist and DShot protocol facts:
+> **`docs/ESC_AM32.md`**, **`docs/DSHOT.md`**.
+
 **ADC header (X703/X803) — scarce filtered inputs + references:**
 - **Only 6 analog inputs are on‑board anti‑alias filtered** (47 nF + 4.7 kΩ series;
   Manual §3.14, Fig. 3‑4): **AN7·19, AN20·14, AN21·16, AN31·36, AN44·54, AN45·56**.
