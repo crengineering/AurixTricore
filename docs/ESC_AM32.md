@@ -25,7 +25,7 @@ first for anything about frame timing, telemetry format, or GTM mapping.
 | 2 | M2 signal | Yes | P22.0 / ATOM0.1 (TOUT47) / TIM0.1 or TIM7.3 | X702·32 |
 | 3 | M3 signal | Yes | P22.2 / ATOM0.3 (TOUT49) / TIM0.3 or TIM7.1 | X702·36 — **LVDS_TX/HSCT footprint stub, higher risk, PINNING.md §2.6/§4** |
 | 4 | M4 signal | Yes | P22.3 / ATOM0.4 (TOUT50) / TIM0.4 or TIM7.0 | X702·34 — **same LVDS_TX/HSCT stub risk** |
-| C | Analog current sense, ESC's own shunt/amp output | Yes | AN7 / EVADC G0CH7 | X703·19, `PINNING.md` §2.4 |
+| C | Analog current sense, ESC's own shunt/amp output | **No — deferred 2026-09-06** (ADC header X703 not populated on this TriBoard) | ~~AN7 / EVADC G0CH7~~ | current comes from the KISS telemetry frame on T instead; `PINNING.md` §2.4 |
 | T | KISS/telemetry UART TX, shared across all 4 channels (`docs/DSHOT.md` §6) | Yes | P23.3 / ASCLIN6 RXA | X702·24, `PINNING.md` §2.4 |
 
 **Verdict on the existing pin map: correct, nothing to fix.** `PINNING.md`
@@ -96,12 +96,18 @@ time constant for the AURIX pull-up path: 1.5 kΩ × (a generous 50 pF for
 pad + 30 cm lead + ESC pad capacitance) ≈ **75 ns** — under 3% of one GCR
 bit period. **Not a bottleneck.**
 
-**C — current sense, 0–3.3 V into AN7.** VAREF = 5 V on this board
-(`PINNING.md` §2.4), so a 0–3.3 V ESC output uses ⅔ of the ADC's range —
-already noted in PINNING.md, unchanged. **Scale in mV/A: UNKNOWN, not in
-AM32 source** (no eeprom field for it — `Inc/eeprom.h` has no
-current-scale/offset member, §4) — **must be read from the AM32
-configurator on arrival**, exactly as the existing procurement note says.
+**C — current sense, NOT WIRED (deferred 2026-09-06, Chris).** The ADC
+header X703/X803 is not populated on this TriBoard, so AN7 is unreachable
+without soldering a header. Motor current is taken from the **KISS telemetry
+frame on Pad T** (`docs/DSHOT.md` §6: centiamps, already scaled by the ESC),
+one channel per telemetry request, round-robin — roughly a quarter of the
+request rate per motor. Enough for battery budget and stalled-motor
+detection; not enough for a per-motor current loop, which is not planned.
+The mV/A scale and zero-offset question below is therefore moot for the
+firmware. *Historical, if the analog tap is ever revived:* VAREF = 5 V on
+this board (`PINNING.md` §2.4), so a 0–3.3 V ESC output uses ⅔ of the ADC's
+range; scale in mV/A is not in AM32 source (no eeprom field, §4) and would
+have to be read from the AM32 configurator.
 
 **T — telemetry, 115200 8N1, half-duplex, push-pull with pull-up on the ESC
 side.** Confirmed by source (`docs/DSHOT.md` §6) to be exactly the pin
@@ -135,7 +141,8 @@ audit; nothing here loosens it.
   The pull-up (§2.1, 1.5 kΩ to the AURIX's own 3.3 V rail) is powered from
   the AURIX side; with the AURIX off, that rail is also off, so the pull-up
   itself sources nothing extra.
-- **Current-sense pad (C) with the ESC powered, AURIX off:** AN7 would see
+- **Current-sense pad (C) with the ESC powered, AURIX off:** *(moot while C
+  stays unwired, 2026-09-06 — kept for the revival case)* AN7 would see
   whatever 0–3.3 V analog level the ESC's sense amp outputs while the
   ESC has pack power — again, an unpowered ADC pin seeing an active analog
   source is a normal condition MCUs tolerate at the pad's clamp-diode
@@ -187,9 +194,9 @@ still to be designed.
   member in `Inc/eeprom.h` for it. Either it is compiled into the firmware
   per hardware target (a `HARDWARE_GROUP_AT_*` macro this fetch did not
   fully resolve) or the configurator computes/displays it without storing
-  a raw scale the FC can read. **Read the number from the AM32
-  configurator's current-sense display on arrival — do not assume a
-  linear formula without it.**
+  a raw scale the FC can read. **Not needed by the firmware since
+  2026-09-06** — Pad C is unwired and the KISS frame delivers current
+  already scaled (§2). Only relevant if the analog tap is revived.
 - **Telemetry baud:** fixed at 115200 8N1 in the fetched source
   (`serial_telemetry.c:56`), not an eeprom-configurable field found.
 - **Target confirmed:** `Inc/targets.h` has a `FLYWOO_GOKU_F421` block
@@ -222,20 +229,19 @@ still to be designed.
 5. **Telemetry pad (T) idle level, ESC powered:** UART TX idle-high is the
    UART convention — expect close to 3.3 V, steady, per §2's push-pull
    claim. A pad that reads 0 V idle would falsify that claim outright.
-6. **Current-sense pad (C) idle voltage, ESC powered, zero current draw (no
-   motor spinning):** expect close to 0 V or a small fixed offset (many
-   sense amps have a non-zero zero-current bias) — **record the exact
-   idle voltage, it is the offset half of the mV/A scale question.**
+6. ~~Current-sense pad (C) idle voltage~~ — **struck 2026-09-06**, Pad C is
+   not wired (§2). Optional curiosity only: expect near 0 V or a small
+   fixed offset at zero current.
 7. **Firmware version string** — read via the AM32 configurator
    (am32.ca or the desktop tool, `README.md`) — confirms AM32 (not
    BLHeli_32) and the exact version, since this note's page/line citations
    are pinned to commit `6b3ef3d` (2026-05-08) and a materially older or
    newer firmware on the physical board could differ in any of the numbers
    above.
-8. **Current-sense scale** — read directly from the configurator's current
-   display against a known load, or from its settings page if it exposes
-   a raw mV/A figure. This is the one number nothing in source code
-   supplies (§4).
+8. ~~Current-sense scale~~ — **struck 2026-09-06**, not needed (§2, §4).
+   Instead: **cross-check the KISS-frame current** against the lab
+   supply's ammeter during the first motor run — that is the number the
+   firmware will actually use.
 9. **Bidirectional DShot setting** — read the configurator's protocol page
    to confirm whether bidirectional is on by default on this specific
    firmware build, rather than relying on the auto-detect behaviour alone.
@@ -270,9 +276,10 @@ still to be designed.
   document; re-check if this fact ever becomes safety-load-bearing (it
   currently is not — the AURIX-side open-drain scheme means the AURIX
   never sources above 3.3 V toward the ESC regardless).
-- **Current-sense scale (mV/A) and zero-current offset** — genuinely not
-  in AM32 source; must come from the physical board + configurator. Not a
-  documentation gap, a hardware-in-hand gap.
+- ~~**Current-sense scale (mV/A) and zero-current offset**~~ — **closed
+  2026-09-06 by deferral**: Pad C is not wired (X703 unpopulated), the
+  firmware reads ESC-scaled current from the KISS frame. Reopens only if
+  the analog tap is revived.
 - **Bidirectional-DShot-on-by-default question** — the interaction between
   the `bi_direction` eeprom flag and the idle-line auto-detect (`docs/DSHOT.md`
   Traps D1) is not fully resolved from source; the checklist item 4/9

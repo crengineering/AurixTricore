@@ -236,7 +236,7 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 
 | Signal | Pin / channel | Resource | Header·pin | Status |
 |---|---|---|---|---|
-| ESC current sense (Pad C) | AN7 | EVADC **G0CH7** | X703·19 | plan |
+| ESC current sense (Pad C) | ~~AN7~~ | ~~EVADC **G0CH7**~~ | ~~X703·19~~ | **deferred 2026‑09‑06** — not wired (see note) |
 | ESC telemetry RX (Pad T) | P23.3 | ASCLIN6 RXA (`IfxAsclin6_RXA_P23_3_IN`) | X702·24 | plan |
 
 > **2026-09-03 audit** (ESC arrival pre-check, `docs/ESC_AM32.md`): the Flywoo
@@ -250,6 +250,17 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 > instead (decided 2026-09-03, `dispatch/SYS1-012.md` §10). Full pad-by-pad
 > electrical detail, on-arrival checklist and DShot protocol facts:
 > **`docs/ESC_AM32.md`**, **`docs/DSHOT.md`**.
+
+> **2026-09-06 (Chris): Pad C stays unconnected — the ADC header X703/X803 is
+> not populated on this TriBoard**, so AN7 is not reachable without soldering a
+> header. Motor current comes from the **KISS telemetry frame on Pad T** instead
+> (centiamps, ESC-scaled — `docs/DSHOT.md` §6), refreshed per telemetry request
+> and round-robin across the four channels, i.e. roughly a quarter of the request
+> rate per motor. Sufficient for battery budget and stalled-motor detection; too
+> slow for any per-motor current loop, which is not planned. Consequences: the
+> current-sense mV/A scale and zero-offset are no longer needed by the firmware;
+> **AN7 returns to the filtered-input pool** below. Populating a header on X703
+> reopens the analog tap without any other change.
 
 **ADC header (X703/X803) — scarce filtered inputs + references:**
 - **Only 6 analog inputs are on‑board anti‑alias filtered** (47 nF + 4.7 kΩ series;

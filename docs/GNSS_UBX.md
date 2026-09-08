@@ -274,41 +274,41 @@ NMEA decoder's expectations in mind.
 > after the first one while the position silently goes stale. `Xcp_Fusion`
 > publishes `gnssITow` and `gnssDupes` so that is directly observable.
 
-| off | type | name | scale | unit | meaning |
-|---|---|---|---|---|---|
-| 0 | U4 | `iTOW` | — | ms | GPS time of week of the nav epoch. **Exposed in `GnssM9N_Sample` since v1.19.x** — it is the new-fix marker the navigation filter gates on, see the note below |
-| 4 | U2 | `year` | — | y | UTC |
-| 6 | U1 | `month` | — | | 1..12 |
-| 7 | U1 | `day` | — | | 1..31 |
-| 8 | U1 | `hour` | — | | 0..23 |
-| 9 | U1 | `min` | — | | 0..59 |
-| 10 | U1 | `sec` | — | s | 0..60 |
-| 11 | X1 | `valid` | — | | b0 `validDate`, b1 `validTime`, b2 `fullyResolved`, b3 `validMag` |
-| 12 | U4 | `tAcc` | — | ns | time accuracy estimate |
-| 16 | I4 | `nano` | — | ns | fraction of second, −1e9..1e9 |
-| 20 | U1 | `fixType` | — | | 0 none, 1 DR only, **2 = 2D**, **3 = 3D**, 4 GNSS+DR, 5 time only |
-| 21 | X1 | `flags` | — | | b0 `gnssFixOK`, b1 `diffSoln`, b2..4 `psmState`, b5 `headVehValid`, b6..7 `carrSoln` |
-| 22 | X1 | `flags2` | — | | b5 `confirmedAvai`, b6 `confirmedDate`, b7 `confirmedTime` |
-| 23 | U1 | `numSV` | — | | satellites used in the solution |
-| 24 | I4 | `lon` | 1e-7 | deg | |
-| 28 | I4 | `lat` | 1e-7 | deg | |
-| 32 | I4 | `height` | — | mm | above ellipsoid |
-| 36 | I4 | `hMSL` | — | mm | above mean sea level |
-| 40 | U4 | `hAcc` | — | mm | horizontal accuracy estimate |
-| 44 | U4 | `vAcc` | — | mm | vertical accuracy estimate |
-| 48 | I4 | `velN` | — | mm/s | NED north |
-| 52 | I4 | `velE` | — | mm/s | NED east |
-| 56 | I4 | `velD` | — | mm/s | NED down |
-| 60 | I4 | `gSpeed` | — | mm/s | ground speed (2-D) |
-| 64 | I4 | `headMot` | 1e-5 | deg | heading of motion (2-D) |
-| 68 | U4 | `sAcc` | — | mm/s | speed accuracy estimate |
-| 72 | U4 | `headAcc` | 1e-5 | deg | heading accuracy |
-| 76 | U2 | `pDOP` | 0.01 | — | position DOP |
-| 78 | X1 | `flags3` | — | | b0 `invalidLlh` = lon/lat/height/hMSL invalid |
-| 79 | U1[5] | `reserved0` | — | | |
-| 84 | I4 | `headVeh` | 1e-5 | deg | vehicle heading; valid only if `headVehValid` |
-| 88 | I2 | `magDec` | 1e-2 | deg | magnetic declination (ADR 4.10+ only) |
-| 90 | U2 | `magAcc` | 1e-2 | deg | declination accuracy (ADR 4.10+ only) |
+| off | type  | name        | scale | unit | meaning                                                                                                                                                        |
+| --- | ----- | ----------- | ----- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0   | U4    | `iTOW`      | —     | ms   | GPS time of week of the nav epoch. **Exposed in `GnssM9N_Sample` since v1.19.x** — it is the new-fix marker the navigation filter gates on, see the note below |
+| 4   | U2    | `year`      | —     | y    | UTC                                                                                                                                                            |
+| 6   | U1    | `month`     | —     |      | 1..12                                                                                                                                                          |
+| 7   | U1    | `day`       | —     |      | 1..31                                                                                                                                                          |
+| 8   | U1    | `hour`      | —     |      | 0..23                                                                                                                                                          |
+| 9   | U1    | `min`       | —     |      | 0..59                                                                                                                                                          |
+| 10  | U1    | `sec`       | —     | s    | 0..60                                                                                                                                                          |
+| 11  | X1    | `valid`     | —     |      | b0 `validDate`, b1 `validTime`, b2 `fullyResolved`, b3 `validMag`                                                                                              |
+| 12  | U4    | `tAcc`      | —     | ns   | time accuracy estimate                                                                                                                                         |
+| 16  | I4    | `nano`      | —     | ns   | fraction of second, −1e9..1e9                                                                                                                                  |
+| 20  | U1    | `fixType`   | —     |      | 0 none, 1 DR only, **2 = 2D**, **3 = 3D**, 4 GNSS+DR, 5 time only                                                                                              |
+| 21  | X1    | `flags`     | —     |      | b0 `gnssFixOK`, b1 `diffSoln`, b2..4 `psmState`, b5 `headVehValid`, b6..7 `carrSoln`                                                                           |
+| 22  | X1    | `flags2`    | —     |      | b5 `confirmedAvai`, b6 `confirmedDate`, b7 `confirmedTime`                                                                                                     |
+| 23  | U1    | `numSV`     | —     |      | satellites used in the solution                                                                                                                                |
+| 24  | I4    | `lon`       | 1e-7  | deg  |                                                                                                                                                                |
+| 28  | I4    | `lat`       | 1e-7  | deg  |                                                                                                                                                                |
+| 32  | I4    | `height`    | —     | mm   | above ellipsoid                                                                                                                                                |
+| 36  | I4    | `hMSL`      | —     | mm   | above mean sea level                                                                                                                                           |
+| 40  | U4    | `hAcc`      | —     | mm   | horizontal accuracy estimate                                                                                                                                   |
+| 44  | U4    | `vAcc`      | —     | mm   | vertical accuracy estimate                                                                                                                                     |
+| 48  | I4    | `velN`      | —     | mm/s | NED north                                                                                                                                                      |
+| 52  | I4    | `velE`      | —     | mm/s | NED east                                                                                                                                                       |
+| 56  | I4    | `velD`      | —     | mm/s | NED down                                                                                                                                                       |
+| 60  | I4    | `gSpeed`    | —     | mm/s | ground speed (2-D)                                                                                                                                             |
+| 64  | I4    | `headMot`   | 1e-5  | deg  | heading of motion (2-D)                                                                                                                                        |
+| 68  | U4    | `sAcc`      | —     | mm/s | speed accuracy estimate                                                                                                                                        |
+| 72  | U4    | `headAcc`   | 1e-5  | deg  | heading accuracy                                                                                                                                               |
+| 76  | U2    | `pDOP`      | 0.01  | —    | position DOP                                                                                                                                                   |
+| 78  | X1    | `flags3`    | —     |      | b0 `invalidLlh` = lon/lat/height/hMSL invalid                                                                                                                  |
+| 79  | U1[5] | `reserved0` | —     |      |                                                                                                                                                                |
+| 84  | I4    | `headVeh`   | 1e-5  | deg  | vehicle heading; valid only if `headVehValid`                                                                                                                  |
+| 88  | I2    | `magDec`    | 1e-2  | deg  | magnetic declination (ADR 4.10+ only)                                                                                                                          |
+| 90  | U2    | `magAcc`    | 1e-2  | deg  | declination accuracy (ADR 4.10+ only)                                                                                                                          |
 
 Offsets sum to 92 — use that as the decoder's sanity check.
 
