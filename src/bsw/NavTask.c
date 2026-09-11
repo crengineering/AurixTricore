@@ -85,6 +85,35 @@ boolean NavTask_inputValid(float32 dtS, boolean imuPresent, uint8 ahrsState)
     return valid;
 }
 
+/* SYS1-001 task 1: see NavTask.h for the contract. Kept in the same style as
+ * navTask_dtValid()/NavTask_inputValid() -- a chain of POSITIVE tests into a
+ * local that starts at the "nothing usable" answer, so a NaN dtS (false
+ * against every relational operator) falls straight through to NONE instead
+ * of being accepted by omission. */
+NavTask_DtClass NavTask_classifyDt(float32 dtS)
+{
+    NavTask_DtClass result = NAVTASK_DT_NONE;
+
+    if ((dtS >= NAVTASK_DT_MIN_S) && (dtS <= NAVTASK_DT_MAX_S))
+    {
+        result = NAVTASK_DT_OK;
+    }
+    else if ((dtS > 0.0f) && (dtS < NAVTASK_DT_MIN_S))
+    {
+        result = NAVTASK_DT_SHORT;
+    }
+    else if (dtS > NAVTASK_DT_MAX_S)
+    {
+        result = NAVTASK_DT_LONG;
+    }
+    else
+    {
+        /* dtS <= 0.0f, or NaN -- NAVTASK_DT_NONE, the initial value */
+    }
+
+    return result;
+}
+
 /* Running total of Icm42688_plausible()'s per-sample liveness, published
  * verbatim in NavState_t.imuLiveness (NEVER reset here after boot) -- see
  * that field's comment. Housekeeping_100ms does the resetting-by-diffing;
@@ -100,6 +129,17 @@ static float32 s_imuLivenessAccum;
 static uint32 s_lastEdgeSeq;
 static uint32 s_lastEdgeTicks;
 
+/* cppcheck-suppress-begin misra-c2012-8.7 ; deviation: read over XCP
+ * SHORT_UPLOAD by raw address (tools/xcp_read.py), never referenced by C
+ * code outside this file -- same class of deviation as g_imuDrdy* (ImuInt.c).
+ * SYS1-001 task 0 instrumentation: see NavTask.h for what each one counts. */
+volatile uint32 g_dbgNavInvalidTicks;
+volatile uint32 g_dbgNavDtShort;
+volatile uint32 g_dbgNavDtLong;
+volatile uint32 g_dbgNavDtShortMinTicks;
+volatile uint32 g_dbgImuReadFail;
+/* cppcheck-suppress-end misra-c2012-8.7 */
+
 void NavTask_init(void)
 {
     NavState_init();        /* the publish target, before anything publishes */
@@ -107,6 +147,13 @@ void NavTask_init(void)
     Ahrs_init();              /* start the gyro-bias calibration; hold still  */
     Fusion_init();            /* zero every channel state and covariance      */
     s_imuLivenessAccum = 0.0f;
+
+    /* SYS1-001 task 0 instrumentation -- see NavTask.h. */
+    g_dbgNavInvalidTicks    = 0u;
+    g_dbgNavDtShort         = 0u;
+    g_dbgNavDtLong          = 0u;
+    g_dbgNavDtShortMinTicks = 0xFFFFFFFFu;
+    g_dbgImuReadFail        = 0u;
 
     /* T16 (docs/REFACTORING_PLAN.md §3.6, missedEdges investigation): seed
      * the baseline from whatever the ISR has already produced during
@@ -177,6 +224,7 @@ void NavTask_step(void)
         FusionValues    fusion;
         Ahrs_Values     ahrs;
         float32         elapsedTime;
+        boolean         duplicateEdge = FALSE;
 
         if (newSample != FALSE)
         {
@@ -191,6 +239,7 @@ void NavTask_step(void)
              * type categories (unsigned -> floating). Same idiom Ahrs.c uses
              * (`s_calSum[i] / (float32)n`). */
             uint32 deltaTicks = edgeTicks - s_lastEdgeTicks;
+            NavTask_DtClass dtClass;
 
             if (missed > 1u)
             {
@@ -207,9 +256,51 @@ void NavTask_step(void)
              * jitter -- T15, docs/REFACTORING_PLAN.md §3.6). Correct even
              * across a missed edge -- two edges missed gives dt ~= 2 * period,
              * area preserved. */
-            elapsedTime     = (float32)deltaTicks * NAVTASK_TICKS_TO_S;
-            s_lastEdgeSeq   = edgeSeq;
-            s_lastEdgeTicks = edgeTicks;
+            elapsedTime = (float32)deltaTicks * NAVTASK_TICKS_TO_S;
+            dtClass     = NavTask_classifyDt(elapsedTime);
+
+            /* SYS1-001 task 0 instrumentation: name which side of the window
+             * a genuine new edge's interval fell on -- see NavTask.h. */
+            switch (dtClass)
+            {
+                case NAVTASK_DT_SHORT:
+                    g_dbgNavDtShort++;
+                    if (deltaTicks < g_dbgNavDtShortMinTicks)
+                    {
+                        g_dbgNavDtShortMinTicks = deltaTicks;
+                    }
+                    break;
+                case NAVTASK_DT_LONG:
+                    g_dbgNavDtLong++;
+                    break;
+                case NAVTASK_DT_OK:
+                case NAVTASK_DT_NONE:
+                default:
+                    break;
+            }
+
+            if (dtClass == NAVTASK_DT_SHORT)
+            {
+                /* SYS1-001 task 3: a duplicate DRDY edge, not a fault (the
+                 * dispatch's own recommendation, §3 point 2) -- consume the
+                 * sequence number so this edge is not seen again, but leave
+                 * s_lastEdgeTicks at the last GOOD edge: the next genuine
+                 * edge's interval is then measured across the duplicate,
+                 * coming out as the full ~985 us period instead of being
+                 * truncated by it. No AHRS/fusion update, no publish, and no
+                 * fault signalled to Ahrs_update -- previously this ran the
+                 * tick through as ahrsInputOk == FALSE, which is exactly the
+                 * one-tick glitch that used to re-initialise the estimator
+                 * (see Ahrs.c's AHRS_FAULT_HOLD_S for the other half of the
+                 * fix). */
+                s_lastEdgeSeq = edgeSeq;
+                duplicateEdge = TRUE;
+            }
+            else
+            {
+                s_lastEdgeSeq   = edgeSeq;
+                s_lastEdgeTicks = edgeTicks;
+            }
         }
         else
         {
@@ -222,66 +313,84 @@ void NavTask_step(void)
             elapsedTime = 0.0f;
         }
 
-        /* Called whenever this block runs, like the other sensor tasks:
-         * Icm42688_read() owns the presence state and uses these calls to
-         * probe for a reconnected sensor -- including the timed-out branch
-         * above, where there is no new edge at all: a fully silent sensor
-         * (power lost, INT1 wire broken) would never call this again if the
-         * call were gated on newSample alone, since ITS OWN edges are what
-         * would be missing. */
-        present = Icm42688_read(&sample);
-
-        /* Attitude first, then navigation: the channel filters need
-         * acceleration resolved into NED, and only the AHRS can do that.
-         * ahrs.state does not exist yet at this point, so this first gate is
-         * dt+presence only -- NavTask_inputValid's AHRS_RUNNING check applies
-         * below, once ahrs.state is an output rather than an unknown. */
-        /* Written as an if/else into a boolean local, not a direct `&&`
-         * assignment: cppcheck's MISRA 10.3 does not recognise `boolean` as
-         * an essentially-Boolean type, so it flags a `&&`/comparison result
-         * stored straight into one as a different essential type category.
-         * Same idiom as navTask_dtValid()/NavTask_inputValid(). */
-        ahrsInputOk = FALSE;
-        if ((navTask_dtValid(elapsedTime) != FALSE) && (present != FALSE))
+        if (duplicateEdge != FALSE)
         {
-            ahrsInputOk = TRUE;
+            /* Nothing else to do for a duplicate edge -- see above. */
         }
-        Ahrs_update(&ahrs, sample.acc, sample.gyro, elapsedTime, ahrsInputOk);
-
-        /* Gate the navigation filter on the attitude being usable, not
-         * merely on the IMU answering. While the AHRS is still averaging the
-         * gyro bias or waiting to align, its projection is meaningless and
-         * integrating it would put a real offset into the velocity before
-         * the barometer ever sees it. */
-        fusionInputOk = NavTask_inputValid(elapsedTime, present, ahrs.state);
-        Fusion_update(&fusion, ahrs.accNed, elapsedTime, fusionInputOk);
-
-        /* Raw sample + an accumulated liveness sum ride along in the SAME
-         * publish as the fusion output (T12 blocker,
-         * docs/REFACTORING_PLAN.md 3.7): measurementsSetImu() writes
-         * g_xcpData (CPU0 DSPR) and PeriphDiag_report() writes PeriphDiag's
-         * plain non-volatile s_periph[] -- calling either one from here would
-         * make both a two-writer object racing against CPU0's
-         * Housekeeping_100ms/PeriphDiag_update. So this task only accumulates
-         * and publishes; Housekeeping_100ms (CPU0) makes those calls from
-         * the NavState snapshot. Icm42688_plausible()'s instantaneous
-         * liveness is summed, never reset, so Housekeeping's diff of two
-         * reads sees every consumed tick's contribution -- see
-         * NavState_t.imuLiveness. */
+        else
         {
-            float32 sampleLiveness = 0.0f;
+            /* Called whenever this block runs, like the other sensor tasks:
+             * Icm42688_read() owns the presence state and uses these calls to
+             * probe for a reconnected sensor -- including the timed-out
+             * branch above, where there is no new edge at all: a fully
+             * silent sensor (power lost, INT1 wire broken) would never call
+             * this again if the call were gated on newSample alone, since
+             * ITS OWN edges are what would be missing. */
+            present = Icm42688_read(&sample);
+            if (present == FALSE)
+            {
+                g_dbgImuReadFail++;
+            }
 
-            (void)Icm42688_plausible(&sample, &sampleLiveness);
-            s_imuLivenessAccum += sampleLiveness;
+            /* Attitude first, then navigation: the channel filters need
+             * acceleration resolved into NED, and only the AHRS can do that.
+             * ahrs.state does not exist yet at this point, so this first gate
+             * is dt+presence only -- NavTask_inputValid's AHRS_RUNNING check
+             * applies below, once ahrs.state is an output rather than an
+             * unknown. */
+            /* Written as an if/else into a boolean local, not a direct `&&`
+             * assignment: cppcheck's MISRA 10.3 does not recognise `boolean`
+             * as an essentially-Boolean type, so it flags a `&&`/comparison
+             * result stored straight into one as a different essential type
+             * category. Same idiom as navTask_dtValid()/NavTask_inputValid(). */
+            ahrsInputOk = FALSE;
+            if ((navTask_dtValid(elapsedTime) != FALSE) && (present != FALSE))
+            {
+                ahrsInputOk = TRUE;
+            }
+            else
+            {
+                /* SYS1-001 task 0 instrumentation -- see NavTask.h. */
+                g_dbgNavInvalidTicks++;
+            }
+            Ahrs_update(&ahrs, sample.acc, sample.gyro, elapsedTime, ahrsInputOk);
+
+            /* Gate the navigation filter on the attitude being usable, not
+             * merely on the IMU answering. While the AHRS is still averaging
+             * the gyro bias or waiting to align, its projection is
+             * meaningless and integrating it would put a real offset into
+             * the velocity before the barometer ever sees it. */
+            fusionInputOk = NavTask_inputValid(elapsedTime, present, ahrs.state);
+            Fusion_update(&fusion, ahrs.accNed, elapsedTime, fusionInputOk);
+
+            /* Raw sample + an accumulated liveness sum ride along in the SAME
+             * publish as the fusion output (T12 blocker,
+             * docs/REFACTORING_PLAN.md 3.7): measurementsSetImu() writes
+             * g_xcpData (CPU0 DSPR) and PeriphDiag_report() writes
+             * PeriphDiag's plain non-volatile s_periph[] -- calling either
+             * one from here would make both a two-writer object racing
+             * against CPU0's Housekeeping_100ms/PeriphDiag_update. So this
+             * task only accumulates and publishes; Housekeeping_100ms (CPU0)
+             * makes those calls from the NavState snapshot.
+             * Icm42688_plausible()'s instantaneous liveness is summed, never
+             * reset, so Housekeeping's diff of two reads sees every consumed
+             * tick's contribution -- see NavState_t.imuLiveness. */
+            {
+                float32 sampleLiveness = 0.0f;
+
+                (void)Icm42688_plausible(&sample, &sampleLiveness);
+                s_imuLivenessAccum += sampleLiveness;
+            }
+
+            /* Publish for Housekeeping_100ms to pick up (NavState_get) and
+             * forward to XCP. Runs on every dispatch that reaches this branch
+             * (~1014 Hz in normal operation, up to 2 kHz only in the
+             * timed-out fallback) -- cheap (§2.4/§3.7, ~3.9 us), so there is
+             * no reason to gate it any further than the block it is already
+             * inside. */
+            NavState_publish(&ahrs, &fusion, elapsedTime, present,
+                              sample.acc, sample.gyro, sample.tempC,
+                              s_imuLivenessAccum);
         }
-
-        /* Publish for Housekeeping_100ms to pick up (NavState_get) and
-         * forward to XCP. Runs on every dispatch that reaches this branch
-         * (~1014 Hz in normal operation, up to 2 kHz only in the timed-out
-         * fallback) -- cheap (§2.4/§3.7, ~3.9 us), so there is no reason to
-         * gate it any further than the block it is already inside. */
-        NavState_publish(&ahrs, &fusion, elapsedTime, present,
-                          sample.acc, sample.gyro, sample.tempC,
-                          s_imuLivenessAccum);
     }
 }

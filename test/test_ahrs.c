@@ -585,6 +585,77 @@ void test_invalid_sample_freezes_the_estimate(void)
     TEST_ASSERT_EQUAL_FLOAT_ARRAY(q0, v.q, 4);
 }
 
+/* ==========================================================================
+ * SYS1-001 task 2 -- fault debounce (dispatch/"SYS1-001 - Dispatch.md" §4).
+ * The defect: one rejected tick used to re-initialise the whole attitude
+ * (deadbeat yaw from the mag, gyro-bias integral zeroed) instead of merely
+ * freezing. AHRS_FAULT_HOLD_S = 0.05 s is the debounce; below it the
+ * estimate must be bit-identical to before the glitch, at/above it (and
+ * only then) AHRS_NO_SENSOR fires and the next good sample re-aligns once.
+ * ======================================================================== */
+
+extern volatile uint32 g_dbgAhrsRealigns;   /* Ahrs.h -- task 0 instrumentation */
+
+void test_glitch_ticks_freeze_without_realigning(void)
+{
+    Ahrs_Values v; memset(&v, 0, sizeof v);
+    const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
+    const float32 gyro[3]     = { 5.0f, -3.0f, 2.0f };  /* nonzero: a real IMU never reads exactly 0 */
+    bringUp(&v, accLevel);
+
+    float q0[4];    memcpy(q0, v.q, sizeof q0);
+    float bias0[3]; memcpy(bias0, v.gyroBias, sizeof bias0);
+    const uint32 realignsBefore = g_dbgAhrsRealigns;
+
+    /* 40 consecutive glitch ticks at a plausible ~1 kHz cadence (1 ms each) =
+     * 40 ms of accumulated invalid input, comfortably under the 50 ms hold. */
+    int i;
+    for (i = 0; i < 40; ++i)
+    {
+        char msg[64];
+        Ahrs_update(&v, accLevel, gyro, 0.001f, FALSE);
+        (void)snprintf(msg, sizeof msg, "tick %d: state = %u, expected RUNNING", i, v.state);
+        TEST_ASSERT_EQUAL_MESSAGE(AHRS_RUNNING, v.state, msg);
+        TEST_ASSERT_EQUAL_MESSAGE(0u, v.accTrusted, msg);
+        TEST_ASSERT_EQUAL_MESSAGE(0u, v.magTrusted, msg);
+        TEST_ASSERT_EQUAL_FLOAT_MESSAGE(0.0f, v.rate[0], msg);
+    }
+
+    TEST_ASSERT_EQUAL_FLOAT_ARRAY(q0, v.q, 4);
+    TEST_ASSERT_EQUAL_FLOAT_ARRAY(bias0, v.gyroBias, 3);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(realignsBefore, g_dbgAhrsRealigns,
+        "a glitch run under AHRS_FAULT_HOLD_S must not re-align");
+}
+
+void test_sustained_outage_declares_no_sensor_then_realigns_once(void)
+{
+    Ahrs_Values v; memset(&v, 0, sizeof v);
+    const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
+    const float32 gyro[3]     = { 0.0f, 0.0f, 0.0f };
+    bringUp(&v, accLevel);
+
+    const uint32 realignsBefore = g_dbgAhrsRealigns;
+    boolean sawNoSensor = FALSE;
+    int i;
+
+    /* 60 ms of invalid input at 1 ms/tick -- comfortably over the 50 ms
+     * AHRS_FAULT_HOLD_S. */
+    for (i = 0; i < 60; ++i)
+    {
+        Ahrs_update(&v, accLevel, gyro, 0.001f, FALSE);
+        if (v.state == AHRS_NO_SENSOR) { sawNoSensor = TRUE; }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(sawNoSensor,
+        "60 ms of continuously invalid input never reached AHRS_NO_SENSOR");
+    TEST_ASSERT_EQUAL(AHRS_NO_SENSOR, v.state);
+
+    /* The next good sample re-aligns -- exactly once. */
+    Ahrs_update(&v, accLevel, gyro, 0.001f, TRUE);
+    TEST_ASSERT_EQUAL(AHRS_RUNNING, v.state);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(realignsBefore + 1u, g_dbgAhrsRealigns,
+        "recovery from a genuine outage must re-align exactly once");
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -602,5 +673,7 @@ int main(void)
     RUN_TEST(test_no_admissible_input_produces_nan);
     RUN_TEST(test_recovers_after_garbage);
     RUN_TEST(test_invalid_sample_freezes_the_estimate);
+    RUN_TEST(test_glitch_ticks_freeze_without_realigning);
+    RUN_TEST(test_sustained_outage_declares_no_sensor_then_realigns_once);
     return UNITY_END();
 }

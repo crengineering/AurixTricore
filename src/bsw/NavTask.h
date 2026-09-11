@@ -41,4 +41,52 @@ void NavTask_step(void);
  *  lives (docs/REFACTORING_PLAN.md §4). */
 boolean NavTask_inputValid(float32 dtS, boolean imuPresent, uint8 ahrsState);
 
+/** What NavTask_classifyDt() found for a measured interval. */
+typedef enum
+{
+    NAVTASK_DT_OK    = 0,  /**< inside [NAVTASK_DT_MIN_S, NAVTASK_DT_MAX_S] */
+    NAVTASK_DT_SHORT = 1,  /**< below the window -- a duplicate-edge candidate */
+    NAVTASK_DT_LONG  = 2,  /**< above the window -- a real gap                 */
+    NAVTASK_DT_NONE  = 3   /**< no interval to classify: dtS <= 0 or NaN, or
+                             *   the deliberate 0.0f NavTask_step passes on
+                             *   its own no-new-edge timeout                   */
+} NavTask_DtClass;
+
+/** Pure classification of a measured interval against the same bounds
+ *  navTask_dtValid() enforces, but naming WHICH side of the window (or
+ *  neither) rather than a plain yes/no -- SYS1-001: the SHORT case is the
+ *  duplicate-DRDY-edge candidate NavTask_step (task 3) treats as "not a
+ *  fault", not something to feed to Ahrs_update as invalid input.
+ *
+ *  NaN-safe by construction (project rule, same idiom as navTask_dtValid()):
+ *  written as a chain of POSITIVE range tests, so a NaN dtS -- which
+ *  compares false against every relational operator -- falls through every
+ *  test and lands on NAVTASK_DT_NONE, the same bucket a genuine "no interval
+ *  measured" (dtS == 0.0f) lands on. */
+NavTask_DtClass NavTask_classifyDt(float32 dtS);
+
+/* --- debug instrumentation (SYS1-001 task 0) -----------------------------
+ * Raw map symbols read by tools/xcp_read.py, same precedent as g_imuDrdy*
+ * (ImuInt.h) -- no A2L entry, no Xcp_Data field, no GUI change. Declared
+ * here (not just defined in NavTask.c) for MISRA 8.4. */
+/** Ticks where the input fed to Ahrs_update() was NOT valid (dt out of
+ *  window, on either edge, OR the IMU read failed) -- the union of
+ *  g_dbgNavDtShort + g_dbgNavDtLong + (a present==FALSE tick) +
+ *  (the no-new-edge timeout). */
+extern volatile uint32 g_dbgNavInvalidTicks;
+/** Genuine new edges whose interval was BELOW NAVTASK_DT_MIN_S -- the
+ *  duplicate-DRDY-edge candidate named in the SYS1-001 dispatch note. */
+extern volatile uint32 g_dbgNavDtShort;
+/** Genuine new edges whose interval was ABOVE NAVTASK_DT_MAX_S. */
+extern volatile uint32 g_dbgNavDtLong;
+/** Smallest deltaTicks seen among g_dbgNavDtShort events, ticks (STM0,
+ *  10 ns/tick); 0xFFFFFFFF (sentinel) until the first one. Root-causing
+ *  aid: near-zero means a true back-to-back double-fire, near
+ *  NAVTASK_DT_MIN_S*1e8 means a merely-early edge. */
+extern volatile uint32 g_dbgNavDtShortMinTicks;
+/** Icm42688_read() returned FALSE (present == FALSE) on a tick this task
+ *  actually reached -- a genuine sensor communication failure, as opposed
+ *  to a short/long-dt classification. */
+extern volatile uint32 g_dbgImuReadFail;
+
 #endif /* NAVTASK_H */

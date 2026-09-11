@@ -83,8 +83,14 @@ void Ahrs_init(void);
  *  \param acc    acceleration [g],     SENSOR frame, X/Y/Z
  *  \param gyro   angular rate [deg/s], SENSOR frame, X/Y/Z
  *  \param dt     measured time since the previous call [s]
- *  \param valid  FALSE when the IMU read failed — the estimate is frozen
- *                rather than integrating a stale sample */
+ *  \param valid  FALSE when the IMU read failed — the estimate freezes
+ *                (quaternion and gyro-bias integral held, rate/trust
+ *                reported as zero) rather than integrating a stale sample.
+ *                SYS1-001: a single bad tick, or a short run of them, only
+ *                freezes; the estimator declares AHRS_NO_SENSOR and
+ *                re-aligns on the next good sample only once invalid input
+ *                has PERSISTED for AHRS_FAULT_HOLD_S (Ahrs.c) -- see that
+ *                constant's comment for why. */
 void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
                  float32 dt, boolean valid);
 
@@ -105,5 +111,16 @@ void Ahrs_nedToBody(const float32 vNed[3], float32 vBody[3]);
  *  \param mag    field [gauss], SENSOR frame, X/Y/Z
  *  \param valid  FALSE when the read failed (sample ignored) */
 void Ahrs_setMag(const float32 mag[3], boolean valid);
+
+/* --- debug instrumentation (SYS1-001 task 0) -----------------------------
+ * Raw map symbols read by tools/xcp_read.py, same precedent as g_imuDrdy*
+ * (ImuInt.h) -- no A2L entry, no Xcp_Data field, no GUI change. Declared
+ * here (not just defined in Ahrs.c) for MISRA 8.4: an object with external
+ * linkage needs a visible prior declaration. */
+/** Count of ahrs_align() calls (CALIBRATING/NO_SENSOR -> ALIGNING ->
+ *  RUNNING), including the one at boot. Names the SYS1-001 defect directly:
+ *  a healthy 125 s stationary run should show ~1 (the boot alignment only),
+ *  not the dozens a re-initialising estimator produces. */
+extern volatile uint32 g_dbgAhrsRealigns;
 
 #endif /* AHRS_H */

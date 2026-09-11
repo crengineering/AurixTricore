@@ -121,6 +121,43 @@ void test_ahrs_not_running_is_rejected(void)
     TEST_ASSERT_EQUAL(FALSE, NavTask_inputValid(0.02f, TRUE, (uint8)AHRS_CALIBRATING));
 }
 
+/* --- SYS1-001 task 1: NavTask_classifyDt(), the pure SHORT/LONG/NONE/OK
+ * classifier task 3 uses to tell a duplicate DRDY edge (SHORT) from every
+ * other kind of bad interval. --- */
+
+void test_classify_zero_is_none(void)
+{
+    /* NavTask_step's own sentinel for "no real interval" (the no-new-edge
+     * timeout) -- must not read as SHORT. */
+    TEST_ASSERT_EQUAL(NAVTASK_DT_NONE, NavTask_classifyDt(0.0f));
+}
+
+void test_classify_tiny_positive_is_short(void)
+{
+    /* 1e-5 s = 10 us, well below NAVTASK_DT_MIN_S (200 us) but a genuine,
+     * nonzero measured interval -- the duplicate-edge candidate. */
+    TEST_ASSERT_EQUAL(NAVTASK_DT_SHORT, NavTask_classifyDt(1.0e-5f));
+}
+
+void test_classify_measured_imu_period_is_ok(void)
+{
+    TEST_ASSERT_EQUAL(NAVTASK_DT_OK, NavTask_classifyDt(0.000985f));
+}
+
+void test_classify_quarter_second_is_long(void)
+{
+    TEST_ASSERT_EQUAL(NAVTASK_DT_LONG, NavTask_classifyDt(0.25f));
+}
+
+void test_classify_nan_is_none(void)
+{
+    /* NaN compares false against every relational operator -- it must fall
+     * through every test and land on NONE, never be silently accepted as
+     * OK. */
+    float32 nan = 0.0f / 0.0f;
+    TEST_ASSERT_EQUAL(NAVTASK_DT_NONE, NavTask_classifyDt(nan));
+}
+
 /* --- imuPresent --- */
 
 void test_imu_absent_is_rejected(void)
@@ -197,6 +234,66 @@ void test_step_still_counts_genuine_multi_edge_gaps(void)
     TEST_ASSERT_EQUAL_UINT32(2u, g_imuDrdyMissedEdges);
 }
 
+/* --- SYS1-001 task 3: a duplicate DRDY edge (SHORT-classified dt) is
+ * consumed without a fault -- the sequence number advances, the timestamp
+ * does not, and no AHRS/fusion update or NavState publish happens for it.
+ * The next GENUINE edge must then measure the FULL nominal interval, not one
+ * truncated by the duplicate. --- */
+
+void test_duplicate_edge_is_consumed_without_publish_and_widens_next_dt(void)
+{
+    NavState_t snap;
+    uint32     genAfterFirst;
+    uint32     invalidAfterFirst;
+
+    g_dbgNavDtShort      = 0u;
+    g_dbgNavInvalidTicks = 0u;
+    FakeStm_reset();
+
+    FakeStm_setTicks(0u);
+    g_imuEdge.seq   = 0u;
+    g_imuEdge.ticks = 0u;
+    NavTask_init();
+
+    /* One genuine edge at the nominal period (98500 ticks = 985 us @
+     * 100 MHz) -- establishes a real "last good" timestamp. */
+    FakeStm_setTicks(98500u);
+    g_imuEdge.seq   = 1u;
+    g_imuEdge.ticks = 98500u;
+    NavTask_step();
+    TEST_ASSERT_TRUE(NavState_get(&snap));
+    genAfterFirst      = snap.gen;
+    invalidAfterFirst  = g_dbgNavInvalidTicks;
+
+    /* A duplicate edge only 50 ticks (500 ns) later -- deep inside the
+     * SHORT band (NAVTASK_DT_MIN_S = 200 us = 20000 ticks). */
+    FakeStm_setTicks(98550u);
+    g_imuEdge.seq   = 2u;
+    g_imuEdge.ticks = 98550u;
+    NavTask_step();
+
+    TEST_ASSERT_EQUAL_UINT32(1u, g_dbgNavDtShort);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(invalidAfterFirst, g_dbgNavInvalidTicks,
+        "a duplicate edge must not be counted as an invalid AHRS input tick");
+    TEST_ASSERT_TRUE(NavState_get(&snap));
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(genAfterFirst, snap.gen,
+        "a duplicate edge must not publish a new NavState snapshot");
+
+    /* The next GENUINE edge, one full nominal period after the DUPLICATE
+     * (98550 + 98500 = 197050) -- s_lastEdgeTicks was never advanced past
+     * the first genuine edge (98500), so this must measure as the FULL
+     * interval (~985 us), not truncated by the duplicate. */
+    FakeStm_setTicks(197050u);
+    g_imuEdge.seq   = 3u;
+    g_imuEdge.ticks = 197050u;
+    NavTask_step();
+
+    TEST_ASSERT_TRUE(NavState_get(&snap));
+    TEST_ASSERT_TRUE_MESSAGE(snap.gen != genAfterFirst,
+        "the next genuine edge must publish");
+    TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 0.000985f, snap.dtS);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -212,5 +309,11 @@ int main(void)
     RUN_TEST(test_all_three_conditions_required);
     RUN_TEST(test_init_seeds_baseline_without_counting_bringup_edges);
     RUN_TEST(test_step_still_counts_genuine_multi_edge_gaps);
+    RUN_TEST(test_classify_zero_is_none);
+    RUN_TEST(test_classify_tiny_positive_is_short);
+    RUN_TEST(test_classify_measured_imu_period_is_ok);
+    RUN_TEST(test_classify_quarter_second_is_long);
+    RUN_TEST(test_classify_nan_is_none);
+    RUN_TEST(test_duplicate_edge_is_consumed_without_publish_and_widens_next_dt);
     return UNITY_END();
 }

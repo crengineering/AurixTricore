@@ -85,6 +85,19 @@
 #define AHRS_DT_MIN_S         (0.0001f)
 #define AHRS_DT_MAX_S         (0.2f)
 
+/* SYS1-001: how long invalid input must PERSIST before the sensor is
+ * presumed actually gone. Below this, one rejected tick (or a short run of
+ * them) freezes the estimate and waits for the next good sample; only once
+ * bad input has accumulated this much do we declare AHRS_NO_SENSOR and let
+ * the next good tick re-align. The dispatched defect was a single one-tick
+ * glitch (a duplicate DRDY edge, ~1 per 2400 edges) re-initialising the
+ * whole attitude and zeroing the gyro-bias integral on the spot; the fix is
+ * this debounce, not a faster sensor. Chosen well above one glitch (~1 ms)
+ * and well below a flight-relevant reaction time (100 ms): a genuine outage
+ * this long already means the last 50 ms of yaw is stale regardless of what
+ * this estimator does about it. */
+#define AHRS_FAULT_HOLD_S     (0.05f)
+
 #define AHRS_DEG_TO_RAD       (0.017453293f)
 #define AHRS_RAD_TO_DEG       (57.29578f)
 #define AHRS_GRAVITY          (9.80665f)
@@ -183,6 +196,11 @@ static float32 s_calElapsedS;   /* elapsed dt since calibration STARTED [s];
                                   * AHRS_CAL_DEADLINE_S gate is measured against */
 static boolean s_biasDegraded;  /* deadline hit before a clean window */
 
+/* SYS1-001: accumulated dt of CONSECUTIVE invalid ticks [s], reset the
+ * instant a good one arrives. Same "accumulate a duration, not a count"
+ * idiom as s_calWindowS above -- see AHRS_FAULT_HOLD_S for what it gates. */
+static float32 s_faultHoldS;
+
 /* Named s_ahrsState rather than the obvious s_state: MISRA 5.9 wants
  * internal-linkage identifiers unique across the whole program, and
  * fusion.c and src/asw/CtrlReplay.c each had their own s_state. */
@@ -194,6 +212,12 @@ static Ahrs_State s_ahrsState;
  * directly, same T12 discipline as fusion.c's baro/GNSS latches. */
 static float32 s_magB[3];          /* latched sample, BODY frame, corrected   */
 static float32 s_magNorm;
+
+/* cppcheck-suppress misra-c2012-8.7 ; deviation: read over XCP SHORT_UPLOAD
+ * by raw address (tools/xcp_read.py), never referenced by C code outside
+ * this file -- same class of deviation as g_imuDrdy* (ImuInt.c). SYS1-001
+ * task 0 instrumentation: see Ahrs.h for what it counts. */
+volatile uint32 g_dbgAhrsRealigns;
 
 /* Inverse square root. The plain form, not the famous bit-trick approximation:
  * this core has an FPU, the trick's 0.2 percent error would land straight in
@@ -291,6 +315,8 @@ void Ahrs_init(void)
     s_biasDegraded = FALSE;
     s_ahrsState    = AHRS_CALIBRATING;
     s_magNorm  = 0.0f;
+    s_faultHoldS = 0.0f;
+    g_dbgAhrsRealigns = 0u;
 
     /* g_magLatch (AhrsLatch.h): the PRODUCER's state, zeroed here even though
      * Ahrs_init() runs on CPU1 (via NavTask_init, T12) -- safe by
@@ -598,13 +624,55 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
 
     ahrs_refreshMag();
 
+    if (valid != FALSE)
+    {
+        /* SYS1-001 debounce: the caller says this tick's input is usable --
+         * the hold clock resets regardless of what the dt/NaN checks below
+         * make of it, same as a healthy sample answering a doubt. */
+        s_faultHoldS = 0.0f;
+    }
+    else
+    {
+        /* accumulated below, in the valid==FALSE branch */
+    }
+
     if ((valid == FALSE) || (dt <= AHRS_DT_MIN_S) || (dt >= AHRS_DT_MAX_S))
     {
         /* Freeze. A stale sample or a nonsense interval integrated as though
          * it were real is how an estimator ends up confidently wrong. */
         if (valid == FALSE)
         {
-            s_ahrsState = AHRS_NO_SENSOR;
+            /* SYS1-001 debounce: one rejected tick must freeze the estimate,
+             * not re-initialise it -- re-aligning on every one-tick glitch is
+             * what turned a duplicate DRDY edge into a yaw sawtooth (see
+             * AHRS_FAULT_HOLD_S). Only once bad input has PERSISTED that long
+             * is the sensor presumed actually gone. */
+            if ((dt > 0.0f) && (dt < AHRS_DT_MAX_S))
+            {
+                /* A genuinely measured, bounded interval -- count it toward
+                 * the hold window. A nonsense dt (<=0, NaN, or absurdly
+                 * large; NaN compares false against every relational
+                 * operator here, same discipline as navTask_dtValid())
+                 * contributes nothing, so a corrupt caller can neither race
+                 * the debounce shut nor freeze it open forever. */
+                s_faultHoldS += dt;
+            }
+            else
+            {
+                /* not a usable interval -- do not advance the hold clock */
+            }
+
+            if (s_faultHoldS >= AHRS_FAULT_HOLD_S)
+            {
+                s_ahrsState = AHRS_NO_SENSOR;
+            }
+            else
+            {
+                /* still within the hold window: frozen, not yet declared
+                 * gone -- s_ahrsState (and s_fbI, untouched below) stay
+                 * exactly as they were. */
+            }
+
             out->accNed[0] = 0.0f;
             out->accNed[1] = 0.0f;
             out->accNed[2] = 0.0f;
@@ -686,6 +754,7 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
                 }
 
                 s_ahrsState = AHRS_RUNNING;
+                g_dbgAhrsRealigns++;
             }
             else
             {
