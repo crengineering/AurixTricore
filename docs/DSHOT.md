@@ -243,6 +243,12 @@ with an internal pull-up (`Mcu/f421/Src/serial_telemetry.c:19-64`:
 confidence this is what ships, though the exact GPIO pin letter/number in
 that file is generic-target and not necessarily the GOKU's silkscreen pad.
 
+> **Bench 2026-09-09 (Chris, multimeter):** Pad T idles at **≈ 0,17 V**, not
+> 3,3 V — the line is released between frames, the "push-pull with pull-up"
+> reading above does not describe the idle state on the real 4-in-1 board.
+> The FC must provide the idle-high on its RX pin. Details and consequence:
+> `docs/ESC_AM32.md` §5 item 5 + Gaps.
+
 **One MCU, one USART, one `aTxBuffer` - all 4 motor channels share this one
 physical wire and one transmit buffer** (`Src/kiss_telemetry.c:6`,
 `Mcu/f421/Src/serial_telemetry.c` - a single `USART1`/`DMA1_CHANNEL2`

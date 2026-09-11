@@ -219,6 +219,8 @@ still to be designed.
    wired):** expect close to pack voltage (~16.8 V at full charge, 4S) —
    confirms it really is the VBAT tap and reinforces why it must stay
    unconnected to the AURIX.
+   **Measured 2026-09-09 (Chris, lab supply 12 V / 0,5 A limit, meter on
+   G–V): 12 V.** V = VBAT pass-through confirmed. ✅
 4. **Idle logic level on pads 1–4, ESC powered, nothing else connected:**
    expect a steady level (not toggling) — bidirectional DShot's idle-high
    convention (`docs/DSHOT.md` §1) means this should read close to the
@@ -226,9 +228,25 @@ still to be designed.
    or could read low/floating if it defaults to unidirectional. **Record
    what is actually measured — it settles the D1 auto-detect question from
    the FC side's perspective before any signal is ever sent.**
+   **Measured 2026-09-09: pads 1–4 each 3,3 V against G, steady, nothing
+   connected.** The ESC's own input holds the line high when idle (internal
+   pull-up or driven high) — consistent with the bidirectional idle-high
+   convention and with the AURIX-side open-drain + pull-up scheme (both
+   ends idle high, no contention). Whether the `bi_direction` eeprom flag
+   is set stays a configurator question (item 9). ✅
 5. **Telemetry pad (T) idle level, ESC powered:** UART TX idle-high is the
    UART convention — expect close to 3.3 V, steady, per §2's push-pull
    claim. A pad that reads 0 V idle would falsify that claim outright.
+   **Measured 2026-09-09: ≈ 0,17 V against G.** ⚠ **Falsified.** The ESC
+   does **not** hold T high between frames — the pad is released (Hi-Z,
+   floating near ground) until a telemetry frame is actually sent. Most
+   likely reason: all four AT32F421 TX pins share this one pad, so they
+   cannot sit push-pull-high simultaneously; the single-wire half-duplex
+   mode releases the pin outside a transmission. **Consequence for the
+   AURIX side: P23.3 must supply the idle-high itself** — see Gaps and
+   `PINNING.md` §2.4. Whether the ESC drives the '1' bits push-pull during
+   a frame or only pulls low (open-drain) is still unknown → scope during
+   the first telemetry request.
 6. ~~Current-sense pad (C) idle voltage~~ — **struck 2026-09-06**, Pad C is
    not wired (§2). Optional curiosity only: expect near 0 V or a small
    fixed offset at zero current.
@@ -263,6 +281,17 @@ still to be designed.
 
 ## Gaps
 
+- **Telemetry line idle level (measured 2026-09-09, §5 item 5): T floats
+  at ≈ 0,17 V when idle**, not 3,3 V as the push-pull-with-pull-up reading
+  of the source predicted. Firmware consequence: the ASCLIN6 RX input on
+  P23.3 needs a pull-up so the UART sees a legal idle state between frames
+  instead of a permanent start bit / framing errors. Internal pad pull-up
+  (`IfxPort_InputMode_pullUp`, tens of kΩ) is enough **if** the ESC drives
+  the '1' bits actively during a frame; if it turns out open-drain, an
+  external 4,7–10 kΩ to 3,3 V is needed for the 8,7 µs bit time. Decide
+  after the first scoped telemetry frame; plan the external pull-up on the
+  breakout board regardless (a footprint costs nothing). `docs/DSHOT.md`
+  §6 carries the same caveat.
 - **DShot signal pin GPIO output type (push-pull vs open-drain) on the
   AT32F421 side** — inferred from the telemetry UART pin's config and
   general AM32/BLHeli_32 practice, not read directly from a DShot-pin GPIO
