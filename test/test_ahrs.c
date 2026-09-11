@@ -592,12 +592,33 @@ void test_invalid_sample_freezes_the_estimate(void)
  * freezing. AHRS_FAULT_HOLD_S = 0.05 s is the debounce; below it the
  * estimate must be bit-identical to before the glitch, at/above it (and
  * only then) AHRS_NO_SENSOR fires and the next good sample re-aligns once.
+ *
+ * flight-reviewer FAIL (regression vs main): the first version of these
+ * tests drove the "sustained outage" case with dt = 0.001f, FALSE repeated
+ * -- a stimulus NavTask_step never actually produces on that path (it either
+ * repeats NAVTASK_TIMEDOUT_FAULT_DT_S = 0.0005 s on a no-new-edge timeout, or
+ * reports the real gap once as a single LONG edge, e.g. 0.5 s) and which
+ * happened to still pass against the (buggy) fix, hiding a real regression:
+ * neither of NavTask.c's actual stimuli reached AHRS_NO_SENSOR at all before
+ * the fix below. See test_navtask.c's
+ * test_no_edge_timeout_declares_no_sensor_then_realigns_once for the
+ * no-new-edge path through the real NavTask_step integration; the two tests
+ * below now drive Ahrs_update() directly only with dt values NavTask.c can
+ * actually produce: a small in-window glitch (a present == FALSE hiccup,
+ * dt otherwise normal -- a duplicate DRDY edge no longer even reaches here,
+ * task 3) and a single LONG-edge-sized gap.
  * ======================================================================== */
 
 extern volatile uint32 g_dbgAhrsRealigns;   /* Ahrs.h -- task 0 instrumentation */
 
 void test_glitch_ticks_freeze_without_realigning(void)
 {
+    /* A brief run of invalid ticks with an otherwise-normal, in-window dt --
+     * what NavTask.c reports for a present == FALSE hiccup (a transient SPI
+     * read failure while DRDY keeps ticking normally). A SHORT-classified
+     * duplicate DRDY edge no longer reaches Ahrs_update() at all as of task
+     * 3 (NavTask.c's `duplicateEdge` handling) -- this test is about ANY
+     * brief invalid run, not specifically that one. */
     Ahrs_Values v; memset(&v, 0, sizeof v);
     const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
     const float32 gyro[3]     = { 5.0f, -3.0f, 2.0f };  /* nonzero: a real IMU never reads exactly 0 */
@@ -627,27 +648,44 @@ void test_glitch_ticks_freeze_without_realigning(void)
         "a glitch run under AHRS_FAULT_HOLD_S must not re-align");
 }
 
-void test_sustained_outage_declares_no_sensor_then_realigns_once(void)
+void test_zero_or_negative_dt_never_advances_the_fault_hold_clock(void)
 {
+    /* Defensive/robustness regression, not a claim about what NavTask.c
+     * sends today: dt <= 0 (or NaN, which fails every comparison here) must
+     * never by itself declare AHRS_NO_SENSOR, however many times it repeats
+     * -- Ahrs_update()'s OWN contract, independent of any one caller. */
+    Ahrs_Values v; memset(&v, 0, sizeof v);
+    const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
+    const float32 gyro[3]     = { 0.0f, 0.0f, 0.0f };
+    bringUp(&v, accLevel);
+
+    int i;
+    for (i = 0; i < 200000; ++i)
+    {
+        Ahrs_update(&v, accLevel, gyro, 0.0f, FALSE);
+    }
+    TEST_ASSERT_EQUAL_MESSAGE(AHRS_RUNNING, v.state,
+        "dt == 0.0f repeated must never by itself declare AHRS_NO_SENSOR");
+}
+
+void test_long_gap_declares_no_sensor_immediately_then_realigns_once(void)
+{
+    /* NavTask.c's actual LONG-edge stimulus: a single tick whose dt is the
+     * real measured gap since the last good edge (unbounded above -- see
+     * AHRS_FAULT_DT_MAX_S), not a repeated small one. A gap this long (here,
+     * matching the reviewer's own 0.5 s repro) already IS the outage and
+     * must declare AHRS_NO_SENSOR on THIS tick, not after further waiting. */
     Ahrs_Values v; memset(&v, 0, sizeof v);
     const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
     const float32 gyro[3]     = { 0.0f, 0.0f, 0.0f };
     bringUp(&v, accLevel);
 
     const uint32 realignsBefore = g_dbgAhrsRealigns;
-    boolean sawNoSensor = FALSE;
-    int i;
 
-    /* 60 ms of invalid input at 1 ms/tick -- comfortably over the 50 ms
-     * AHRS_FAULT_HOLD_S. */
-    for (i = 0; i < 60; ++i)
-    {
-        Ahrs_update(&v, accLevel, gyro, 0.001f, FALSE);
-        if (v.state == AHRS_NO_SENSOR) { sawNoSensor = TRUE; }
-    }
-    TEST_ASSERT_TRUE_MESSAGE(sawNoSensor,
-        "60 ms of continuously invalid input never reached AHRS_NO_SENSOR");
-    TEST_ASSERT_EQUAL(AHRS_NO_SENSOR, v.state);
+    Ahrs_update(&v, accLevel, gyro, 0.5f, FALSE);
+    TEST_ASSERT_EQUAL_MESSAGE(AHRS_NO_SENSOR, v.state,
+        "a single 0.5 s invalid tick (a LONG edge's real gap) must declare "
+        "AHRS_NO_SENSOR immediately, not after further waiting");
 
     /* The next good sample re-aligns -- exactly once. */
     Ahrs_update(&v, accLevel, gyro, 0.001f, TRUE);
@@ -674,6 +712,7 @@ int main(void)
     RUN_TEST(test_recovers_after_garbage);
     RUN_TEST(test_invalid_sample_freezes_the_estimate);
     RUN_TEST(test_glitch_ticks_freeze_without_realigning);
-    RUN_TEST(test_sustained_outage_declares_no_sensor_then_realigns_once);
+    RUN_TEST(test_zero_or_negative_dt_never_advances_the_fault_hold_clock);
+    RUN_TEST(test_long_gap_declares_no_sensor_immediately_then_realigns_once);
     return UNITY_END();
 }

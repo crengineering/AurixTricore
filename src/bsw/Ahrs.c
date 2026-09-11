@@ -98,6 +98,24 @@
  * this estimator does about it. */
 #define AHRS_FAULT_HOLD_S     (0.05f)
 
+/* Upper bound for a dt COUNTED TOWARD THE FAULT-HOLD CLOCK -- deliberately
+ * NOT AHRS_DT_MAX_S (flight-reviewer FAIL, SYS1-001 regression): that bound
+ * exists to keep a nonsense interval out of the INTEGRATOR, and reusing it
+ * here silently excluded the one dt that most needs to count -- a LONG
+ * NavTask.c edge (a genuine gap the sensor took to answer again) reports the
+ * real gap as dt, e.g. 0.5 s, and 0.5 s >= AHRS_DT_MAX_S (0.2 s) made the old
+ * guard throw it away, so s_faultHoldS never moved and AHRS_NO_SENSOR never
+ * fired -- a dead IMU / broken INT1 left the estimator reporting
+ * AHRS_RUNNING on a frozen quaternion forever. This bound instead only
+ * rejects what must never be trusted as a real duration: <= 0, NaN (compares
+ * false against every relational operator here, same discipline as
+ * navTask_dtValid()), or a corrupted/absurd value -- 60 s is generous
+ * headroom over any interval NavTask.c can legitimately report (a uint32
+ * STM0 tick delta at 100 MHz cannot even represent a gap past ~42.9 s). A
+ * dt this large clears AHRS_FAULT_HOLD_S in one step, which is the point: a
+ * gap that long already IS the outage. */
+#define AHRS_FAULT_DT_MAX_S   (60.0f)
+
 #define AHRS_DEG_TO_RAD       (0.017453293f)
 #define AHRS_RAD_TO_DEG       (57.29578f)
 #define AHRS_GRAVITY          (9.80665f)
@@ -647,14 +665,16 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
              * what turned a duplicate DRDY edge into a yaw sawtooth (see
              * AHRS_FAULT_HOLD_S). Only once bad input has PERSISTED that long
              * is the sensor presumed actually gone. */
-            if ((dt > 0.0f) && (dt < AHRS_DT_MAX_S))
+            if ((dt > 0.0f) && (dt < AHRS_FAULT_DT_MAX_S))
             {
                 /* A genuinely measured, bounded interval -- count it toward
-                 * the hold window. A nonsense dt (<=0, NaN, or absurdly
-                 * large; NaN compares false against every relational
-                 * operator here, same discipline as navTask_dtValid())
-                 * contributes nothing, so a corrupt caller can neither race
-                 * the debounce shut nor freeze it open forever. */
+                 * the hold window, WHATEVER its size (see AHRS_FAULT_DT_MAX_S
+                 * -- this is deliberately not AHRS_DT_MAX_S, the integration
+                 * bound). A nonsense dt (<=0, NaN, or absurdly large; NaN
+                 * compares false against every relational operator here,
+                 * same discipline as navTask_dtValid()) contributes nothing,
+                 * so a corrupt caller can neither race the debounce shut nor
+                 * freeze it open forever. */
                 s_faultHoldS += dt;
             }
             else

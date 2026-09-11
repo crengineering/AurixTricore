@@ -69,10 +69,16 @@ NavTask_DtClass NavTask_classifyDt(float32 dtS);
  * Raw map symbols read by tools/xcp_read.py, same precedent as g_imuDrdy*
  * (ImuInt.h) -- no A2L entry, no Xcp_Data field, no GUI change. Declared
  * here (not just defined in NavTask.c) for MISRA 8.4. */
-/** Ticks where the input fed to Ahrs_update() was NOT valid (dt out of
- *  window, on either edge, OR the IMU read failed) -- the union of
- *  g_dbgNavDtShort + g_dbgNavDtLong + (a present==FALSE tick) +
- *  (the no-new-edge timeout). */
+/** Ticks that reached the ahrsInputOk check with invalid input: a
+ *  LONG-classified edge, a present == FALSE tick, or the no-new-edge
+ *  timeout. flight-reviewer FAIL correction: this does NOT include
+ *  g_dbgNavDtShort any more -- SYS1-001 task 3's `duplicateEdge` handling
+ *  consumes a SHORT (duplicate DRDY edge) tick and returns before this
+ *  check is ever reached, which is the whole point: a duplicate edge is not
+ *  a fault. Read g_dbgNavDtShort (how many duplicate edges occurred) and
+ *  g_dbgAhrsRealigns (Ahrs.h, how many times the estimator actually
+ *  re-initialised) together instead -- neither should move the other any
+ *  more. */
 extern volatile uint32 g_dbgNavInvalidTicks;
 /** Genuine new edges whose interval was BELOW NAVTASK_DT_MIN_S -- the
  *  duplicate-DRDY-edge candidate named in the SYS1-001 dispatch note. */

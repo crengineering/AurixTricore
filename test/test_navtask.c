@@ -23,10 +23,27 @@
  * diagnostics -- are stubbed below, purely to satisfy the linker, the same
  * pattern fakes/I2c.c and fakes/Spi.c already use for the plausibility
  * tests (see test/CMakeLists.txt). */
+/* Settable by a test that needs a recovered/present sensor (SYS1-001 task 2
+ * flight-reviewer FAIL follow-up); every existing test relies on the FALSE
+ * default and never touches this, so their behaviour is unchanged. */
+static boolean s_icm42688Present = FALSE;
+
 boolean Icm42688_read(Icm42688_Sample *sample)
 {
-    (void)sample;
-    return FALSE;
+    if (s_icm42688Present != FALSE)
+    {
+        /* A plausible level, 1 g reading -- enough for ahrs_align() to see
+         * accNorm inside its trust window and actually reach AHRS_RUNNING,
+         * not just leave AHRS_ALIGNING. */
+        sample->acc[0]  = 0.0f;
+        sample->acc[1]  = 0.0f;
+        sample->acc[2]  = -1.0f;
+        sample->gyro[0] = 0.0f;
+        sample->gyro[1] = 0.0f;
+        sample->gyro[2] = 0.0f;
+        sample->tempC   = 20.0f;
+    }
+    return s_icm42688Present;
 }
 
 boolean Icm42688_plausible(const Icm42688_Sample *sample, float32 *liveness)
@@ -294,6 +311,67 @@ void test_duplicate_edge_is_consumed_without_publish_and_widens_next_dt(void)
     TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 0.000985f, snap.dtS);
 }
 
+/* --- SYS1-001 flight-reviewer FAIL follow-up: the no-new-edge timeout path
+ * must still declare AHRS_NO_SENSOR after a genuine outage, driven through
+ * the REAL NavTask_step integration (not a hand-picked dt at the Ahrs.c
+ * level, which is what let the original regression pass its own tests). --- */
+
+void test_no_edge_timeout_declares_no_sensor_then_realigns_once(void)
+{
+    NavState_t snap;
+    boolean    sawNoSensor = FALSE;
+    uint32     realignsBefore;
+    int        i;
+
+    g_dbgNavInvalidTicks = 0u;
+    s_icm42688Present    = FALSE;
+    FakeStm_reset();
+
+    FakeStm_setTicks(0u);
+    g_imuEdge.seq   = 0u;
+    g_imuEdge.ticks = 0u;
+    NavTask_init();
+
+    /* No new edge ever arrives (g_imuEdge left untouched) while SysTime runs
+     * far ahead of it -- every dispatch from here on takes the timed-out
+     * branch. 150 dispatches * NAVTASK_TIMEDOUT_FAULT_DT_S (0.5 ms) = 75 ms
+     * of accumulated fault-hold time, comfortably over AHRS_FAULT_HOLD_S
+     * (50 ms, Ahrs.c). */
+    FakeStm_setTicks(50000000u);   /* comfortably past NAVTASK_NO_EDGE_TIMEOUT_S */
+    for (i = 0; i < 150; ++i)
+    {
+        NavTask_step();
+        TEST_ASSERT_TRUE(NavState_get(&snap));
+        if (snap.ahrs.state == (uint8)AHRS_NO_SENSOR) { sawNoSensor = TRUE; }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(sawNoSensor,
+        "150 no-new-edge dispatches (75 ms of NAVTASK_TIMEDOUT_FAULT_DT_S) "
+        "never reached AHRS_NO_SENSOR -- the fault-hold clock is not "
+        "advancing on the timeout path");
+    TEST_ASSERT_EQUAL_UINT32((uint32)AHRS_NO_SENSOR, (uint32)snap.ahrs.state);
+    TEST_ASSERT_TRUE_MESSAGE(g_dbgNavInvalidTicks > 0u,
+        "the timeout path must still count as invalid ticks (NavTask.h)");
+
+    /* One genuine edge, present == TRUE, a normal in-window interval
+     * relative to the ORIGINAL last-good edge (tick 0) -- picked
+     * deliberately so this tick classifies OK, not LONG, isolating the
+     * re-align check from the LONG-edge path (covered separately in
+     * test_ahrs.c). */
+    realignsBefore    = g_dbgAhrsRealigns;
+    s_icm42688Present = TRUE;
+    g_imuEdge.seq     = 1u;
+    g_imuEdge.ticks   = 98500u;   /* 985 us after the original edge at tick 0 */
+    NavTask_step();
+
+    TEST_ASSERT_TRUE(NavState_get(&snap));
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE((uint32)AHRS_RUNNING, (uint32)snap.ahrs.state,
+        "the next good sample must resume RUNNING");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(realignsBefore + 1u, g_dbgAhrsRealigns,
+        "recovery from the timeout outage must re-align exactly once");
+
+    s_icm42688Present = FALSE;   /* leave the stub as every other test expects it */
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -315,5 +393,6 @@ int main(void)
     RUN_TEST(test_classify_quarter_second_is_long);
     RUN_TEST(test_classify_nan_is_none);
     RUN_TEST(test_duplicate_edge_is_consumed_without_publish_and_widens_next_dt);
+    RUN_TEST(test_no_edge_timeout_declares_no_sensor_then_realigns_once);
     return UNITY_END();
 }

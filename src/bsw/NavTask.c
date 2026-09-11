@@ -51,6 +51,25 @@
  * spare. */
 #define NAVTASK_NO_EDGE_TIMEOUT_S   (0.02f)
 
+/* flight-reviewer FAIL, SYS1-001 regression: the no-new-edge (timed out)
+ * branch below reports elapsedTime = 0.0f -- deliberately, so it stays
+ * outside the dt window and ahrsInputOk/fusionInputOk are never tricked into
+ * TRUE by a stale-but-in-range value (see that branch's own comment). But
+ * Ahrs_update()'s fault-hold clock (AHRS_FAULT_HOLD_S, Ahrs.c) needs to see
+ * SOME real, positive dt on every invalid tick, or a fully silent sensor
+ * (dead IMU, broken INT1) never crosses the hold and AHRS_NO_SENSOR never
+ * fires -- the estimator is left reporting AHRS_RUNNING on a frozen
+ * quaternion forever, which is what the GUI's Attitude view gates "live" on.
+ * This is that dt, used ONLY for that one purpose (see its call site) --
+ * NOT elapsedTime itself, which must stay 0.0f for the reasons above. Set to
+ * this task's own registered dispatch period (SCHED_US(500), Cpu1_Main.c):
+ * each timed-out dispatch really is ~500 us after the previous one, so
+ * summing this in on every such dispatch reconstructs real elapsed wall
+ * time to within the scheduler's own jitter -- comfortably good enough
+ * against a 50 ms threshold, and errs toward declaring the outage LATE
+ * (safe) rather than early if CPU1 ever falls behind its own poll rate. */
+#define NAVTASK_TIMEDOUT_FAULT_DT_S   (0.0005f)
+
 /* NaN-safe by construction: written as "is dtS INSIDE the window", not "is
  * dtS outside the window". NaN compares false against every relational
  * operator, so the ORIGINAL Cpu0_Main.c form -- `(dt < lo) || (dt > hi)` to
@@ -350,10 +369,30 @@ void NavTask_step(void)
             }
             else
             {
-                /* SYS1-001 task 0 instrumentation -- see NavTask.h. */
+                /* SYS1-001 task 0 instrumentation -- see NavTask.h. Does NOT
+                 * include a SHORT (duplicate-edge) tick -- see NavTask.h. */
                 g_dbgNavInvalidTicks++;
             }
-            Ahrs_update(&ahrs, sample.acc, sample.gyro, elapsedTime, ahrsInputOk);
+
+            /* flight-reviewer FAIL, SYS1-001 regression: elapsedTime is
+             * deliberately 0.0f above when there was no new edge at all
+             * (NAVTASK_TIMEDOUT_FAULT_DT_S's own comment) -- correct for the
+             * dt-window/fusion gating this far, but Ahrs_update()'s
+             * fault-hold clock needs real, positive time to pass on THIS one
+             * call, or a fully silent sensor never crosses AHRS_FAULT_HOLD_S.
+             * A genuine new edge (SHORT already handled above, LONG here)
+             * already carries the real measured gap in elapsedTime -- only
+             * the no-new-edge case needs the override. */
+            {
+                float32 ahrsDt = elapsedTime;
+
+                if ((ahrsInputOk == FALSE) && (newSample == FALSE))
+                {
+                    ahrsDt = NAVTASK_TIMEDOUT_FAULT_DT_S;
+                }
+
+                Ahrs_update(&ahrs, sample.acc, sample.gyro, ahrsDt, ahrsInputOk);
+            }
 
             /* Gate the navigation filter on the attitude being usable, not
              * merely on the IMU answering. While the AHRS is still averaging
