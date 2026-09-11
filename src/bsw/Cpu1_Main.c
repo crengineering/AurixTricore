@@ -92,7 +92,10 @@ void core1_main(void)
     NavTask_init();         /* NavState_init, FusionCal_init, Ahrs_init, Fusion_init */
 
     /* T15 (docs/REFACTORING_PLAN.md §3.6): NavTask_step registered FIRST and
-     * at SCHED_US(500) -- Scheduler_run() dispatches in registration order
+     * at SCHED_US(NAVTASK_DISPATCH_PERIOD_US) (NavTask.h -- also what
+     * NavTask.c's own NAVTASK_TIMEDOUT_FAULT_DT_S derives from, so the two
+     * can never silently drift apart) -- Scheduler_run() dispatches in
+     * registration order
      * (scheduler.c), and at a ~985 us sensor period a task ahead of the
      * flight chain is no longer merely harmless the way it was at 20 ms, so
      * this ordering is now part of the contract for anything else ever added
@@ -108,7 +111,7 @@ void core1_main(void)
      * pattern. Fixing the macro itself is out of scope here: scheduler.h is
      * shared by every core's task registration, not something T15 (the rate
      * change and only the rate change) should be touching. */
-    (void)Scheduler_addTask(&g_sched, NavTask_step, SCHED_US(500u));
+    (void)Scheduler_addTask(&g_sched, NavTask_step, SCHED_US(NAVTASK_DISPATCH_PERIOD_US));
     Scheduler_addTask(&g_sched, Task_LedToggle, SCHED_MS(500u));
 
     while (TRUE)

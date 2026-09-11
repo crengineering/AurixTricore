@@ -21,15 +21,26 @@
 
 #include "Ifx_Types.h"
 
+/** NavTask_step's own registered scheduler period, in microseconds -- the
+ *  ONE source both Cpu1_Main.c's `Scheduler_addTask(&g_sched, NavTask_step,
+ *  SCHED_US(NAVTASK_DISPATCH_PERIOD_US))` and NavTask.c's
+ *  NAVTASK_TIMEDOUT_FAULT_DT_S derive from. flight-reviewer follow-up
+ *  (SYS1-001): NAVTASK_TIMEDOUT_FAULT_DT_S must track this exactly, or a
+ *  retune silently mis-scales Ahrs.c's fault-hold clock -- a comment saying
+ *  so is not enough, so this is the single #define both sites read, not two
+ *  numbers that happen to agree today. */
+#define NAVTASK_DISPATCH_PERIOD_US   (500u)
+
 /** FusionCal_init, Ahrs_init, Fusion_init, NavState_init -- in that order,
  *  once at boot, before the scheduler starts. */
 void NavTask_init(void);
 
 /** The flight chain, one tick: IMU read, AHRS update, fusion update,
- *  NavState_publish. Registered at SCHED_US(500) (T15) -- a 2 kHz poll well
- *  above the sensor's measured ~1014.2 Hz DRDY rate; the body returns almost
- *  immediately unless a new edge (or a timeout, see NavTask.c) is pending, so
- *  the actual work rate tracks the sensor, not the poll period. */
+ *  NavState_publish. Registered at SCHED_US(NAVTASK_DISPATCH_PERIOD_US)
+ *  (T15) -- a 2 kHz poll well above the sensor's measured ~1014.2 Hz DRDY
+ *  rate; the body returns almost immediately unless a new edge (or a
+ *  timeout, see NavTask.c) is pending, so the actual work rate tracks the
+ *  sensor, not the poll period. */
 void NavTask_step(void);
 
 /** Whether this tick's inputs are trustworthy enough to feed the fusion

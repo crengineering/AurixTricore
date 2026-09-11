@@ -62,13 +62,16 @@
  * quaternion forever, which is what the GUI's Attitude view gates "live" on.
  * This is that dt, used ONLY for that one purpose (see its call site) --
  * NOT elapsedTime itself, which must stay 0.0f for the reasons above. Set to
- * this task's own registered dispatch period (SCHED_US(500), Cpu1_Main.c):
- * each timed-out dispatch really is ~500 us after the previous one, so
- * summing this in on every such dispatch reconstructs real elapsed wall
- * time to within the scheduler's own jitter -- comfortably good enough
- * against a 50 ms threshold, and errs toward declaring the outage LATE
- * (safe) rather than early if CPU1 ever falls behind its own poll rate. */
-#define NAVTASK_TIMEDOUT_FAULT_DT_S   (0.0005f)
+ * this task's own registered dispatch period, NAVTASK_DISPATCH_PERIOD_US
+ * (NavTask.h; Cpu1_Main.c registers NavTask_step at
+ * SCHED_US(NAVTASK_DISPATCH_PERIOD_US), the SAME macro, not a second number
+ * that merely happens to match today): each timed-out dispatch really is
+ * ~500 us after the previous one, so summing this in on every such dispatch
+ * reconstructs real elapsed wall time to within the scheduler's own jitter
+ * -- comfortably good enough against a 50 ms threshold, and errs toward
+ * declaring the outage LATE (safe) rather than early if CPU1 ever falls
+ * behind its own poll rate. */
+#define NAVTASK_TIMEDOUT_FAULT_DT_S   ((float32)NAVTASK_DISPATCH_PERIOD_US * 1.0e-6f)
 
 /* NaN-safe by construction: written as "is dtS INSIDE the window", not "is
  * dtS outside the window". NaN compares false against every relational
@@ -187,8 +190,9 @@ void NavTask_init(void)
     ImuEdge_snapshot(&s_lastEdgeSeq, &s_lastEdgeTicks);
 }
 
-/* T15 (docs/REFACTORING_PLAN.md §3.6): registered at SCHED_US(500), a 2 kHz
- * poll well above the sensor's measured ~1014.2 Hz -- deliberately faster
+/* T15 (docs/REFACTORING_PLAN.md §3.6): registered at
+ * SCHED_US(NAVTASK_DISPATCH_PERIOD_US), a 2 kHz poll well above the
+ * sensor's measured ~1014.2 Hz -- deliberately faster
  * than the data it waits for, so the edge sequence counter (not the poll
  * period) is the real clock. See the body below for the gate. */
 void NavTask_step(void)
