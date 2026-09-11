@@ -9,6 +9,13 @@ per-module truth lives in the linked SWE.3 docs and the headers themselves.
 
 ## Change log
 
+- 2026-09-11 — SYS1-001: `Ahrs_update()`'s input-fault handling is now a
+  debounced two-state machine (freeze on one bad tick, `AHRS_NO_SENSOR` only
+  after `AHRS_FAULT_HOLD_S` of persistent invalid input) instead of
+  re-initialising on the first rejected sample; `NavTask_step` treats a
+  SHORT-classified interval (a duplicate DRDY edge) as consumed, not a fault.
+  Detail: `docs/FUSION.md` §5 ("One rejected IMU sample re-initialising the
+  whole attitude").
 - 2026-08-29 — created as-built (post PR #15 core partition); collects what
   `REFACTORING_PLAN.md` (now archive) established.
 
@@ -63,6 +70,10 @@ MISRA C:2012 gate (new code clean); TASKING packs `uint32` at 2-byte
 alignment — struct layout changes ripple into A2L + GUI (`CODEMAP.md`);
 NaN compares false — `isfinite()` guards on every non-finite-capable path;
 no unbounded wait (iLLD spins hung CPU0 before — bounded in-house engines).
+A transient sensor-input fault must freeze the attitude estimate, never
+re-initialise it on the spot (SYS1-001) — `AHRS_FAULT_HOLD_S` (`Ahrs.c`) is
+the one place that boundary is drawn; do not add a second path that declares
+`AHRS_NO_SENSOR` without going through it.
 
 ## Open architectural work (waiting on requirements)
 

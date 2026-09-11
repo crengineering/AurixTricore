@@ -294,6 +294,69 @@ GNSS fix the filter genuinely does not know where it is. It clamps at
 `FUSION_P_MAX` rather than resetting, because resetting would falsely claim the
 estimate had improved.
 
+**One rejected IMU sample re-initialising the whole attitude (SYS1-001).**
+`Ahrs_update()`'s `valid` parameter used to have exactly two states: usable, or
+`AHRS_NO_SENSOR` on the spot. At the measured ~1014 Hz DRDY rate a duplicate
+edge (`deltaTicks` under `NAVTASK_DT_MIN_S`, ~1 per 2400 edges — the sibling of
+the ERU `LDEN` double-trigger documented in `docs/ILLD_NOTES.md`) produced
+exactly that: one tick with `valid == FALSE`, `AHRS_NO_SENSOR`, then the next
+good tick re-aligned — `ahrs_align()` sets yaw **deadbeat** from the latched
+magnetometer and zeroes all three Mahony integrals. Two ticks, ~2 ms; at 100 ms
+GUI polling only the jump survives. Evidence row `65E61FC20BD73055`
+(2026-09-11, fw v1.19.13): 52 of these in 125 s stationary, a 40-step yaw
+sawtooth (0.33–2.59°) riding a +0.5°/s residual gyro-z rate, all three
+`gyroBias*` collapsing to ≈0 at every step.
+
+**Fix: separate "no usable input this tick" from "the sensor is gone."**
+`Ahrs_update()` now debounces the fault instead of latching it on the first bad
+tick:
+
+```
+good tick  ──────────────────────────────────────────────┐
+   │                                                       │ s_faultHoldS = 0
+   ▼                                                       │
+ RUNNING ──invalid tick──▶ FROZEN (still RUNNING) ─────────┘
+   ▲            s_faultHoldS += dt         │
+   │                                       │ s_faultHoldS >= AHRS_FAULT_HOLD_S
+   │                                       ▼
+   └──── ahrs_align(), s_fbI = 0 ──── AHRS_NO_SENSOR
+              (exactly once)
+```
+
+Below `AHRS_FAULT_HOLD_S` (0.05 s) an invalid tick **freezes**: the quaternion
+and the Mahony integral `s_fbI` are left untouched, `rate`/`accTrusted`/
+`magTrusted` publish as zero for that tick, and the state stays whatever it
+was. Only once bad input has *persisted* for `AHRS_FAULT_HOLD_S` — a duration
+accumulated from `dt`, the same "duration not a sample count" idiom
+`ahrs_calibrate()`'s window already uses (§9, T14) — does the estimator declare
+`AHRS_NO_SENSOR` and let the next good sample re-align. A single glitch, or a
+short run of them, never reaches that; a genuine outage (IMU unplugged, SPI
+wedged) still does, just 0.05 s later than before. Consequence: after a
+genuine ≥ 50 ms outage, yaw is corrected over the ~7 s time constant below
+instead of instantly — the trade this fix makes on purpose. Bench, same
+protocol as the evidence row above but fw v1.19.15: `g_dbgAhrsRealigns` = 1 in
+125 s (the boot alignment only), 0 steps > 0.3°, 0 bias-collapse events, yaw
+p2p 0.18° (was 2.78°).
+
+**Why the residual yaw error decays with τ ≈ 7 s.** Between a re-align and the
+next one (pre-fix), or after a genuine outage (post-fix), yaw error decays as
+`A·(1 − e^(−T/τ))` under the magnetometer correction alone. The correction's
+authority is not the nominal `twoKpMag` (`AHRS_TWO_KP_MAG = 0.5`, `Ahrs.c`) —
+only the *horizontal* component of the field can rotate yaw
+(`ahrs_errorVector()` builds the reference from
+`ref = [sqrt(h0²+h1²), 0, h2]`, i.e. the horizontal magnitude flattened to a
+reference bearing, so only that horizontal part ever disagrees with the
+measured field about bearing), so the effective gain is
+`kp_eff = twoKpMag · h_r²`, where `h_r` is the horizontal fraction of the
+total field (`h_r = sqrt(h0²+h1²) / |B|`, set by the local magnetic
+inclination — µ well under 1 away from the magnetic equator). Measured on this
+board (dispatch `SYS1-001`, fit over the 40 pre-fix steps): `A = 3.00°`,
+`τ = 7.10 s`, rms 0.17° — worked example at a 13.2 s gap predicts 2.53°,
+measured 2.59°. This time constant is a property of the mounting/site
+geometry and `AHRS_TWO_KP_MAG`, **unchanged by the debounce fix** — the fix
+changes how *often* the estimator restarts this decay, not how fast the decay
+itself runs.
+
 ---
 
 ## 6. Reading the state
