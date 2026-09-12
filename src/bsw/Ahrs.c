@@ -561,10 +561,7 @@ static void ahrs_errorVector(const float32 accBody[3], float32 accNorm,
     if ((s_magNorm > AHRS_MAG_MIN_G) && (s_magNorm < AHRS_MAG_MAX_G))
     {
         /* Rotate the measured field into NED, then flatten it: whatever the
-         * horizontal part turns out to be, DEFINE it as pointing north. The
-         * difference between that reference and the measurement is then a
-         * rotation about the vertical only — which is the point, since the
-         * magnetometer must not be allowed to touch roll or pitch. */
+         * horizontal part turns out to be, DEFINE it as pointing north. */
         const float32 recip = 1.0f / s_magNorm;
         const float32 mx = s_magB[0] * recip;
         const float32 my = s_magB[1] * recip;
@@ -585,9 +582,45 @@ static void ahrs_errorVector(const float32 accBody[3], float32 accNorm,
         const float32 kp = FusionCal_positive(g_fusionCal.twoKpMag, 0.0f,
                                              AHRS_TWO_KP_MAG);
 
-        e[0] += kp * ((my * w[2]) - (mz * w[1]));
-        e[1] += kp * ((mz * w[0]) - (mx * w[2]));
-        e[2] += kp * ((mx * w[1]) - (my * w[0]));
+        /* B3.1 (SYS1-001 strand B, dispatch B2(a)): the raw cross product
+         * mn x w is NOT a rotation about the vertical -- for a heading error
+         * psi its NED components are (h_r*h_z*sinPsi, h_r*h_z*(1-cosPsi),
+         * -h_r^2*sinPsi), dominant along NORTH (docs/FUSION.md documents the
+         * corrected pole arithmetic; the false "rotation about the vertical
+         * only" claim this comment used to make is deleted). Summed
+         * unprojected into e[0..2] below, a standing heading error wrote a
+         * false ROLL/PITCH gyro-bias through s_fbI.
+         *
+         * Fix: the magnetometer gets exactly the one degree of freedom it is
+         * allowed -- heading, about the CURRENT estimated vertical d_b --
+         * by projecting the raw correction onto d_b before adding it.
+         * eMagD = raw . d_b is exactly -h_r^2*sinPsi, the same kp_eff,mag =
+         * twoKpMag*h_r^2 the 7.1 s time-constant fit already measures
+         * (docs/FUSION.md section 5), so yaw dynamics are unchanged; e_acc
+         * is already perpendicular to d_b by construction (it IS the
+         * correction that keeps d_b aligned with gravity), so the two
+         * corrections now span orthogonal subspaces at every attitude. At
+         * level d_b = [0,0,1] exactly, so this keeps only raw[2] -- bit-
+         * identical to the old e[2] term -- and discards raw[0]/raw[1]
+         * (the parasite) instead of summing them. */
+        {
+            const float32 downNed[3] = { 0.0f, 0.0f, 1.0f };
+            float32 dB[3];
+            float32 raw[3];
+            float32 eMagD;
+
+            ahrs_nedToBody(downNed, dB);
+
+            raw[0] = (my * w[2]) - (mz * w[1]);
+            raw[1] = (mz * w[0]) - (mx * w[2]);
+            raw[2] = (mx * w[1]) - (my * w[0]);
+
+            eMagD = (raw[0] * dB[0]) + (raw[1] * dB[1]) + (raw[2] * dB[2]);
+
+            e[0] += kp * eMagD * dB[0];
+            e[1] += kp * eMagD * dB[1];
+            e[2] += kp * eMagD * dB[2];
+        }
 
         *magUsed = TRUE;
     }

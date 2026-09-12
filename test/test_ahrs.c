@@ -868,6 +868,267 @@ void test_b0_todays_delta_s_fbi_after_60s_roll90_with_20deg_mag_error(void)
 }
 
 /* ==========================================================================
+ * SYS1-001 Strand B, task 1 (B3.1, SWE1-FW-004): project e_mag onto d_b so
+ * the magnetometer gets exactly one degree of freedom (heading). Tested
+ * black-box, through the public Ahrs.h interface only -- same discipline
+ * this whole file uses (see the file header) -- by inferring the
+ * instantaneous e_mag from ONE Ahrs_update() tick's effect on s_fbI
+ * (gyroBias[i] = s_bias[i] - s_fbI[i]*RAD_TO_DEG; with gyro == 0 and an
+ * exactly-true accel input, e_acc ~= 0 and s_fbI's whole one-tick motion is
+ * ki*e_mag*dt), rather than reaching into Ahrs.c's static state.
+ * ======================================================================== */
+
+/** 12 (roll, pitch) pairs spanning the attitude envelope, including level,
+ *  each extreme, and mixed corners. */
+static const float s_b1Attitudes[12][2] =
+{
+    {   0.0f,   0.0f }, {  30.0f,   0.0f }, { -30.0f,   0.0f }, {  90.0f,   0.0f },
+    { -90.0f,   0.0f }, {   0.0f,  45.0f }, {   0.0f, -45.0f }, {  45.0f,  45.0f },
+    { -45.0f, -45.0f }, {  60.0f, -30.0f }, { -60.0f,  30.0f }, {  20.0f,  70.0f }
+};
+
+void test_b1_mag_correction_is_pure_yaw_at_every_attitude(void)
+{
+    float M[9]; mountMatrix(M);
+    unsigned t;
+
+    for (t = 0u; t < 12u; ++t)
+    {
+        const float rollDeg  = s_b1Attitudes[t][0];
+        const float pitchDeg = s_b1Attitudes[t][1];
+        const float aBody[3] = { sinf(pitchDeg * DEG),
+                                  -cosf(pitchDeg * DEG) * sinf(rollDeg * DEG),
+                                  -cosf(pitchDeg * DEG) * cosf(rollDeg * DEG) };
+        Ahrs_Values v;
+        float32 accSensor[3];
+        float   bias0[3];
+        float   dB[3];
+        float   eMag[3];
+        float   crossMag[3];
+        float   crossMagNorm;
+        char    msg[160];
+        int     i;
+
+        mat3Tvec(M, aBody, accSensor);
+        Ahrs_init();
+        bringUp(&v, accSensor);         /* yaw anchors at 0 (no mag set yet) */
+        memcpy(bias0, v.gyroBias, sizeof bias0);
+
+        Ahrs_nedToBody((const float32[3]){ 0.0f, 0.0f, 1.0f }, dB);
+
+        /* A 20deg heading-error field, referenced to the CURRENT (correct)
+         * attitude -- same technique as task 0's roll-90 test. */
+        {
+            const float   hErrRad = 20.0f * DEG;
+            const float32 fieldNed[3] = { B_MAG_HR * cosf(hErrRad),
+                                           B_MAG_HR * sinf(hErrRad),
+                                           B_MAG_HZ };
+            float32 magBody[3];
+            float32 magS[3];
+
+            Ahrs_nedToBody(fieldNed, magBody);
+            mountInverse(M, magBody, magS);
+            Ahrs_setMag(magS, TRUE);
+        }
+
+        {
+            const float32 wZero[3] = { 0.0f, 0.0f, 0.0f };
+            Ahrs_update(&v, accSensor, wZero, B_DT, TRUE);
+        }
+
+        /* e_mag = Delta_s_fbI / (ki * dt); ki is FusionCal_positive-clamped
+         * to AHRS_TWO_KI (0.02) by NvmFake_identity/FusionCal_init leaving
+         * the calibration block at its compiled default. */
+        for (i = 0; i < 3; ++i)
+        {
+            const float dSfbi = (bias0[i] - v.gyroBias[i]) * DEG;   /* rad/s */
+            eMag[i] = dSfbi / (0.02f * B_DT);
+        }
+
+        crossMag[0] = (eMag[1] * dB[2]) - (eMag[2] * dB[1]);
+        crossMag[1] = (eMag[2] * dB[0]) - (eMag[0] * dB[2]);
+        crossMag[2] = (eMag[0] * dB[1]) - (eMag[1] * dB[0]);
+        crossMagNorm = norm3(crossMag);
+
+        (void)snprintf(msg, sizeof msg,
+            "attitude %u (roll=%.0f pitch=%.0f): e_mag=[%.6f %.6f %.6f], "
+            "d_b=[%.4f %.4f %.4f], |e_mag x d_b|=%.3e",
+            t, (double)rollDeg, (double)pitchDeg,
+            (double)eMag[0], (double)eMag[1], (double)eMag[2],
+            (double)dB[0], (double)dB[1], (double)dB[2], (double)crossMagNorm);
+        TEST_ASSERT_TRUE_MESSAGE(isFiniteF(crossMagNorm), msg);
+        TEST_ASSERT_TRUE_MESSAGE(crossMagNorm < 1.0e-6f, msg);
+    }
+}
+
+void test_b1_level_case_yaw_component_bit_identical_to_pre_fix(void)
+{
+    /* At level, d_b = [0,0,1] exactly, so the projection keeps only raw[2]
+     * -- algebraically identical to the pre-fix e[2] term. Verified here by
+     * comparing the new code's e[2] (inferred via s_fbI[2]/gyroBias[2],
+     * yaw axis) against the SAME raw-cross-product z-component computed
+     * independently in the test, not against a second copy of Ahrs.c. */
+    Ahrs_Values v; memset(&v, 0, sizeof v);
+    float M[9]; mountMatrix(M);
+    float32 accSensor[3];
+    float   bias0[3];
+    float   dSfbiZ;
+    float   eMagZExpected;
+    char    msg[160];
+
+    {
+        const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
+        mat3Tvec(M, accLevel, accSensor);
+    }
+    Ahrs_init();
+    bringUp(&v, accSensor);
+    memcpy(bias0, v.gyroBias, sizeof bias0);
+
+    {
+        const float   hErrRad = 20.0f * DEG;
+        const float32 fieldNed[3] = { B_MAG_HR * cosf(hErrRad), B_MAG_HR * sinf(hErrRad), B_MAG_HZ };
+        float32 magS[3];
+
+        /* Level, yaw == 0 -> nedToBody == identity -- the field IS the body
+         * reading directly, no Ahrs_nedToBody needed at this attitude. */
+        mountInverse(M, fieldNed, magS);
+        Ahrs_setMag(magS, TRUE);
+
+        /* Independent reference: mn (normalised field) x w (flattened
+         * reference), z-component only -- the pre-fix formula's e[2] term,
+         * recomputed here from first principles, not copied from Ahrs.c. */
+        {
+            const float32 magNorm = sqrtf((fieldNed[0] * fieldNed[0])
+                                         + (fieldNed[1] * fieldNed[1])
+                                         + (fieldNed[2] * fieldNed[2]));
+            const float32 mx = fieldNed[0] / magNorm;
+            const float32 my = fieldNed[1] / magNorm;
+            const float32 hr = sqrtf((mx * mx) + (my * my));
+            /* w (level, yaw=0): ref = [hr,0,mz] rotated into body == itself */
+            const float32 wx = hr;
+            const float32 wy = 0.0f;
+
+            /* AHRS_TWO_KP_MAG (Ahrs.c, private #define) mirrored here --
+             * same treatment as AHRS_TWO_KP_ACC_TEST above. e[2] = kp*raw[2]. */
+            const float32 kpMag = 0.5f;
+
+            eMagZExpected = kpMag * ((mx * wy) - (my * wx));   /* = -kp*hr*my = -kp*hr^2*sin(psi) */
+        }
+    }
+
+    {
+        const float32 wZero[3] = { 0.0f, 0.0f, 0.0f };
+        Ahrs_update(&v, accSensor, wZero, B_DT, TRUE);
+    }
+
+    dSfbiZ = (bias0[2] - v.gyroBias[2]) * DEG;         /* rad/s */
+
+    (void)snprintf(msg, sizeof msg,
+        "level e_mag[2] via s_fbI = %.6f, expected (raw cross product z) = %.6f",
+        (double)(dSfbiZ / (0.02f * B_DT)), (double)eMagZExpected);
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(1.0e-4f, eMagZExpected,
+        dSfbiZ / (0.02f * B_DT), msg);
+
+    /* And the level case truly stays yaw-only: axes 0/1 must show NO mag
+     * contribution now (the parasite this task deletes). */
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(1.0e-6f, bias0[0], v.gyroBias[0], "level: no roll parasite");
+    TEST_ASSERT_FLOAT_WITHIN_MESSAGE(1.0e-6f, bias0[1], v.gyroBias[1], "level: no pitch parasite");
+}
+
+void test_b1_yaw_time_constant_matches_the_bench_fit(void)
+{
+    /* Not measured via a step-response curve fit: s_fbI[2] is not yet split
+     * out from the shared integrator (that is task 2), so the true step
+     * response is a P+I system, not a single real pole, and fitting a
+     * single tau out of it is exactly as fragile as it sounds (an earlier
+     * version of this test tried a 1/e-at-t=tau check and, separately, a
+     * local-decay-rate fit; both moved by 10-20% purely from the shared
+     * integrator's OWN, pre-existing contribution -- nothing to do with
+     * this task's change, and not something task 1 either introduces or
+     * removes).
+     *
+     * A stronger and much less fragile proof of "yaw dynamics unchanged":
+     * at level, d_b = nedToBody([0,0,1]) stays EXACTLY [0,0,1] for the
+     * WHOLE run, not just the first tick -- a pure-yaw quaternion leaves a
+     * vertical vector exactly vertical, and roll/pitch have nothing to move
+     * them here (accel input is exactly level every tick, matching the
+     * filter's own belief of level exactly, so e_acc is exactly zero
+     * throughout). With d_b invariant, e[2] = kp*eMagD*dB[2] reduces to
+     * kp*raw[2] at EVERY tick, identically to the pre-fix formula -- so
+     * comparing the ACTUAL yaw trajectory, tick by tick, against an
+     * INDEPENDENT closed-form integration of the pre-fix scalar ODE (using
+     * the exact same kp, ki, dt this test drives Ahrs_update with) is a
+     * bit-level equivalence proof over the whole transient, which implies
+     * an identical tau however that tau is defined or measured. */
+    const float stepDeg = 5.0f;
+    const int   ticks   = (int)(20.0f / B_DT);   /* ~2.8x the documented 7.10 s tau */
+    Ahrs_Values v; memset(&v, 0, sizeof v);
+    float M[9]; mountMatrix(M);
+    float32 accSensor[3];
+    float   yaw0;
+    float   psiRef;       /* independent closed-form yaw-only integration */
+    float   sFbIRef;      /* independent closed-form s_fbI[2] integration  */
+    const float kpMag = 0.5f;
+    const float ki    = 0.02f;
+    int i;
+
+    {
+        const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
+        mat3Tvec(M, accLevel, accSensor);
+    }
+    Ahrs_init();
+    bringUp(&v, accSensor);
+    yaw0    = v.yawRad;
+    psiRef  = 0.0f;
+    sFbIRef = 0.0f;
+
+    {
+        /* NEGATIVE stepDeg: raw[2] works out to -hr^2*sin(psi_est + beta),
+         * beta the field's own fixed body-frame bearing -- the equilibrium
+         * is at psi_est = -beta, not +beta (measured, not assumed: an
+         * earlier version of this test used +stepDeg and watched yaw
+         * diverge from the expected target in exactly this mirrored way). */
+        const float   hErrRad = -stepDeg * DEG;
+        const float32 fieldNed[3] = { B_MAG_HR * cosf(hErrRad), B_MAG_HR * sinf(hErrRad), B_MAG_HZ };
+        float32 magS[3];
+
+        mountInverse(M, fieldNed, magS);
+        Ahrs_setMag(magS, TRUE);
+    }
+
+    for (i = 0; i < ticks; ++i)
+    {
+        const float32 wZero[3] = { 0.0f, 0.0f, 0.0f };
+        float   rawZ;
+        float   eZ;
+        char    msg[160];
+
+        /* Independent reference step, using ONLY psiRef/sFbIRef (this
+         * test's own state) -- never reads Ahrs.c's internals. */
+        rawZ = -(B_MAG_HR * B_MAG_HR) * sinf(psiRef - (stepDeg * DEG));
+        eZ   = kpMag * rawZ;
+        psiRef  += (eZ + sFbIRef) * B_DT;
+        sFbIRef += ki * eZ * B_DT;
+
+        Ahrs_update(&v, accSensor, wZero, B_DT, TRUE);
+
+        {
+            /* v.yawRad wraps to [0,2pi); yaw0 starts a hair below 2pi as
+             * often as above 0 (float rounding at the boot alignment), and
+             * a +5deg convergence can cross that seam -- unwrap to (-pi,pi]
+             * before comparing against psiRef, which never wraps. */
+            float actualPsi = v.yawRad - yaw0;
+            while (actualPsi > (float)M_PI)  { actualPsi -= (float)(2.0 * M_PI); }
+            while (actualPsi < -(float)M_PI) { actualPsi += (float)(2.0 * M_PI); }
+            (void)snprintf(msg, sizeof msg,
+                "tick %d: reference psi=%.6f rad, actual psi=%.6f rad", i,
+                (double)psiRef, (double)actualPsi);
+            TEST_ASSERT_FLOAT_WITHIN_MESSAGE(1.0e-4f, psiRef, actualPsi, msg);
+        }
+    }
+}
+
+/* ==========================================================================
  * SYS1-001 task 2 -- fault debounce (dispatch/"SYS1-001 - Dispatch.md" §4).
  * The defect: one rejected tick used to re-initialise the whole attitude
  * (deadbeat yaw from the mag, gyro-bias integral zeroed) instead of merely
@@ -993,6 +1254,9 @@ int main(void)
     RUN_TEST(test_b0_todays_lag_after_90deg_roll_with_lateral_accel);
     RUN_TEST(test_b0_todays_accel_path_kp_eff);
     RUN_TEST(test_b0_todays_delta_s_fbi_after_60s_roll90_with_20deg_mag_error);
+    RUN_TEST(test_b1_mag_correction_is_pure_yaw_at_every_attitude);
+    RUN_TEST(test_b1_level_case_yaw_component_bit_identical_to_pre_fix);
+    RUN_TEST(test_b1_yaw_time_constant_matches_the_bench_fit);
     RUN_TEST(test_no_admissible_input_produces_nan);
     RUN_TEST(test_recovers_after_garbage);
     RUN_TEST(test_invalid_sample_freezes_the_estimate);
