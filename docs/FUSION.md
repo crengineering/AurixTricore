@@ -416,39 +416,87 @@ right up to its edge: 0.15 g sideways on 1 g gives `|a| = 1.011` g,
 comfortably inside `[0.85, 1.15]`, while tilting the apparent vertical by
 8.5°. Two continuous weights replace the single cut:
 
-```
-w_norm = clamp(1 − (||a|−1| − 0.05)/0.10, 0, 1)     -- full trust +/-5%, zero at +/-15% (today's edge)
-w_rate = clamp(1 − (|gyro| − 30 deg/s)/90, 0, 1)    -- full trust <30 deg/s, zero at 120 deg/s
-w_acc  = w_norm · w_rate                             -- scales twoKpAcc's P AND I contribution together
-```
+| weight | formula | full trust | zero trust |
+|---|---|---|---|
+| `w_norm` | `clamp(1 − (\|\|a\|−1\| − 0.05)/0.10, 0, 1)` | within ±5 % of 1 g | at ±15 % (today's old hard edge, `AHRS_ACC_MAX_G`) |
+| `w_rate` | `clamp(1 − (gyroLp − 15°/s)/45, 0, 1)` | `gyroLp` ≤ 15°/s | at 60°/s |
+| `w_acc` | `w_norm · w_rate` | — scales `twoKpAcc`'s P **and** I contribution together | |
 
 `accTrusted` is `(w_acc > 0)` — the same outer edge as before; the weight
 itself publishes as `accWeightPct` (0–100) in `Xcp_Fusion`'s previously
 reserved byte at `0x53` (zero offset change). Hover (slow, near-1 g) is
 bit-identical to before this change (`w_acc = 1`).
 
-**Open finding, not yet resolved:** at a *sustained* 60°/s roll (a 90°/1.5 s
-motion, worst case, not the average) with the same 0.15 g disturbance,
-`w_norm` stays at full trust (1.1 % deviation, inside the 5 % band) and only
-`w_rate` suppresses — 0.667 at 60°/s — which is not enough authority
-reduction to reach the "~1.2° at motion end" originally estimated; measured
-closer to 5.4° (baseline pre-fix: 6.7°). A half-sine (smooth accel/decel,
-~94°/s peak) velocity profile gives materially the same result, so the
-motion *profile* is not the free variable — the `w_rate` span (30/90 °/s) is.
-Left as-is pending flight-architect review rather than retuned unilaterally.
+**Round 1 (2026-09-12): `w_rate` retuned, and reads a low-pass, not the
+instantaneous sample.** `gyroLp` is a 50 ms one-pole low-pass of `|gyro|`
+(`s_gyroLpDps`, `AHRS_GYRO_LP_TAU_S`), seeded from the instantaneous rate on
+every re-align so a recovery does not start the filter from a stale zero.
+Two reasons for filtering rather than reading the raw sample:
 
-Bench, 125 s stationary, fw v1.19.18 (tasks 1–4 above, calibration restored
-from `calibration/board.json` after the reflash): `g_dbgAhrsRealigns` = 1
+1. **Mean vs. peak vibration.** An instantaneous `|gyro|` sample on a real
+   airframe is dominated by vibration spikes riding on top of the genuine
+   angular rate — gating on the instantaneous value chatters the weight
+   tick-to-tick on noise the accelerometer correction never needed
+   protecting against. The low-pass tracks the real motion, not the noise
+   floor sitting on top of it.
+2. **~150 ms re-engagement hold-off.** `τ = 0.05 s` means roughly 3τ
+   (~150 ms) after a fast rotation ends before the filtered value decays
+   back under the full-trust threshold and the accel correction re-engages
+   at full weight. Deliberate: right after a fast manoeuvre is exactly when
+   the accelerometer is least trustworthy (settling structural vibration,
+   residual specific force), so re-arming instantly would undo the point of
+   gating on rate at all. Measured (host test): fully suppressed through a
+   sustained fast tumble, back to full trust within 150 ms of it stopping,
+   not on the very next tick.
+
+The original constants (30/90°/s, zero at 120°/s, instantaneous sample)
+were too permissive at a sustained 60°/s roll: `w_norm` stayed at full trust
+(1.1 % deviation, inside the 5 % band) and `w_rate` alone only reached 0.667
+— comfortably nonzero — so 5.4°/2.0°/0.28° passed through against a
+≤2.0°/1.0°/0.5° target (baseline pre-fix: 6.7°/2.5°/0.35°). The retuned
+constants (15/45°/s, zero at 60°/s) with the low-pass measure
+**0.52°/0.20°/0.03°** on the same constant-60°/s scenario — comfortably
+inside target and close to the architect's own ≈0.5° prediction.
+
+**Open finding, round 1: the half-sine (smooth accel/decel) profile still
+fails.** A smoother velocity profile over the same 90°/1.5 s motion (peak
+~94°/s, *higher* than the constant-rate case's 60°/s, so not a softer test)
+measures 2.84°/1.06°/0.15° — failing the first two clauses, worse than the
+constant-rate result despite the higher peak rate. Traced (roll-vs-time
+trace, not left in the test suite): not accel lag — with `w_acc = 0` for the
+whole high-rate middle portion, the attitude free-integrates the commanded
+gyro rate essentially exactly. The excess is a small but *persistent* rate
+bias charged into the body integrator (`s_fbI`) during the transition
+windows at the START and END of the motion, where `w_acc` sits strictly
+between 0 and 1 (the low-pass has not yet suppressed it, or has already let
+it back up) — a proportionally-reduced but still nonzero `eAcc`, computed
+against a *disturbed* accel reading, still integrates `ki·eAcc·dt` into
+`s_fbI` on every one of those ticks. A half-sine accelerates/decelerates far
+more slowly than a trapezoid, so it spends roughly 2–3× longer in that
+partial-trust band at each end — more time to charge the slow integrator,
+which does not un-charge before the motion ends. This is an emergent
+property of the two-parameter (gain, low-pass) design as specified here, not
+an implementation defect; a fix (e.g. gating the *integral* path on a
+stricter trust threshold than the proportional path, or reshaping `w_acc`'s
+own transition) is a design decision for the flight-architect, same
+footing as the constants themselves — not made unilaterally here.
+
+Bench, 125 s stationary, fw v1.19.18 (tasks 1–4, calibration restored from
+`calibration/board.json` after the reflash): `g_dbgAhrsRealigns` = 1
 throughout multiple back-to-back recordings, 0 stuck-presence drops, all
 samples `state = RUNNING`/`accTrusted`/`magTrusted` = 1, `gyroBias0`/
 `gyroBias1` (roll/pitch) peak-to-peak under 0.05 °/s. Yaw itself showed two
 real, single-tick heading shifts (1.9–8.7°) uncorrelated with any re-align
 (`g_dbgAhrsRealigns` never moved) or with a visible change in the polled raw
 magnetometer reading — consistent with a genuine, brief environmental
-magnetic disturbance on the open bench rather than an estimator defect; a
-third, back-to-back recording without an intervening disturbance measured
-yaw p2p 0.56°, roll p2p 0.33°, pitch p2p 1.97° (two isolated single-tick
-outliers, likely bench vibration), 0 sawtooth steps.
+magnetic disturbance on the open bench rather than an estimator defect (the
+flight-architect separately traced run 1's 8.7° shift to bench motion and
+`_r2`'s 1.9° shift to a single out-of-range gyro-z word integrated for one
+tick — a pre-existing gap, no gyro-word bound anywhere in `Ahrs.c`, tracked
+separately, not fixed here); a third, back-to-back recording without an
+intervening disturbance measured yaw p2p 0.56°, roll p2p 0.33°, pitch p2p
+1.97° (two isolated single-tick outliers, likely bench vibration), 0
+sawtooth steps.
 
 **Mag calibration is a bench prerequisite for the remaining yaw-while-tilted
 sensitivity, not code** (deferred, needs Chris's hands): remount, full 3D
