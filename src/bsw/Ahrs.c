@@ -357,6 +357,20 @@ static float32 s_magNorm;
  * task 0 instrumentation: see Ahrs.h for what it counts. */
 volatile uint32 g_dbgAhrsRealigns;
 
+/* cppcheck-suppress-begin misra-c2012-8.7 ; deviation: read over XCP
+ * SHORT_UPLOAD by raw address (tools/xcp_read.py), never referenced by C
+ * code outside this file -- same class of deviation as g_dbgAhrsRealigns
+ * above. SYS1-001 task 13 instrumentation: see Ahrs.h for what each one
+ * captures. */
+volatile uint32              g_dbgAhrsBigStep;
+volatile Ahrs_BigStepSnapshot g_dbgAhrsBigStepSnapshot;
+/* cppcheck-suppress-end misra-c2012-8.7 */
+
+/* Guards g_dbgAhrsBigStepSnapshot: written once, on the FIRST big-step tick
+ * only -- see Ahrs.h. Not reachable from outside this file, so a plain
+ * (non-volatile) static is correct, same as every other s_* flag here. */
+static boolean s_bigStepLatched;
+
 /* Inverse square root. The plain form, not the famous bit-trick approximation:
  * this core has an FPU, the trick's 0.2 percent error would land straight in
  * the attitude, and nothing here is short of cycles. */
@@ -510,6 +524,24 @@ void Ahrs_init(void)
     s_magNorm  = 0.0f;
     s_faultHoldS = 0.0f;
     g_dbgAhrsRealigns = 0u;
+
+    /* SYS1-001 task 13 instrumentation -- see Ahrs.h. */
+    g_dbgAhrsBigStep = 0u;
+    s_bigStepLatched = FALSE;
+    for (i = 0u; i < 3u; i++)
+    {
+        g_dbgAhrsBigStepSnapshot.gyroRaw[i] = 0.0f;
+        g_dbgAhrsBigStepSnapshot.accRaw[i]  = 0.0f;
+        g_dbgAhrsBigStepSnapshot.fbI[i]     = 0.0f;
+    }
+    g_dbgAhrsBigStepSnapshot.dt      = 0.0f;
+    g_dbgAhrsBigStepSnapshot.eMagD   = 0.0f;
+    g_dbgAhrsBigStepSnapshot.fbIYaw  = 0.0f;
+    g_dbgAhrsBigStepSnapshot.q[0]    = 0.0f;
+    g_dbgAhrsBigStepSnapshot.q[1]    = 0.0f;
+    g_dbgAhrsBigStepSnapshot.q[2]    = 0.0f;
+    g_dbgAhrsBigStepSnapshot.q[3]    = 0.0f;
+    g_dbgAhrsBigStepSnapshot.magNorm = 0.0f;
 
     /* g_magLatch (AhrsLatch.h): the PRODUCER's state, zeroed here even though
      * Ahrs_init() runs on CPU1 (via NavTask_init, T12) -- safe by
@@ -1163,6 +1195,56 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
                 s_q1 = 0.0f;
                 s_q2 = 0.0f;
                 s_q3 = 0.0f;
+            }
+
+            /* SYS1-001 task 13 (SWE1-FW-009): name a corrupt/near-full-scale
+             * gyro sample on the tick it happens, before the bounds of tasks
+             * 14/15 land -- see Ahrs.h. Uses the RAW (pre-mount) gyro, the
+             * function argument, exactly "as delivered": the mount transform
+             * is a permutation of signed axes (Ahrs.c top-of-file comment),
+             * so it changes which component the corrupt word ends up in but
+             * not the vector's magnitude -- checking the raw value points
+             * straight at the sensor word without waiting for that mapping. */
+            {
+                const float32 gyroRawNormDps = sqrtf((gyro[0] * gyro[0])
+                                                    + (gyro[1] * gyro[1])
+                                                    + (gyro[2] * gyro[2]));
+
+                if ((gyroRawNormDps * dt) > 0.5f)
+                {
+                    g_dbgAhrsBigStep++;
+
+                    if (s_bigStepLatched == FALSE)
+                    {
+                        g_dbgAhrsBigStepSnapshot.gyroRaw[0] = gyro[0];
+                        g_dbgAhrsBigStepSnapshot.gyroRaw[1] = gyro[1];
+                        g_dbgAhrsBigStepSnapshot.gyroRaw[2] = gyro[2];
+                        g_dbgAhrsBigStepSnapshot.accRaw[0]  = acc[0];
+                        g_dbgAhrsBigStepSnapshot.accRaw[1]  = acc[1];
+                        g_dbgAhrsBigStepSnapshot.accRaw[2]  = acc[2];
+                        g_dbgAhrsBigStepSnapshot.dt         = dt;
+                        g_dbgAhrsBigStepSnapshot.eMagD       = eMagD;
+                        g_dbgAhrsBigStepSnapshot.fbIYaw      = s_fbIYaw;
+                        g_dbgAhrsBigStepSnapshot.fbI[0]      = s_fbI[0];
+                        g_dbgAhrsBigStepSnapshot.fbI[1]      = s_fbI[1];
+                        g_dbgAhrsBigStepSnapshot.fbI[2]      = s_fbI[2];
+                        g_dbgAhrsBigStepSnapshot.q[0]        = s_q0;
+                        g_dbgAhrsBigStepSnapshot.q[1]        = s_q1;
+                        g_dbgAhrsBigStepSnapshot.q[2]        = s_q2;
+                        g_dbgAhrsBigStepSnapshot.q[3]        = s_q3;
+                        g_dbgAhrsBigStepSnapshot.magNorm     = s_magNorm;
+
+                        s_bigStepLatched = TRUE;
+                    }
+                    else
+                    {
+                        /* already latched -- keep counting, do not overwrite */
+                    }
+                }
+                else
+                {
+                    /* ordinary tick -- nothing to latch */
+                }
             }
 
             out->rate[0] = (gyroBody[0] - s_bias[0]) * AHRS_DEG_TO_RAD;

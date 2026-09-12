@@ -2324,6 +2324,69 @@ void test_long_gap_declares_no_sensor_immediately_then_realigns_once(void)
         "recovery from a genuine outage must re-align exactly once");
 }
 
+/* ==========================================================================
+ * SYS1-001 Strand B, task 13 (SWE1-FW-009): the one-shot big-step latch.
+ * ======================================================================== */
+
+void test_b13_synthetic_2000dps_z_tick_latches_exactly_one_snapshot(void)
+{
+    /* The evidence-row defect, reproduced synthetically: a single tick
+     * whose raw gyro-z word is -2000 dps (near the +/-2000 dps full scale,
+     * same class as the observed 1918-1967 dps) at the measured IMU period
+     * -- |gyro|*dt = 2000 * 985.44us = 1.971 deg, comfortably past the
+     * 0.5 deg latch threshold. */
+    Ahrs_Values v; memset(&v, 0, sizeof v);
+    const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
+    const float32 gyroZero[3] = { 0.0f, 0.0f, 0.0f };
+    const float32 gyroBig[3]  = { 0.0f, 0.0f, -2000.0f };
+    const float32 gyroBig2[3] = { 0.0f, 0.0f, -1900.0f };  /* a SECOND event */
+    uint32 bigStepBefore;
+
+    bringUp(&v, accLevel);
+    TEST_ASSERT_EQUAL_UINT32(0u, g_dbgAhrsBigStep);
+
+    bigStepBefore = g_dbgAhrsBigStep;
+    Ahrs_update(&v, accLevel, gyroBig, B_DT, TRUE);
+
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(bigStepBefore + 1u, g_dbgAhrsBigStep,
+        "a single near-full-scale gyro-z tick must count exactly one big step");
+    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(-2000.0f, g_dbgAhrsBigStepSnapshot.gyroRaw[2],
+        "the latched snapshot must carry the raw word intact, unmounted, unscaled");
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, g_dbgAhrsBigStepSnapshot.gyroRaw[0]);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, g_dbgAhrsBigStepSnapshot.gyroRaw[1]);
+    TEST_ASSERT_EQUAL_FLOAT(accLevel[0], g_dbgAhrsBigStepSnapshot.accRaw[0]);
+    TEST_ASSERT_EQUAL_FLOAT(accLevel[2], g_dbgAhrsBigStepSnapshot.accRaw[2]);
+    TEST_ASSERT_EQUAL_FLOAT(B_DT, g_dbgAhrsBigStepSnapshot.dt);
+    {
+        /* Copy out of the volatile snapshot first: allFinite() takes a
+         * plain float*, and every other read in this test already reads
+         * one field at a time (TEST_ASSERT_EQUAL_FLOAT above), which drops
+         * the qualifier implicitly the same way an assignment does. */
+        const float qCopy[4] = { g_dbgAhrsBigStepSnapshot.q[0],
+                                  g_dbgAhrsBigStepSnapshot.q[1],
+                                  g_dbgAhrsBigStepSnapshot.q[2],
+                                  g_dbgAhrsBigStepSnapshot.q[3] };
+        TEST_ASSERT_TRUE_MESSAGE(isFiniteF(g_dbgAhrsBigStepSnapshot.eMagD),
+            "snapshot eMagD must be finite");
+        TEST_ASSERT_TRUE_MESSAGE(allFinite(qCopy, 4u), "snapshot q must be finite");
+    }
+
+    /* A quiet tick afterwards must not touch either the counter or the
+     * latch. */
+    Ahrs_update(&v, accLevel, gyroZero, B_DT, TRUE);
+    TEST_ASSERT_EQUAL_UINT32(bigStepBefore + 1u, g_dbgAhrsBigStep);
+    TEST_ASSERT_EQUAL_FLOAT(-2000.0f, g_dbgAhrsBigStepSnapshot.gyroRaw[2]);
+
+    /* A SECOND big-step tick must increment the counter again but must NOT
+     * overwrite the already-latched (FIRST) snapshot -- "exactly one
+     * snapshot" per the acceptance, however many events follow. */
+    Ahrs_update(&v, accLevel, gyroBig2, B_DT, TRUE);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(bigStepBefore + 2u, g_dbgAhrsBigStep,
+        "a second big-step tick must still be counted");
+    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(-2000.0f, g_dbgAhrsBigStepSnapshot.gyroRaw[2],
+        "the snapshot must stay latched to the FIRST event, not the second");
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -2366,5 +2429,6 @@ int main(void)
     RUN_TEST(test_glitch_ticks_freeze_without_realigning);
     RUN_TEST(test_zero_or_negative_dt_never_advances_the_fault_hold_clock);
     RUN_TEST(test_long_gap_declares_no_sensor_immediately_then_realigns_once);
+    RUN_TEST(test_b13_synthetic_2000dps_z_tick_latches_exactly_one_snapshot);
     return UNITY_END();
 }

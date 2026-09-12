@@ -133,4 +133,49 @@ void Ahrs_setMag(const float32 mag[3], boolean valid);
  *  not the dozens a re-initialising estimator produces. */
 extern volatile uint32 g_dbgAhrsRealigns;
 
+/* --- debug instrumentation (SYS1-001 strand B task 13, SWE1-FW-009) ------
+ * Names the corrupt-IMU-sample defect (evidence rows 7D13E62A0B428BE3,
+ * 1E1CC203E9702454: a single near-full-scale gyro word integrated for one
+ * tick) BEFORE the bounds of tasks 14/15 land -- a mis-set slew gate on the
+ * estimator's input is itself a hazard, so the threshold is confirmed
+ * against a captured event, not only against the derivation. Raw map
+ * symbols, no A2L entry, no Xcp_Data field -- same precedent as
+ * g_dbgAhrsRealigns above. */
+
+/** One-shot latch of the raw inputs and the internal state on the FIRST
+ *  tick g_dbgAhrsBigStep (below) fires. Captured AFTER the tick's full
+ *  correction and integration (so fbI[]/fbIYaw/q are the values THIS tick
+ *  produced, not the ones it started from) -- the same "what did the
+ *  correction paths actually do" witness the dispatch's root-cause analysis
+ *  used externally via 100 ms polling, now available on the very tick it
+ *  happens. */
+typedef struct
+{
+    float32 gyroRaw[3]; /**< gyro AS DELIVERED to Ahrs_update, SENSOR frame,
+                          *   pre-mount [deg/s] -- the raw word the defect
+                          *   analysis needs, not the body-frame value       */
+    float32 accRaw[3];  /**< acc AS DELIVERED to Ahrs_update, SENSOR frame,
+                          *   pre-mount [g]                                  */
+    float32 dt;          /**< dt this tick [s]                               */
+    float32 eMagD;       /**< magnetometer correction along d_b THIS tick,
+                          *   already kp-scaled [rad/s] (Ahrs.c ahrs_errorVector) */
+    float32 fbIYaw;      /**< s_fbIYaw AFTER this tick's integration [rad/s] */
+    float32 fbI[3];      /**< s_fbI[] AFTER this tick's integration, body,
+                          *   [rad/s]                                        */
+    float32 q[4];        /**< published quaternion AFTER this tick, w/x/y/z  */
+    float32 magNorm;     /**< s_magNorm (latched |B|) this tick [gauss]      */
+} Ahrs_BigStepSnapshot;
+
+/** Count of ticks where the gyro delivered this tick, integrated over dt,
+ *  would move the attitude by more than 0.5 deg in a single step -- large
+ *  enough to name a corrupt/near-full-scale sample (the observed defect was
+ *  1918-1967 deg/s, 95.9-98.3% of the +/-2000 dps full scale), small enough
+ *  that no legitimate airframe motion at the ~985 us IMU period reaches it. */
+extern volatile uint32 g_dbgAhrsBigStep;
+
+/** See Ahrs_BigStepSnapshot -- filled once, on the first tick
+ *  g_dbgAhrsBigStep counts; every later occurrence still increments the
+ *  counter but leaves this snapshot alone. */
+extern volatile Ahrs_BigStepSnapshot g_dbgAhrsBigStepSnapshot;
+
 #endif /* AHRS_H */
