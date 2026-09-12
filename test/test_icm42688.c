@@ -253,7 +253,8 @@ void test_replug_reinitialises_via_the_nonblocking_state_machine(void)
     boolean         present;
 
     TEST_ASSERT_TRUE(Icm42688_init());
-    TEST_ASSERT_EQUAL_UINT32(1u, g_dbgImuReinits);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0u, g_dbgImuReinits,
+        "g_dbgImuReinits counts RUNTIME re-inits only -- a healthy boot must show 0");
     FakeStm_reset();   /* the boot pump's own delayMs calls are legitimate;
                         * only the runtime recovery path below must be silent */
 
@@ -275,7 +276,7 @@ void test_replug_reinitialises_via_the_nonblocking_state_machine(void)
         present = Icm42688_read(&sample);
         TEST_ASSERT_FALSE_MESSAGE(present, "a failing bus must never report present");
     }
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1u, g_dbgImuReinits,
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0u, g_dbgImuReinits,
         "a bus that keeps failing must never reach DONE");
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(0u, FakeStm_waitTicksCallCount(),
         "the runtime recovery path must never call Icm42688_delayMs()");
@@ -289,8 +290,8 @@ void test_replug_reinitialises_via_the_nonblocking_state_machine(void)
         present = Icm42688_read(&sample);
     }
     TEST_ASSERT_TRUE_MESSAGE(present, "a replugged, correctly-answering device must recover");
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(2u, g_dbgImuReinits,
-        "exactly one more DONE for this one replug");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1u, g_dbgImuReinits,
+        "exactly one RUNTIME re-init DONE for this one replug");
 
     /* And exactly once -- continuing to read a healthy, present device must
      * never re-initialise again. */
@@ -298,7 +299,7 @@ void test_replug_reinitialises_via_the_nonblocking_state_machine(void)
     {
         (void)Icm42688_read(&sample);
     }
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(2u, g_dbgImuReinits,
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1u, g_dbgImuReinits,
         "a device that stays present must never be re-initialised");
 }
 

@@ -183,7 +183,10 @@ extern volatile uint32 g_dbgImuSentinelWords;
 boolean Icm42688_reinitStep(float32 dtS);
 
 /** Task 17 instrumentation, same class of deviation as g_dbgImuStuckDrops
- *  above: raw map symbols, no A2L/GUI change. */
+ *  above: raw map symbols, no A2L/GUI change. Count RUNTIME re-inits only
+ *  -- Icm42688_init()'s own boot pump saves and restores both around
+ *  itself, so a healthy boot always shows g_dbgImuReinits == 0, and only a
+ *  genuine in-service presence drop/recovery moves either counter. */
 extern volatile uint32 g_dbgImuReinits;      /**< re-init state machine reached DONE */
 extern volatile uint32 g_dbgImuReinitFails;  /**< re-init state machine reached FAILED */
 

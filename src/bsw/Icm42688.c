@@ -529,8 +529,18 @@ boolean Icm42688_init(void)
      * non-blocking state machine the runtime recovery path now uses --
      * see Icm42688.h. dtS = 1 ms per step, Icm42688_delayMs(1) between
      * them: the happy path (no SPI-mode retry) reaches DONE in ~29 steps,
-     * a one-shot mode retry in ~40 -- both comfortably inside the budget. */
-    uint16 step;
+     * a one-shot mode retry in ~40 -- both comfortably inside the budget.
+     *
+     * g_dbgImuReinits/g_dbgImuReinitFails count RUNTIME re-inits (the
+     * clause this item exists for -- "boot comes up with g_dbgImuReinits
+     * = 0"): Icm42688_reinitStep() itself does not distinguish its caller,
+     * so this boundary saves and restores both counters around the boot
+     * pump rather than adding a second bookkeeping path inside the state
+     * machine for what both counters already track correctly on every
+     * OTHER call site. */
+    uint16       step;
+    const uint32 reinitsBefore = g_dbgImuReinits;
+    const uint32 failsBefore   = g_dbgImuReinitFails;
 
     Icm42688_reinitStart();
 
@@ -543,6 +553,9 @@ boolean Icm42688_init(void)
         (void)Icm42688_reinitStep(0.001f);
         Icm42688_delayMs(1u);
     }
+
+    g_dbgImuReinits     = reinitsBefore;
+    g_dbgImuReinitFails = failsBefore;
 
     return (s_icm42688ReinitState == ICM42688_REINIT_DONE);
 }
