@@ -96,16 +96,41 @@
  * disturbed reading still charges s_fbI every tick it is nonzero (Ahrs.c
  * task 11b measured 2.837 deg at motion end against the 2.0 deg clause).
  *
- * Fix: make the accel weight's return to trust ASYMMETRIC IN TIME rather
+ * The upper knee of the w_rate ramp -- ARM only above this, a manoeuvre,
+ * not vibration or a gust. */
+#define AHRS_ACC_RATE_ZERO_DPS    (AHRS_ACC_RATE_FULL_DPS + AHRS_ACC_RATE_SPAN_DPS) /* = 60 deg/s */
+
+/* Fix: make the accel weight's return to trust ASYMMETRIC IN TIME rather
  * than adding a third rate-based parameter. Once the low-passed |gyro| has
- * reached AHRS_ACC_RATE_FULL_DPS + AHRS_ACC_RATE_SPAN_DPS (60 deg/s -- a
- * manoeuvre, not vibration or a gust), the accelerometer is held OUT of the
- * P and I paths for a flat AHRS_ACC_HOLDOFF_S regardless of how quickly the
- * rate then falls back through the partial-weight band -- closing exactly
- * the window the half-sine's tail ends open. 0.3 s is bounded by
- * AHRS_FBI_MAX_DPS's own 2.0 deg/s clamp: at most 0.6 deg of coasting error,
- * and it can only ARM above 60 deg/s, a rate hover never reaches, so hover
- * behaviour is untouched. */
+ * reached AHRS_ACC_RATE_ZERO_DPS, the accelerometer is held OUT of the P
+ * and I paths for AHRS_ACC_HOLDOFF_S -- closing exactly the window the
+ * half-sine's tail ends open.
+ *
+ * B6.6 (review round 2 major, task 12c): the hold's EXPIRY is wall-clock
+ * time since the rate was last AT OR ABOVE AHRS_ACC_RATE_ZERO_DPS, not
+ * "until the rate falls back below AHRS_ACC_RATE_FULL_DPS" as task 12b
+ * first had it -- that release condition is a LATCH, not a hold-off: a
+ * sustained coordinated turn at 30 deg/s (inside the 15-60 deg/s band,
+ * where the old code held with NO countdown) never satisfies "rate below
+ * 15 deg/s", so accWeightPct measured 0 for 60913 of 60913 ticks over 60 s
+ * -- the accelerometer locked out of both the P and I path for the whole
+ * turn, an unbounded regression against SWE1-FW-007 and the pre-strand-B
+ * behaviour. No gate on this chain may depend on a condition the vehicle
+ * can simply decline to meet; the bound must be a DURATION, for every
+ * input. Rule, two branches, no band in between:
+ *   gyroLp >= AHRS_ACC_RATE_ZERO_DPS  -> s_accHoldS = AHRS_ACC_HOLDOFF_S
+ *   otherwise                         -> s_accHoldS -= dt, floored at 0
+ * A slower manoeuvre that keeps dwelling in the 15-60 deg/s band AFTER the
+ * hold expires is then covered by the ordinary w_rate ramp, which is
+ * correct rather than merely tolerable: the tangential disturbance is
+ * proportional to the angular ACCELERATION, so a manoeuvre slow enough to
+ * dwell in the band has a small disturbance -- the budget only binds when
+ * the motion is fast, and a fast motion leaves the band quickly. The
+ * half-sine's falling end (60 -> 15 deg/s) takes 0.236 s, still inside the
+ * 0.3 s bound, so INTEGRAL(w dt) and the motion-end error are unchanged;
+ * the +1s figure IMPROVES (re-engages ~0.24 s earlier). Still bounded by
+ * AHRS_FBI_MAX_DPS's own 2.0 deg/s clamp (at most 0.6 deg of coasting
+ * error) and still armed only above 60 deg/s, so hover is untouched. */
 #define AHRS_ACC_HOLDOFF_S        (0.3f)
 
 /* Magnetometer trust window [gauss]. Earth's field is 0.25..0.65 G worldwide
@@ -1036,21 +1061,17 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
                 wRate = ahrs_clamp01(1.0f
                     - ((s_gyroLpDps - AHRS_ACC_RATE_FULL_DPS) / AHRS_ACC_RATE_SPAN_DPS));
 
-                /* B6.5 (task 12b): the hold-off is a THIRD gate, applied on
-                 * top of w_norm*w_rate rather than folded into either ramp --
-                 * see AHRS_ACC_HOLDOFF_S for why. Armed only once the
-                 * low-passed rate reaches the upper knee (a manoeuvre); held
-                 * with no countdown through the partial-weight band in
-                 * between (15..60 deg/s, i.e. > AHRS_ACC_RATE_FULL_DPS)
-                 * rather than re-arming on every re-entry; counted down by
-                 * dt only once back inside the full-trust band. */
-                if (s_gyroLpDps >= (AHRS_ACC_RATE_FULL_DPS + AHRS_ACC_RATE_SPAN_DPS))
+                /* B6.5/B6.6 (task 12b/12c): the hold-off is a THIRD gate,
+                 * applied on top of w_norm*w_rate rather than folded into
+                 * either ramp -- see AHRS_ACC_HOLDOFF_S for why, and for why
+                 * this is a DURATION since the rate was last at or above the
+                 * knee, not a band the rate must fall back below (task 12b's
+                 * original three-way form was exactly that latch: a
+                 * sustained 30 deg/s turn never released it -- 60913/60913
+                 * ticks at w_acc = 0 over 60 s). Two branches, no band. */
+                if (s_gyroLpDps >= AHRS_ACC_RATE_ZERO_DPS)
                 {
                     s_accHoldS = AHRS_ACC_HOLDOFF_S;
-                }
-                else if (s_gyroLpDps > AHRS_ACC_RATE_FULL_DPS)
-                {
-                    /* still settling from the manoeuvre -- hold, no countdown */
                 }
                 else
                 {

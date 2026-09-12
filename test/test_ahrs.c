@@ -718,6 +718,23 @@ static void rollRampWithLateralAccel(const float M[9], float rollDeg, float ramp
 #define B0_BASELINE_DSFBI_AXIS0_DPS  (-0.0064f)
 #define B0_BASELINE_DSFBI_AXIS2_DPS  (0.0055f)
 
+/* Task 12c (B6.6 review round 2): only the TRAPEZOID pre-strand-B baseline
+ * was ever recorded above -- the half-sine driver (rollRampHalfSine
+ * WithLateralAccel) did not exist at 59e9fca. Measured the same way the
+ * reviewer measured the trapezoid figures: unmodified Ahrs.c/Ahrs.h checked
+ * out from 59e9fca, compiled standalone against the SAME half-sine
+ * trajectory math this file uses today (mount transform unchanged since
+ * that commit -- git diff 59e9fca..HEAD on AhrsLatch.h/FusionCal.h/
+ * SharedRam.h/Nvm.h is empty), same 90 deg/1.5 s + 0.15 g profile. The old
+ * code has no rate gate at all (hard |a| window only), so it is barely
+ * sensitive to the PROFILE SHAPE -- unsurprising that its half-sine number
+ * lands close to its trapezoid number (6.717 vs 6.676): with |a| staying
+ * inside the window throughout either profile, the accelerometer pulls at
+ * full gain the whole time regardless of how the rate arrived there. */
+#define B0_BASELINE_HALFSINE_END_DEG  (6.717f)
+#define B0_BASELINE_HALFSINE_P1S_DEG  (2.520f)
+#define B0_BASELINE_HALFSINE_P3S_DEG  (0.351f)
+
 void test_b0_regression_lag_after_90deg_roll_with_lateral_accel(void)
 {
     /* Baseline (59e9fca, unmodified Ahrs.c): 6.676/2.505/0.349 deg. Task 11's
@@ -1575,19 +1592,27 @@ void test_b4_lag_after_90deg_roll_with_lateral_accel_meets_thresholds(void)
  *  case, not lower; this profile is NOT a softer test). Same lateral-
  *  disturbance construction (tangent to the roll circle) as the constant-
  *  rate helper. */
-static void rollRampHalfSineWithLateralAccel(const float M[9], float rollDeg, float rampS,
-                                              float lateralG, Ahrs_Values *v,
-                                              float *errDegAtCheckpoint,
-                                              const float *checkpointS, int nCheckpoints,
-                                              float *intWDtOut)
+/** Same trajectory as rollRampHalfSineWithLateralAccel (below), plus an
+ *  optional out-param (task 12c, B6.6 acceptance (a3)/(v)):
+ *  *everZeroWeightOut is set TRUE if accWeightPct ever reads exactly 0
+ *  during the ramp -- the only way that can happen is either the |a| edge
+ *  (w_norm) or the hold-off (s_accHoldS), and a sub-60 profile never
+ *  reaches the hold-off's arming knee, so this is the test's proxy for
+ *  "the hold-off never armed". */
+static void rollRampHalfSineWithLateralAccelEx(const float M[9], float rollDeg, float rampS,
+                                                float lateralG, Ahrs_Values *v,
+                                                float *errDegAtCheckpoint,
+                                                const float *checkpointS, int nCheckpoints,
+                                                float *intWDtOut, boolean *everZeroWeightOut)
 {
     const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
     float32 accSensor0[3];
     const int   rampSteps = (int)(rampS / B_DT + 0.5f);
-    float t  = 0.0f;
-    int   cp = 0;
-    int   i;
-    float intWDt = 0.0f;
+    float   t  = 0.0f;
+    int     cp = 0;
+    int     i;
+    float   intWDt = 0.0f;
+    boolean everZeroWeight = FALSE;
 
     memset(v, 0, sizeof *v);
     mat3Tvec(M, accLevel, accSensor0);
@@ -1611,6 +1636,7 @@ static void rollRampHalfSineWithLateralAccel(const float M[9], float rollDeg, fl
         mat3Tvec(M, wBody, gyroS);
         Ahrs_update(v, accS, gyroS, B_DT, TRUE);
         intWDt += ((float)v->accWeightPct / 100.0f) * B_DT;
+        if (v->accWeightPct == 0u) { everZeroWeight = TRUE; }
         t += B_DT;
 
         while ((cp < nCheckpoints) && (t >= checkpointS[cp]))
@@ -1627,6 +1653,14 @@ static void rollRampHalfSineWithLateralAccel(const float M[9], float rollDeg, fl
     else
     {
         /* caller does not need the budget figure */
+    }
+    if (everZeroWeightOut != NULL)
+    {
+        *everZeroWeightOut = everZeroWeight;
+    }
+    else
+    {
+        /* caller does not need the hold-off proxy */
     }
 
     {
@@ -1646,6 +1680,45 @@ static void rollRampHalfSineWithLateralAccel(const float M[9], float rollDeg, fl
             }
         }
     }
+}
+
+static void rollRampHalfSineWithLateralAccel(const float M[9], float rollDeg, float rampS,
+                                              float lateralG, Ahrs_Values *v,
+                                              float *errDegAtCheckpoint,
+                                              const float *checkpointS, int nCheckpoints,
+                                              float *intWDtOut)
+{
+    rollRampHalfSineWithLateralAccelEx(M, rollDeg, rampS, lateralG, v,
+                                        errDegAtCheckpoint, checkpointS, nCheckpoints,
+                                        intWDtOut, NULL);
+}
+
+void test_b0_regression_halfsine_lag_after_90deg_roll_with_lateral_accel(void)
+{
+    /* B6.6 (task 12c): the half-sine's own pre-strand-B (59e9fca) baseline,
+     * measured standalone -- see B0_BASELINE_HALFSINE_*'s comment above for
+     * how. Same "pin the OLD number, assert HEAD is better" contract as
+     * test_b0_regression_lag_after_90deg_roll_with_lateral_accel. */
+    float M[9]; mountMatrix(M);
+    Ahrs_Values v;
+    const float checkpoints[3] = { 1.5f, 2.5f, 4.5f };
+    float err[3];
+    char  msg[160];
+
+    rollRampHalfSineWithLateralAccel(M, 90.0f, 1.5f, 0.15f, &v, err, checkpoints, 3, NULL);
+
+    (void)snprintf(msg, sizeof msg,
+        "motion-end %.3f deg (baseline %.3f), +1s %.3f deg (baseline %.3f), "
+        "+3s %.3f deg (baseline %.3f) -- target <= 2.0/1.0/0.5",
+        (double)err[0], (double)B0_BASELINE_HALFSINE_END_DEG,
+        (double)err[1], (double)B0_BASELINE_HALFSINE_P1S_DEG,
+        (double)err[2], (double)B0_BASELINE_HALFSINE_P3S_DEG);
+    TEST_ASSERT_TRUE_MESSAGE(err[0] < B0_BASELINE_HALFSINE_END_DEG, msg);
+    TEST_ASSERT_TRUE_MESSAGE(err[1] < B0_BASELINE_HALFSINE_P1S_DEG, msg);
+    TEST_ASSERT_TRUE_MESSAGE(err[2] <= B0_BASELINE_HALFSINE_P3S_DEG, msg);
+    TEST_ASSERT_TRUE_MESSAGE(err[0] <= 2.0f, msg);
+    TEST_ASSERT_TRUE_MESSAGE(err[1] <= 1.0f, msg);
+    TEST_ASSERT_TRUE_MESSAGE(err[2] <= 0.5f, msg);
 }
 
 void test_b11_halfsine_profile_meets_thresholds(void)
@@ -1783,6 +1856,211 @@ void test_b12b_holdoff_never_arms_below_60dps(void)
             TEST_ASSERT_TRUE_MESSAGE(v.accWeightPct > 0u, msg);
         }
     }
+}
+
+/* ==========================================================================
+ * SYS1-001 strand B task 12c (B6.6, review round 2 major, SWE1-FW-006):
+ * the hold-off's RELEASE condition was a LATCH -- "hold, no countdown while
+ * 15 < gyroLp < 60" never releases for a sustained rate inside that band
+ * (measured: 60913/60913 ticks at accWeightPct = 0 over a 60 s, 30 deg/s
+ * turn). Fixed to a wall-clock duration since the rate was last AT OR ABOVE
+ * the arming knee, for every input, no band branch. ======================= */
+
+void test_b12c_arm_then_sustained_turn_recovers_within_bound(void)
+{
+    /* B6.6 acceptance (a3)/task 12c (i): the exact regression scenario. 0.5 s
+     * at 80 deg/s arms the hold; a SUSTAINED 30 deg/s turn follows. Under
+     * task 12b's three-way logic this never released (30 deg/s sits inside
+     * the 15-60 deg/s "hold, no countdown" band forever). Task 12c must
+     * recover to the ramp value (w_rate(30) = 1-(30-15)/45 = 0.667 -> 67%)
+     * within 0.5 s of the rate leaving >=60 deg/s, and never drop back to 0
+     * for the rest of a 60 s sustained turn. */
+    float M[9]; mountMatrix(M);
+    Ahrs_Values v;
+    const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
+    float32 accSensor[3];
+    const float32 gyroBurst[3] = { 80.0f, 0.0f, 0.0f };
+    const float32 gyroTurn[3]  = { 30.0f, 0.0f, 0.0f };
+    const int burstTicks = (int)(0.5f / B_DT);
+    const int boundTicks = (int)(0.5f / B_DT);
+    const int tailTicks  = (int)(60.0f / B_DT);
+    int i;
+    int recoverTick = -1;
+    float32 gyroBiasAtRecover[3];
+    boolean everMovedAfterRecover = FALSE;
+
+    mat3Tvec(M, accLevel, accSensor);
+    Ahrs_init();
+    bringUp(&v, accSensor);
+
+    for (i = 0; i < burstTicks; ++i)
+    {
+        Ahrs_update(&v, accSensor, gyroBurst, B_DT, TRUE);
+    }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0u, v.accWeightPct,
+        "80 deg/s for 0.5 s must have armed the hold-off");
+
+    for (i = 0; (i < boundTicks) && (recoverTick < 0); ++i)
+    {
+        Ahrs_update(&v, accSensor, gyroTurn, B_DT, TRUE);
+        if (v.accWeightPct > 0u)
+        {
+            recoverTick = i;
+        }
+    }
+    {
+        char msg[128];
+        (void)snprintf(msg, sizeof msg,
+            "accWeightPct never recovered within 0.5 s of the switch to a "
+            "sustained 30 deg/s turn (the task 12b latch this regresses)");
+        TEST_ASSERT_TRUE_MESSAGE(recoverTick >= 0, msg);
+    }
+    {
+        char msg[96];
+        (void)snprintf(msg, sizeof msg, "recovered accWeightPct = %u, expected 67 +/- 2",
+            (unsigned)v.accWeightPct);
+        TEST_ASSERT_TRUE_MESSAGE((v.accWeightPct >= 65u) && (v.accWeightPct <= 69u), msg);
+    }
+    memcpy(gyroBiasAtRecover, v.gyroBias, sizeof gyroBiasAtRecover);
+
+    for (i = 0; i < tailTicks; ++i)
+    {
+        char  msg[64];
+        float diff[3];
+
+        Ahrs_update(&v, accSensor, gyroTurn, B_DT, TRUE);
+        (void)snprintf(msg, sizeof msg, "tick %d of the 60 s sustained turn", i);
+        TEST_ASSERT_TRUE_MESSAGE(v.accWeightPct > 0u, msg);
+
+        diff[0] = v.gyroBias[0] - gyroBiasAtRecover[0];
+        diff[1] = v.gyroBias[1] - gyroBiasAtRecover[1];
+        diff[2] = v.gyroBias[2] - gyroBiasAtRecover[2];
+        if (norm3(diff) > 1.0e-5f) { everMovedAfterRecover = TRUE; }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(everMovedAfterRecover,
+        "s_fbI (via gyroBias) must resume moving once the accelerometer is trusted again");
+}
+
+void test_b12c_never_zero_more_than_035s_after_last_arming_tick(void)
+{
+    /* B6.6 acceptance (a3)/task 12c (ii), the clause AS WORDED: for ANY
+     * input sequence, w_acc must never read exactly 0 while more than
+     * 0.35 s has elapsed since the low-passed rate was last >= the arming
+     * knee (60 deg/s). "Since the low-pass was last >= 60" is not directly
+     * observable from the public interface (s_gyroLpDps is private), so
+     * this test carries a SHADOW replica of that one-pole update -- same
+     * mirrored-private-constant treatment as
+     * test_b11_old_constants_would_not_have_suppressed_60dps_roll's
+     * AHRS_ACC_RATE_FULL_DPS/SPAN_DPS mirror above -- seeded at 0, matching
+     * Ahrs.c's own seed on the ALIGNING entry this test's bringUp() took.
+     * A seeded, randomised sequence of SUSTAINED single-axis segments
+     * (each long enough, relative to the 50 ms low-pass tau, for the
+     * low-pass to move meaningfully toward its target) exercises arbitrary
+     * transitions in and out of the arming region. */
+    float M[9]; mountMatrix(M);
+    Ahrs_Values v;
+    const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
+    float32 accSensor[3];
+    Rng     r;
+    int     seg;
+    const float32 lpTauS = 0.05f;      /* mirrors AHRS_GYRO_LP_TAU_S (private) */
+    const float32 armDps = 60.0f;      /* mirrors AHRS_ACC_RATE_ZERO_DPS (private) */
+    float32 gyroLpShadow = 0.0f;
+    float32 timeSinceLastArmS = 1.0e9f; /* "never armed yet" */
+
+    mat3Tvec(M, accLevel, accSensor);
+    Ahrs_init();
+    bringUp(&v, accSensor);
+    rngSeed(&r, 0xB6C60Fu);
+
+    for (seg = 0; seg < 24; ++seg)
+    {
+        const boolean arming  = ((seg % 2) == 0) ? TRUE : FALSE;
+        const float32 rateDps = (arming != FALSE) ? rngF(&r, 70.0f, 150.0f) : rngF(&r, 0.0f, 50.0f);
+        const float32 durS    = rngF(&r, 0.2f, 1.5f);
+        const int     segTicks = (int)(durS / B_DT);
+        const float32 gyro[3] = { rateDps, 0.0f, 0.0f };
+        int i;
+
+        for (i = 0; i < segTicks; ++i)
+        {
+            const float32 lpK = B_DT / lpTauS;   /* B_DT << lpTauS: never capped at 1 */
+
+            Ahrs_update(&v, accSensor, gyro, B_DT, TRUE);
+
+            gyroLpShadow += (rateDps - gyroLpShadow) * lpK;
+            if (gyroLpShadow >= armDps)
+            {
+                timeSinceLastArmS = 0.0f;
+            }
+            else
+            {
+                timeSinceLastArmS += B_DT;
+            }
+
+            /* Only assert once the shadow low-pass is comfortably clear of
+             * the arming knee (a few deg/s of margin, armDps - 2): right at
+             * the knee the ORDINARY ramp itself gives a genuinely tiny but
+             * nonzero w_acc (e.g. gyroLp = 59.7 -> w_rate = 0.67 %), which
+             * the published accWeightPct (uint8, TRUNCATED, not rounded)
+             * reads as 0 -- a publish-resolution artifact of the ramp
+             * itself, on the way up OR down, not the hold-off this clause
+             * bounds. Below the margin the ramp alone is already >= ~4.4 %,
+             * so a reported 0 there can only be the hold. */
+            if ((v.accWeightPct == 0u) && (gyroLpShadow <= (armDps - 2.0f)))
+            {
+                char msg[160];
+
+                (void)snprintf(msg, sizeof msg,
+                    "segment %d (%.1f deg/s), tick %d: accWeightPct = 0 with "
+                    "%.4f s elapsed since the shadow low-pass (%.2f deg/s) "
+                    "was last >= 60 deg/s (bound 0.35 s)",
+                    seg, (double)rateDps, i, (double)timeSinceLastArmS, (double)gyroLpShadow);
+                TEST_ASSERT_TRUE_MESSAGE(timeSinceLastArmS <= 0.35f, msg);
+            }
+        }
+    }
+}
+
+void test_b12c_sub60_halfsine_profile_meets_thresholds_and_never_arms(void)
+{
+    /* B6.6 acceptance (a) sub-60 profile / (a3) (v): a half-sine peaking at
+     * 45 deg/s (90 deg in rampS = pi ~= 3.14 s) never reaches the hold-off's
+     * 60 deg/s arming knee at all -- the only profile exercising the bare
+     * w_rate ramp end to end. Its lateral disturbance is derived from its
+     * OWN peak angular acceleration at a 0.43 m lever arm (a_t = alpha*r),
+     * the same lever arm that makes the existing 94 deg/s half-sine's 0.15 g
+     * self-consistent (alpha = 197 deg/s^2 -> a_t = 0.1507 g): peak alpha
+     * here = rollDeg*pi^2/(2*rampS^2) = 90*pi^2/(2*pi^2) = 45 deg/s^2 ->
+     * a_t = 45*(pi/180 rad)*0.43 m / 9.80665 m/s^2 = 0.0344 g. */
+    float M[9]; mountMatrix(M);
+    Ahrs_Values v;
+    const float rampS   = (float)M_PI;      /* peaks at rollDeg*pi/(2*rampS) = 45 deg/s */
+    const float lateralG = 0.0344f;
+    const float checkpoints[3] = { rampS, rampS + 1.0f, rampS + 3.0f };
+    float   err[3];
+    float   intWDt;
+    boolean everZeroWeight = FALSE;
+    char    msg[160];
+
+    rollRampHalfSineWithLateralAccelEx(M, 90.0f, rampS, lateralG, &v, err,
+                                        checkpoints, 3, &intWDt, &everZeroWeight);
+
+    printf("\n  [StrandB task12c] 90deg/%.3fs half-sine roll (peak 45deg/s, sub-60) + %.4fg lateral accel:\n",
+        (double)rampS, (double)lateralG);
+    printf("    error at motion end: %.3f deg (target <= 2.0)\n", (double)err[0]);
+    printf("    error at +1s: %.3f deg (target <= 1.0)\n", (double)err[1]);
+    printf("    error at +3s: %.3f deg (target <= 0.5)\n", (double)err[2]);
+    printf("    INTEGRAL(w dt) over the motion: %.4f s\n", (double)intWDt);
+
+    (void)snprintf(msg, sizeof msg, "motion-end error %.3f deg, target <= 2.0", (double)err[0]);
+    TEST_ASSERT_TRUE_MESSAGE(err[0] <= 2.0f, msg);
+    (void)snprintf(msg, sizeof msg, "+1s error %.3f deg, target <= 1.0", (double)err[1]);
+    TEST_ASSERT_TRUE_MESSAGE(err[1] <= 1.0f, msg);
+    (void)snprintf(msg, sizeof msg, "+3s error %.3f deg, target <= 0.5", (double)err[2]);
+    TEST_ASSERT_TRUE_MESSAGE(err[2] <= 0.5f, msg);
+    TEST_ASSERT_FALSE_MESSAGE(everZeroWeight,
+        "a sub-60 deg/s profile must never force accWeightPct to 0 via the hold-off");
 }
 
 void test_b4_hover_case_bit_identical_to_task3(void)
@@ -2072,9 +2350,13 @@ int main(void)
     RUN_TEST(test_b3_body_integral_clamped_under_persistent_45deg_error);
     RUN_TEST(test_b3_integral_bit_unchanged_on_untrusted_ticks_even_near_clamp);
     RUN_TEST(test_b4_lag_after_90deg_roll_with_lateral_accel_meets_thresholds);
+    RUN_TEST(test_b0_regression_halfsine_lag_after_90deg_roll_with_lateral_accel);
     RUN_TEST(test_b11_halfsine_profile_meets_thresholds);
     RUN_TEST(test_b11_old_constants_would_not_have_suppressed_60dps_roll);
     RUN_TEST(test_b12b_holdoff_never_arms_below_60dps);
+    RUN_TEST(test_b12c_arm_then_sustained_turn_recovers_within_bound);
+    RUN_TEST(test_b12c_never_zero_more_than_035s_after_last_arming_tick);
+    RUN_TEST(test_b12c_sub60_halfsine_profile_meets_thresholds_and_never_arms);
     RUN_TEST(test_b4_hover_case_bit_identical_to_task3);
     RUN_TEST(test_b4_accweightpct_ramps_continuously_with_rate_and_norm);
     RUN_TEST(test_b11_gyro_lowpass_reaches_steady_state_within_150ms);

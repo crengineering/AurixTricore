@@ -531,6 +531,73 @@ throughout) never arms it either, so `s_fbI` remains exactly as free to move
 as before task 12b (host-tested: the 45°-persistent-error anti-windup test
 runs at zero gyro rate for 300 s and is unaffected).
 
+**Task 12c (B6.6, review round 2 major, 2026-09-12): the 15–60°/s band was a
+LATCH, not a hold-off — fixed to a wall-clock duration.** Task 12b's middle
+branch ("held flat, no countdown, while 15 < gyroLp < 60°/s") has a release
+condition — "the rate falls back under 15°/s" — that a vehicle can simply
+decline to meet: a **sustained 30°/s turn** (squarely inside that band)
+never satisfies it, so `accWeightPct` measured **0 for 60913 of 60913 ticks
+over 60 s** — the accelerometer locked out of both the P and I path for the
+whole turn, an unbounded regression against SWE1-FW-007 and against the
+pre-strand-B behaviour on exactly the manoeuvre the hold-off was never meant
+to touch. No gate on this chain may depend on a condition the vehicle can
+decline to meet; the bound must be a duration, for every input. Fix — two
+branches, no band:
+
+```
+AHRS_ACC_RATE_ZERO_DPS = AHRS_ACC_RATE_FULL_DPS + AHRS_ACC_RATE_SPAN_DPS   /* = 60 deg/s */
+if (gyroLp >= AHRS_ACC_RATE_ZERO_DPS) { s_accHoldS = AHRS_ACC_HOLDOFF_S; }
+else                                  { s_accHoldS -= dt; floor at 0; }
+wAcc = (s_accHoldS > 0) ? 0 : w_norm * w_rate
+```
+
+The hold now **expires 0.3 s of wall clock after the rate was last at or
+above the arming knee** — not after it has returned to the full-trust band.
+A manoeuvre that keeps dwelling in the 15–60°/s band *after* the hold
+expires is then covered by the ordinary `w_rate` ramp, which is *correct*
+rather than merely tolerable: the tangential disturbance is proportional to
+the angular *acceleration*, so a manoeuvre slow enough to linger in the band
+has a small disturbance — the 0.3 s budget only has to bind while the motion
+is fast, and a fast motion leaves the band quickly. The half-sine's own
+falling end (60 → 15°/s) takes 0.236 s, still inside the 0.3 s bound, so
+`∫w dt` and the motion-end error are unchanged; the +1 s figure *improves*
+(re-engages ~0.24 s earlier, since the countdown now starts at the 60°/s
+crossing instead of waiting for the 15°/s one).
+
+| profile | motion end | +1 s | +3 s | note |
+|---|---|---|---|---|
+| half-sine (task 12b, latching band) | 1.921° | 0.946° | 0.132° | |
+| half-sine (task 12c, wall-clock expiry) | 1.921° | **0.732°** | **0.102°** | |
+| trapezoid (task 12c) | 0.520° | 0.200° | 0.028° | unaffected — the trapezoid's rate never lingers in the band long enough to show a difference |
+
+**Coverage added for the fixed rule** (host, `test/test_ahrs.c`):
+arm-then-linger (0.5 s at 80°/s then a *sustained* 30°/s turn — the exact
+regression scenario) recovers to the ramp value (`w_rate(30°/s)` = 66.7 %)
+within 0.5 s of leaving ≥60°/s and never drops back to 0 over a further
+60 s, with `s_fbI` resuming motion; a randomised (seeded) sequence of
+sustained rate segments alternating arming (70–150°/s) and non-arming
+(0–50°/s) bursts never shows `w_acc = 0` for more than 0.35 s after the
+low-passed rate was last ≥60°/s (checked against a shadow replica of the
+one-pole low-pass, away from the ±2°/s band around the knee where the
+*ordinary ramp itself* — not the hold — genuinely publishes a rounded 0 %);
+hover and the 300 s stationary case are unaffected (the hold can still only
+arm above 60°/s).
+
+**A third profile, below the arming knee entirely.** The two profiles above
+both peak above 60°/s and so exercise the hold-off; SWE1-FW-006's clause (a)
+now adds a **sub-60 half-sine** (peak 45°/s, 90° in `rampS = π ≈ 3.14 s`) that
+never arms the hold at all — the only case exercising the bare `w_rate` ramp
+end to end. Its lateral disturbance is *derived*, not copied, from its own
+peak angular acceleration at a **0.43 m lever arm** (`a_t = α·r`): the
+existing 94°/s half-sine's peak `α = rollDeg·π²/(2·rampS²) = 197°/s²`, and
+`a_t = α_rad·r = 0.15 g` at `r = 0.43 m` — the same arm the trapezoid and
+half-sine's shared 0.15 g already imply, made explicit rather than copied
+verbatim into a slower case where it would imply an unphysical 1.9 m arm.
+For the 45°/s half-sine, `α = 90·π²/(2·π²) = 45°/s² → a_t = 0.0344 g`.
+Measured: 1.766° / 0.661° / 0.091° against the same ≤2.0/1.0/0.5° limits
+(architect's prediction ≈1.6/0.59/0.08°), `s_accHoldS` never armed (host
+tests it via `accWeightPct` never reading exactly 0 during the motion).
+
 Bench, 125 s stationary, fw v1.19.18 (tasks 1–4, calibration restored from
 `calibration/board.json` after the reflash): `g_dbgAhrsRealigns` = 1
 throughout multiple back-to-back recordings, 0 stuck-presence drops, all
