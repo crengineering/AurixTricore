@@ -586,6 +586,65 @@ estimate in §4) plus the existing SPI/I2C/GNSS/Ethernet/XCP work — nothing
 here contradicts the ≤0.3 % criterion, but it is not independently
 re-verified by an A/B measurement in this session.
 
+### 5.7 Presence detection — a frozen frame is not the same as silence
+
+Evidence `952275AD99001303` (real hardware, IMU electrically dead): DRDY
+kept firing (a floating/unpowered part still clocks a well-formed,
+*constant* 0x8000-per-axis frame out over SPI), so `Icm42688_read()` kept
+returning `ok == TRUE` forever and `s_icm42688Present` never dropped. A
+replugged part comes back asleep with ODR/FS/INT configuration lost, and
+the WHO_AM_I recovery probe inside `Icm42688_read()` is reachable only
+while `present == FALSE` — so a re-plug was invisible and only a board
+reset recovered. `NavTask_step` already computed
+`Icm42688_plausible()`'s per-sample liveness (§I5 above) and discarded it.
+
+Two independent, time-gated triggers close the gap (`Icm42688.c/.h`,
+`NavTask.c`), neither reachable while DRDY streams plausible data:
+
+```
+                         DRDY streaming, plausible
+                                    │
+                       ┌────────────┴────────────┐
+                       │                          │
+              DRDY silent >= 200 ms      plausible == FALSE, CONSECUTIVE
+                       │                          │
+          Icm42688_verifyPresence()      Icm42688_reportPlausibility()
+           one WHO_AM_I read, <=5 Hz        accumulate a hold, dt-based
+                       │                          │
+              bad/no answer?             >= 100 ms continuously bad?
+                       │                          │
+                       └──────────► presence = FALSE ◄──────────┘
+                                            │
+                          Icm42688_read()'s EXISTING recovery
+                          probe (present==FALSE gated) takes over:
+                          periodic WHO_AM_I, then a full Icm42688_init()
+                                            │
+                              ALIGNING -> RUNNING, <= 2 s, no reset
+```
+
+Both accumulate a *duration* from the caller's `dt`, not a call count —
+same idiom as `Ahrs.c`'s `s_faultHoldS` (SYS1-001, §5 of `FUSION.md`):
+means the same wall-clock window at any dispatch rate. Trigger 1's first
+probe after a state change fires immediately (no extra startup delay);
+subsequent probes self-cap at ≤ 5 Hz. Trigger 2 resets its hold the instant
+one plausible sample is seen, so a single over-range sample (e.g. a
+genuine, momentary spike near the ±16 g/±2000 dps limits) never drops a
+live sensor.
+
+New counters (same "raw symbol, no A2L" class as `g_imuDrdyDtMax` etc.):
+`g_dbgImuStuckDrops` (trigger 2 fired), `g_dbgImuWhoAmIFail` (trigger 1's
+probe read a bad/no WHO_AM_I).
+
+**Recovery budget:** unplug → ≤ 20 ms no-edge timeout (§I5's own
+`NAVTASK_NO_EDGE_TIMEOUT_S`) → 200 ms silence before trigger 1 starts
+probing → presence drops → `Icm42688_read()`'s existing periodic recovery
+probe (`ICM42688_RECOVERY_PERIOD`) finds the part again on replug → one
+`Icm42688_init()` → `ALIGNING` → `RUNNING`. Bounded at 2 s total, no board
+reset, verified by host test against a fake WHO_AM_I/SPI (`test_icm42688.c`)
+for both triggers independently and against the real `NavTask_step` wiring
+(`test_navtask.c`). Bench (unplug/replug INT1+SPI) is Chris's hands — see
+the SYS1-001 strand B dispatch note for the acceptance numbers.
+
 ---
 
 ## 6. Follow-up edits this design does NOT make

@@ -357,6 +357,103 @@ geometry and `AHRS_TWO_KP_MAG`, **unchanged by the debounce fix** — the fix
 changes how *often* the estimator restarts this decay, not how fast the decay
 itself runs.
 
+**Correction (round 2):** an earlier status note here quoted `ωn = 0.075
+rad/s, ζ ≈ 0.94` for this pole. That pair describes a critically-damped
+*second-order* system and does not apply — the debounce fix touches neither
+gain nor pole, only how often the single first-order yaw pole above restarts;
+there is no ωn/ζ to quote for it. The editorial error is corrected here, not
+in the requirement text (no stale-parent).
+
+**One rejected mag heading writing a false roll/pitch bias (SYS1-001 strand
+B).** The debounce fix above stops the estimator from *re-initialising*, but
+the residual defect was structural, not transient: `ahrs_errorVector()`'s mag
+term built `e_mag = kp · (m × w)` and summed it, unprojected, into the same
+`e[]` the accelerometer uses — and `m × w` is **not** a rotation about the
+vertical. For a heading error `ψ` its NED components are
+
+```
+(h_r·h_z·sinψ,  h_r·h_z·(1−cosψ),  −h_r²·sinψ)
+```
+
+— dominant along **NORTH**, not DOWN. (An earlier version of this file's
+sibling comment in `Ahrs.c` at the mag block claimed the opposite — "a
+rotation about the vertical only" — which is the false claim this fix
+deletes.) Summed into the single Mahony integral `s_fbI[3]`, a standing
+heading error therefore wrote a false ROLL/PITCH gyro-bias at
+`twoKi · kp · h_r · h_z · sinψ`: measured on this board, 15 s at a
+20° heading error moved `gyroBias0` by +1.17 °/s; back at level the standing
+error `θ_ss = s_fbI/kp_eff` reached 2.8°, decaying on the slow `twoKi` root
+(τ ≈ 45–50 s measured, 44.6–50 s fit). Evidence: `AEA6EC75E42AE1B5`,
+`FB1CDAC83CFA37B0`.
+
+**Fix — three parts, in `Ahrs.c`:**
+
+1. **Project `e_mag` onto the estimated vertical.** `d_b = nedToBody(0,0,1)`;
+   `eMagD = (m×w)·d_b`; the correction becomes `kp·eMagD·d_b` instead of the
+   raw cross product. `eMagD` **is** exactly `−h_r²·sinψ` — the same
+   `kp_eff,mag = twoKpMag·h_r²` the τ ≈ 7.1 s fit above already measures — so
+   yaw dynamics are bit-identical and the north-axis parasite is deleted. At
+   level, `d_b = [0,0,1]` exactly, so the projection reduces to keeping only
+   the z-component of the raw cross product — algebraically identical to the
+   pre-fix formula there, host-tested bit-for-bit.
+2. **Split the integrator.** `s_fbI[3]` (body-frame gyro-bias, unchanged
+   name/meaning) is now fed **only** by the accelerometer's `eAcc`; a new
+   scalar `s_fbIYaw` (about `d_b`, i.e. heading) is fed **only** by `eMagD`,
+   applied as `s_fbIYaw · d_b`. Published `gyroBias[i] = s_bias[i] −
+   (s_fbI[i] + s_fbIYaw·d_b[i])·RAD_TO_DEG` — same field, same meaning, no
+   A2L move, bit-identical at level. Without this, task 1 alone still left a
+   heading error's *transient* (while yaw converges) baked into the
+   body-frame-fixed `s_fbI`, which does not rotate back when the board
+   returns to level.
+3. **Clamp both integrals, as a backstop, not the fix.** `s_fbI` ≤ 2.0°/s per
+   body axis (the worst standing error this defect produced), `s_fbIYaw` ≤
+   1.0°/s (4× the observed boot-to-boot heading spread). Bounds a residual
+   too small to trip the plausibility checks; does not address the mechanism.
+
+**Continuous accelerometer weight, same file.** The hard `|a|` window
+(`AHRS_ACC_MIN_G`/`MAX_G`, §3) accepted a lateral disturbance at full gain
+right up to its edge: 0.15 g sideways on 1 g gives `|a| = 1.011` g,
+comfortably inside `[0.85, 1.15]`, while tilting the apparent vertical by
+8.5°. Two continuous weights replace the single cut:
+
+```
+w_norm = clamp(1 − (||a|−1| − 0.05)/0.10, 0, 1)     -- full trust +/-5%, zero at +/-15% (today's edge)
+w_rate = clamp(1 − (|gyro| − 30 deg/s)/90, 0, 1)    -- full trust <30 deg/s, zero at 120 deg/s
+w_acc  = w_norm · w_rate                             -- scales twoKpAcc's P AND I contribution together
+```
+
+`accTrusted` is `(w_acc > 0)` — the same outer edge as before; the weight
+itself publishes as `accWeightPct` (0–100) in `Xcp_Fusion`'s previously
+reserved byte at `0x53` (zero offset change). Hover (slow, near-1 g) is
+bit-identical to before this change (`w_acc = 1`).
+
+**Open finding, not yet resolved:** at a *sustained* 60°/s roll (a 90°/1.5 s
+motion, worst case, not the average) with the same 0.15 g disturbance,
+`w_norm` stays at full trust (1.1 % deviation, inside the 5 % band) and only
+`w_rate` suppresses — 0.667 at 60°/s — which is not enough authority
+reduction to reach the "~1.2° at motion end" originally estimated; measured
+closer to 5.4° (baseline pre-fix: 6.7°). A half-sine (smooth accel/decel,
+~94°/s peak) velocity profile gives materially the same result, so the
+motion *profile* is not the free variable — the `w_rate` span (30/90 °/s) is.
+Left as-is pending flight-architect review rather than retuned unilaterally.
+
+Bench, 125 s stationary, fw v1.19.18 (tasks 1–4 above, calibration restored
+from `calibration/board.json` after the reflash): `g_dbgAhrsRealigns` = 1
+throughout multiple back-to-back recordings, 0 stuck-presence drops, all
+samples `state = RUNNING`/`accTrusted`/`magTrusted` = 1, `gyroBias0`/
+`gyroBias1` (roll/pitch) peak-to-peak under 0.05 °/s. Yaw itself showed two
+real, single-tick heading shifts (1.9–8.7°) uncorrelated with any re-align
+(`g_dbgAhrsRealigns` never moved) or with a visible change in the polled raw
+magnetometer reading — consistent with a genuine, brief environmental
+magnetic disturbance on the open bench rather than an estimator defect; a
+third, back-to-back recording without an intervening disturbance measured
+yaw p2p 0.56°, roll p2p 0.33°, pitch p2p 1.97° (two isolated single-tick
+outliers, likely bench vibration), 0 sawtooth steps.
+
+**Mag calibration is a bench prerequisite for the remaining yaw-while-tilted
+sensitivity, not code** (deferred, needs Chris's hands): remount, full 3D
+`tools/mag_cal.py`, corrected `|B|` spread < 5 % across six positions.
+
 ---
 
 ## 6. Reading the state
