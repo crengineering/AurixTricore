@@ -58,7 +58,18 @@ boolean Icm42688_readWhoAmI(uint8 *whoAmI);
 
 /** Read the latest sample. Also re-probes for the device while it is absent,
  *  so a replugged sensor comes back on its own.
- *  \return FALSE on a bus error or while absent (sample left unchanged). */
+ *
+ *  SYS1-001 strand B task 14 (SWE1-FW-009): a burst in which any accel/gyro
+ *  be16 word equals the ICM-42688's documented invalid-data sentinel 0x8000
+ *  is rejected BEFORE scaling -- \p sample is left unchanged (never
+ *  populated from a burst containing it) and g_dbgImuSentinelWords counts
+ *  it. Deliberately NOT a bus error: the SPI transfer itself succeeded, so
+ *  presence (unlike the bus-error path below) is left UNCHANGED -- one
+ *  corrupt word amid an otherwise healthy stream must not force the
+ *  recovery/re-init path, only Icm42688_reportPlausibility()'s existing
+ *  100 ms hold does that, and only once the whole burst is implausible.
+ *  \return FALSE on a bus error, a rejected sentinel word, or while absent
+ *          (sample left unchanged in every case). */
 boolean Icm42688_read(Icm42688_Sample *sample);
 
 /** Number of registers Icm42688_debugDump() returns in \p cfg. */
@@ -131,5 +142,15 @@ boolean Icm42688_plausible(const Icm42688_Sample *sample, float32 *liveness);
  *  tools/xcp_read.py; not wired to Xcp_Data, the A2L or the GUI. */
 extern volatile uint32 g_imuSpiBurstTicks;
 extern volatile uint32 g_imuSpiBurstMaxTicks;
+
+/** SYS1-001 strand B task 14 (SWE1-FW-009): count of Icm42688_read() bursts
+ *  rejected because at least one of the six accel/gyro be16 words equalled
+ *  the documented invalid-data sentinel 0x8000 (-16 g / -2000 dps) -- the
+ *  same pattern evidence row 952275AD99001303 showed on all six axes when
+ *  the part was electrically dead, and the near-full-scale words evidence
+ *  rows 7D13E62A0B428BE3/1E1CC203E9702454 traced to a single corrupt tick.
+ *  Checked BEFORE scaling, on the raw words, so it costs one comparison per
+ *  axis regardless of outcome. Raw map symbol, no A2L change. */
+extern volatile uint32 g_dbgImuSentinelWords;
 
 #endif /* ICM42688_H */

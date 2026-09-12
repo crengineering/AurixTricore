@@ -132,6 +132,18 @@ volatile uint32 g_dbgImuStuckDrops;      /**< trigger 2 fired: presence dropped 
 volatile uint32 g_dbgImuWhoAmIFail;      /**< trigger 1's probe read a bad/no WHO_AM_I */
 /* cppcheck-suppress-end misra-c2012-8.7 */
 
+/* SYS1-001 strand B task 14 (SWE1-FW-009): the ICM-42688's documented
+ * invalid-data pattern on any be16 word -- see Icm42688.h for what a hit
+ * means and why it does NOT touch presence. */
+#define ICM42688_SENTINEL_WORD    ((sint16)0x8000)
+
+/* cppcheck-suppress-begin misra-c2012-8.7 ; deviation: read over XCP
+ * SHORT_UPLOAD by raw address (tools/xcp_read.py), never referenced by C
+ * code outside this file -- same class of deviation as g_dbgImuStuckDrops
+ * above. */
+volatile uint32 g_dbgImuSentinelWords;
+/* cppcheck-suppress-end misra-c2012-8.7 */
+
 /* Hot-plug recovery: retry this often, in CALLS, while the device is missing.
  * Was "50 per second, ~1 s" at the 20 ms IMU task (T13 and earlier); T15
  * (docs/REFACTORING_PLAN.md §3.6) gates NavTask_step's call to this function
@@ -366,17 +378,54 @@ boolean Icm42688_read(Icm42688_Sample *sample)
         }
         else
         {
-            /* Layout: temp(0..1), accel X/Y/Z(2..7), gyro X/Y/Z(8..13). */
-            sample->tempC = ((float32)Icm42688_be16(raw, 0u) / ICM42688_TEMP_SENS)
-                            + ICM42688_TEMP_OFFSET;
+            /* Task 14: check the raw words for the sentinel BEFORE scaling
+             * -- exact test, nothing to tune, one comparison per axis. Not
+             * a bus error (see Icm42688.h): presence is left untouched here
+             * on purpose, so a single corrupt word amid an otherwise
+             * healthy stream does not force the recovery/re-init path --
+             * only Icm42688_reportPlausibility()'s existing 100 ms hold
+             * (task 5) does that, and only once the whole burst is
+             * implausible (e.g. all six axes sentinel, evidence
+             * 952275AD99001303). */
+            static const uint8 s_icm42688AxisIdx[6] =
+            {
+                2u, 4u, 6u,     /* accel X/Y/Z */
+                8u, 10u, 12u    /* gyro  X/Y/Z */
+            };
+            boolean sentinel = FALSE;
+            uint8   axis;
 
-            sample->acc[0] = (float32)Icm42688_be16(raw, 2u)  * ICM42688_ACCEL_SCALE;
-            sample->acc[1] = (float32)Icm42688_be16(raw, 4u)  * ICM42688_ACCEL_SCALE;
-            sample->acc[2] = (float32)Icm42688_be16(raw, 6u)  * ICM42688_ACCEL_SCALE;
+            for (axis = 0u; axis < 6u; axis++)
+            {
+                if (Icm42688_be16(raw, s_icm42688AxisIdx[axis]) == ICM42688_SENTINEL_WORD)
+                {
+                    sentinel = TRUE;
+                }
+                else
+                {
+                    /* this axis is not the sentinel -- keep checking */
+                }
+            }
 
-            sample->gyro[0] = (float32)Icm42688_be16(raw, 8u)  * ICM42688_GYRO_SCALE;
-            sample->gyro[1] = (float32)Icm42688_be16(raw, 10u) * ICM42688_GYRO_SCALE;
-            sample->gyro[2] = (float32)Icm42688_be16(raw, 12u) * ICM42688_GYRO_SCALE;
+            if (sentinel != FALSE)
+            {
+                g_dbgImuSentinelWords++;
+                ok = FALSE;
+            }
+            else
+            {
+                /* Layout: temp(0..1), accel X/Y/Z(2..7), gyro X/Y/Z(8..13). */
+                sample->tempC = ((float32)Icm42688_be16(raw, 0u) / ICM42688_TEMP_SENS)
+                                + ICM42688_TEMP_OFFSET;
+
+                sample->acc[0] = (float32)Icm42688_be16(raw, 2u)  * ICM42688_ACCEL_SCALE;
+                sample->acc[1] = (float32)Icm42688_be16(raw, 4u)  * ICM42688_ACCEL_SCALE;
+                sample->acc[2] = (float32)Icm42688_be16(raw, 6u)  * ICM42688_ACCEL_SCALE;
+
+                sample->gyro[0] = (float32)Icm42688_be16(raw, 8u)  * ICM42688_GYRO_SCALE;
+                sample->gyro[1] = (float32)Icm42688_be16(raw, 10u) * ICM42688_GYRO_SCALE;
+                sample->gyro[2] = (float32)Icm42688_be16(raw, 12u) * ICM42688_GYRO_SCALE;
+            }
         }
     }
     return ok;

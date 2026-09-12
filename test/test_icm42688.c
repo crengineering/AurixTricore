@@ -92,7 +92,19 @@ void test_stuck_frame_with_drdy_alive_drops_presence_within_100ms(void)
 {
     /* "DRDY alive" == this test drives Icm42688_read()/Icm42688_reportPlausibility()
      * every tick, same as NavTask_step would on every genuine new edge --
-     * trigger 1 (verifyPresence, the SILENT path) is never involved here. */
+     * trigger 1 (verifyPresence, the SILENT path) is never involved here.
+     *
+     * Task 14 (SWE1-FW-009) update: a constant 0x8000-per-axis burst is now
+     * rejected a layer earlier, inside Icm42688_read() itself (every one of
+     * the six words IS the sentinel), so it no longer "still answers SPI"
+     * the way it did when this test and evidence row 952275AD99001303 were
+     * first written -- see test_all_six_axes_sentinel_still_drops_presence_
+     * after_100ms for that path in detail. What this test still pins down,
+     * unchanged, is the OUTCOME evidence row 952275AD99001303 needed fixed:
+     * a sensor that keeps answering (whether "answering" means a scaled
+     * sample, pre-task-14, or a rejected burst, post-task-14) but never
+     * produces a plausible one still drops presence within 100 ms -- the
+     * defect was presence NEVER dropping, not which layer catches it. */
     uint8    stuck[14];
     boolean  present;
     int      i;
@@ -105,15 +117,16 @@ void test_stuck_frame_with_drdy_alive_drops_presence_within_100ms(void)
     present = TRUE;
     for (i = 1; (i <= (expectedTicks + 5)) && (present != FALSE); ++i)
     {
-        Icm42688_Sample sample;
+        Icm42688_Sample sample = { { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 0.0f };
         float32         liveness = 0.0f;
         boolean         plausible;
         boolean         ok;
 
         ok = Icm42688_read(&sample);
-        TEST_ASSERT_TRUE_MESSAGE(ok, "the stuck frame must still answer SPI (that is the whole defect)");
+        TEST_ASSERT_FALSE_MESSAGE(ok,
+            "a constant 0x8000 triple is now rejected by task 14's sentinel check");
         plausible = Icm42688_plausible(&sample, &liveness);
-        TEST_ASSERT_FALSE_MESSAGE(plausible, "a constant 0x8000 triple must fail the plausibility band");
+        TEST_ASSERT_FALSE_MESSAGE(plausible, "the unpopulated sample must fail the plausibility band");
         present = Icm42688_reportPlausibility(plausible, B5_DT);
         if (present == FALSE)
         {
@@ -227,6 +240,106 @@ void test_replug_reruns_init_exactly_once(void)
         "a device that stays present must never be re-initialised");
 }
 
+/* ==========================================================================
+ * SYS1-001 strand B task 14 (SWE1-FW-009): sentinel-word rejection in
+ * Icm42688_read(), on the raw be16 words, before scaling.
+ * ======================================================================== */
+
+/** A plausible, level burst with ONE axis (gyro Z, offset 12) forced to the
+ *  0x8000 sentinel -- everything else a normal, in-band reading. */
+static void b14_singleSentinelBurst(uint8 out[14])
+{
+    b5_plausibleBurst(out);
+    out[12] = 0x80u; out[13] = 0x00u;
+}
+
+/** Same, but the word is 0x8001 -- one LSB off the sentinel, and per the
+ *  acceptance a LEGITIMATE (if near-full-scale) reading that must still be
+ *  accepted. */
+static void b14_almostSentinelBurst(uint8 out[14])
+{
+    b5_plausibleBurst(out);
+    out[12] = 0x80u; out[13] = 0x01u;
+}
+
+void test_single_sentinel_word_is_rejected_but_presence_unchanged(void)
+{
+    uint8           burst[14];
+    Icm42688_Sample sample;
+    uint32          sentinelBefore;
+    int             i;
+
+    b14_singleSentinelBurst(burst);
+    TEST_ASSERT_TRUE(Icm42688_init());
+    FakeSpi_setBurst(burst);
+    sentinelBefore = g_dbgImuSentinelWords;
+
+    TEST_ASSERT_FALSE_MESSAGE(Icm42688_read(&sample),
+        "a burst with any be16 word == 0x8000 must be reported invalid");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(sentinelBefore + 1u, g_dbgImuSentinelWords,
+        "the sentinel counter must increment exactly once per rejected burst");
+
+    /* Presence itself must be UNCHANGED -- not the read-fail/recovery path.
+     * Prove it the same way test_single_overrange_sample_does_not_drop_
+     * presence does: go straight back to a healthy burst and confirm this
+     * next read succeeds immediately, with no re-init in between (the
+     * recovery path would have needed ICM42688_RECOVERY_PERIOD calls while
+     * "absent" first). */
+    {
+        uint8 good[14];
+        b5_plausibleBurst(good);
+        FakeSpi_setBurst(good);
+        TEST_ASSERT_TRUE_MESSAGE(Icm42688_read(&sample),
+            "presence must stay TRUE across a single sentinel word -- the "
+            "very next healthy burst must read straight through");
+    }
+
+    /* And it must not have re-run init: exactly one soft-reset write, from
+     * the Icm42688_init() call above. */
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1u, FakeSpi_softResetWriteCount(),
+        "a single sentinel word must never trigger a re-init");
+
+    /* Sanity: a run of single-sentinel/good pairs never accumulates toward
+     * a drop either, matching "presence unchanged on a single word". */
+    {
+        uint8 good[14];
+        b5_plausibleBurst(good);
+        for (i = 0; i < 20; ++i)
+        {
+            FakeSpi_setBurst(burst);
+            (void)Icm42688_read(&sample);
+            FakeSpi_setBurst(good);
+            TEST_ASSERT_TRUE(Icm42688_read(&sample));
+        }
+    }
+}
+
+void test_0x8001_word_one_lsb_off_sentinel_is_accepted(void)
+{
+    /* -1999.9 dps / -15.999 g -- deliberately NOT the sentinel, and per the
+     * acceptance a legitimate near-full-scale reading. */
+    uint8           burst[14];
+    Icm42688_Sample sample;
+    uint32          sentinelBefore;
+
+    b14_almostSentinelBurst(burst);
+    TEST_ASSERT_TRUE(Icm42688_init());
+    FakeSpi_setBurst(burst);
+    sentinelBefore = g_dbgImuSentinelWords;
+
+    TEST_ASSERT_TRUE_MESSAGE(Icm42688_read(&sample),
+        "0x8001 is one LSB off the sentinel and must be accepted");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(sentinelBefore, g_dbgImuSentinelWords,
+        "0x8001 must never count as a sentinel word");
+
+    {
+        char msg[96];
+        (void)snprintf(msg, sizeof msg, "gyro Z = %g dps, expected ~-1999.9",
+            (double)sample.gyro[2]);
+        TEST_ASSERT_FLOAT_WITHIN_MESSAGE(0.01f, -1999.94f, sample.gyro[2], msg);
+    }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -239,5 +352,7 @@ int main(void)
     RUN_TEST(test_silent_drdy_with_failing_whoami_drops_within_200ms);
     RUN_TEST(test_single_overrange_sample_does_not_drop_presence);
     RUN_TEST(test_replug_reruns_init_exactly_once);
+    RUN_TEST(test_single_sentinel_word_is_rejected_but_presence_unchanged);
+    RUN_TEST(test_0x8001_word_one_lsb_off_sentinel_is_accepted);
     return UNITY_END();
 }
