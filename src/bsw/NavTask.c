@@ -83,6 +83,18 @@
  * behind its own poll rate. */
 #define NAVTASK_TIMEDOUT_FAULT_DT_S   ((float32)NAVTASK_DISPATCH_PERIOD_US * 1.0e-6f)
 
+/* SYS1-001 strand B task 15 (SWE1-FW-009): bound on how fast the gyro may
+ * change, per axis, between two ACCEPTED samples -- 197 deg/s over one
+ * measured 985 us tick. A quad's airframe angular acceleration is under
+ * 10 000 deg/s^2 (20x headroom); the observed defect (a near-full-scale
+ * word appearing between two ordinary ticks, evidence rows
+ * 7D13E62A0B428BE3/1E1CC203E9702454) implies ~2 000 000 deg/s^2, 10x above
+ * this bound. Scaled by dt, not an absolute delta: a genuine LONG gap (the
+ * sensor answering late) widens the allowance in proportion, so a real
+ * manoeuvre spanning a longer interval is never mistaken for a corrupt
+ * sample. */
+#define NAVTASK_GYRO_SLEW_DPS_PER_S   (200000.0f)
+
 /* NaN-safe by construction: written as "is dtS INSIDE the window", not "is
  * dtS outside the window". NaN compares false against every relational
  * operator, so the ORIGINAL Cpu0_Main.c form -- `(dt < lo) || (dt > hi)` to
@@ -146,6 +158,37 @@ NavTask_DtClass NavTask_classifyDt(float32 dtS)
     return result;
 }
 
+/* SYS1-001 strand B task 15 (SWE1-FW-009): see NavTask.h for the contract.
+ * Pure (no bus access, no state) -- the caller owns "the previous ACCEPTED
+ * sample" (NavTask_step's s_lastGyroSensor below), same separation as
+ * NavTask_classifyDt()/navTask_dtValid() above. Written as a positive
+ * "is inside the band" test per axis, not a negated "outside" one: a NaN
+ * delta or a NaN bound (dtS itself NaN) compares false against BOTH
+ * relational operators, so the positive form is what rejects it -- the same
+ * discipline as every other bound in this file and in Ahrs.c. */
+boolean NavTask_gyroSlewOk(const float32 gyro[3], const float32 prev[3], float32 dtS)
+{
+    boolean       ok    = TRUE;
+    const float32 bound = NAVTASK_GYRO_SLEW_DPS_PER_S * dtS;
+    uint8         i;
+
+    for (i = 0u; i < 3u; i++)
+    {
+        const float32 delta = gyro[i] - prev[i];
+
+        if ((delta <= bound) && (delta >= -bound))
+        {
+            /* this axis is within bound */
+        }
+        else
+        {
+            ok = FALSE;
+        }
+    }
+
+    return ok;
+}
+
 /* Running total of Icm42688_plausible()'s per-sample liveness, published
  * verbatim in NavState_t.imuLiveness (NEVER reset here after boot) -- see
  * that field's comment. Housekeeping_100ms does the resetting-by-diffing;
@@ -160,6 +203,13 @@ static float32 s_imuLivenessAccum;
  * see NavTask_init() for why. */
 static uint32 s_lastEdgeSeq;
 static uint32 s_lastEdgeTicks;
+
+/* Task 15: the gyro (raw, sensor frame, as delivered by Icm42688_read()) of
+ * the last tick NavTask_gyroSlewOk() actually accepted -- updated ONLY on
+ * acceptance, so a run of rejected ticks keeps comparing against the last
+ * KNOWN GOOD reading rather than chaining off a previous bad one (the same
+ * reason a rejected sample must not update the reference at all). */
+static float32 s_lastGyroSensor[3];
 
 /* cppcheck-suppress-begin misra-c2012-8.7 ; deviation: read over XCP
  * SHORT_UPLOAD by raw address (tools/xcp_read.py), never referenced by C
@@ -186,6 +236,13 @@ void NavTask_init(void)
     g_dbgNavDtLong          = 0u;
     g_dbgNavDtShortMinTicks = 0xFFFFFFFFu;
     g_dbgImuReadFail        = 0u;
+
+    /* Task 15: no prior accepted sample yet -- zero is a safe reference
+     * (the slew bound scaled by even one nominal tick's dt is 197 deg/s,
+     * comfortably above any boot-time gyro bias). */
+    s_lastGyroSensor[0] = 0.0f;
+    s_lastGyroSensor[1] = 0.0f;
+    s_lastGyroSensor[2] = 0.0f;
 
     /* T16 (docs/REFACTORING_PLAN.md §3.6, missedEdges investigation): seed
      * the baseline from whatever the ISR has already produced during
@@ -394,15 +451,27 @@ void NavTask_step(void)
              * as an essentially-Boolean type, so it flags a `&&`/comparison
              * result stored straight into one as a different essential type
              * category. Same idiom as navTask_dtValid()/NavTask_inputValid(). */
+            /* Task 15 (SWE1-FW-009): a slew-rejected sample gets the exact
+             * same "freeze this tick only" reaction as a bad dt or an absent
+             * sensor -- ahrsInputOk FALSE, nothing else. Short-circuits
+             * before touching sample.gyro when present == FALSE, so a
+             * rejected/absent read (all-zero sample) is never compared
+             * against s_lastGyroSensor at all. */
             ahrsInputOk = FALSE;
-            if ((navTask_dtValid(elapsedTime) != FALSE) && (present != FALSE))
+            if ((navTask_dtValid(elapsedTime) != FALSE) && (present != FALSE)
+                && (NavTask_gyroSlewOk(sample.gyro, s_lastGyroSensor, elapsedTime) != FALSE))
             {
                 ahrsInputOk = TRUE;
+                s_lastGyroSensor[0] = sample.gyro[0];
+                s_lastGyroSensor[1] = sample.gyro[1];
+                s_lastGyroSensor[2] = sample.gyro[2];
             }
             else
             {
                 /* SYS1-001 task 0 instrumentation -- see NavTask.h. Does NOT
-                 * include a SHORT (duplicate-edge) tick -- see NavTask.h. */
+                 * include a SHORT (duplicate-edge) tick -- see NavTask.h.
+                 * Task 15: also counts a slew-rejected tick here, same
+                 * bucket as every other invalid-input case. */
                 g_dbgNavInvalidTicks++;
             }
 

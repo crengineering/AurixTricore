@@ -509,6 +509,45 @@ static void assertAhrsFinite(const Ahrs_Values *v, const char *what)
     TEST_ASSERT_TRUE_MESSAGE(isFiniteF(v->accMagG) && isFiniteF(v->magFieldG), msg);
 }
 
+/* SYS1-001 strand B task 15 (SWE1-FW-009): AHRS_INPUT_MAX (1.0e6f, rejected
+ * only NaN/inf) is now AHRS_GYRO_MAX_DPS (3000) / AHRS_ACC_MAX_INPUT_G (25)
+ * -- explicit regression that a literal NaN or infinite sample on EITHER
+ * sensor still freezes the estimate exactly as before the rename (q/yaw/
+ * gyroBias untouched -- the empty "else if" branch this falls into leaves
+ * every static as it was, same freeze-by-omission Ahrs.c documents). */
+void test_nan_or_inf_gyro_or_acc_is_still_rejected_after_the_rename(void)
+{
+    Ahrs_Values v; memset(&v, 0, sizeof v);
+    const float32 accLevel[3]  = { 0.0f, 0.0f, -1.0f };
+    const float32 gyroQuiet[3] = { 1.0f, -2.0f, 0.5f };
+    const float32 nan = 0.0f / 0.0f;
+    const float32 inf = 1.0f / 0.0f;
+    int i;
+
+    bringUp(&v, accLevel);
+    for (i = 0; i < 100; ++i) { Ahrs_update(&v, accLevel, gyroQuiet, DT, TRUE); }
+
+    for (i = 0; i < 6; ++i)
+    {
+        float32 accBad[3]  = { accLevel[0], accLevel[1], accLevel[2] };
+        float32 gyroBad[3] = { gyroQuiet[0], gyroQuiet[1], gyroQuiet[2] };
+        float32 yawBefore  = v.yawRad;
+        float32 biasBefore[3];
+        char    msg[64];
+
+        memcpy(biasBefore, v.gyroBias, sizeof biasBefore);
+
+        /* i = 0..2: NaN on acc axis i; i = 3..5: inf on gyro axis i-3. */
+        if (i < 3) { accBad[i] = nan; } else { gyroBad[i - 3] = inf; }
+
+        (void)snprintf(msg, sizeof msg, "case %d (%s)", i, (i < 3) ? "NaN on acc" : "inf on gyro");
+        Ahrs_update(&v, accBad, gyroBad, DT, TRUE);
+        TEST_ASSERT_TRUE_MESSAGE(isFiniteF(v.yawRad), msg);
+        TEST_ASSERT_EQUAL_FLOAT_MESSAGE(yawBefore, v.yawRad, msg);
+        TEST_ASSERT_EQUAL_FLOAT_ARRAY_MESSAGE(biasBefore, v.gyroBias, 3, msg);
+    }
+}
+
 void test_no_admissible_input_produces_nan(void)
 {
     Ahrs_Values v; memset(&v, 0, sizeof v);
@@ -2423,6 +2462,7 @@ int main(void)
     RUN_TEST(test_b4_hover_case_bit_identical_to_task3);
     RUN_TEST(test_b4_accweightpct_ramps_continuously_with_rate_and_norm);
     RUN_TEST(test_b11_gyro_lowpass_reaches_steady_state_within_150ms);
+    RUN_TEST(test_nan_or_inf_gyro_or_acc_is_still_rejected_after_the_rename);
     RUN_TEST(test_no_admissible_input_produces_nan);
     RUN_TEST(test_recovers_after_garbage);
     RUN_TEST(test_invalid_sample_freezes_the_estimate);

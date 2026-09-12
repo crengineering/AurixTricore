@@ -1,6 +1,9 @@
 #include "unity.h"
 #include "fakes/Ifx_Types.h"
 #include "fakes/IfxStm.h"        /* FakeStm_* -- T16 baseline-seeding tests */
+#include <math.h>                 /* fabsf, task 15's yaw-movement check    */
+#include <string.h>               /* memcpy, task 15's gyroBias comparison  */
+#include <stdio.h>                /* snprintf, failure messages             */
 #include "../src/bsw/NavTask.c"   /* pulls in navTask_dtValid, which is static
                                    * and otherwise unreachable -- same reason
                                    * test_GnssM9N.c #includes GnssM9N.c */
@@ -473,6 +476,169 @@ void test_stuck_sample_drops_presence_after_100ms_via_navtask_wiring(void)
     s_icm42688Present = FALSE;   /* leave the stub as every other test expects it */
 }
 
+/* ==========================================================================
+ * SYS1-001 strand B task 15 (SWE1-FW-009): NavTask_gyroSlewOk() -- the
+ * per-axis rate-of-change bound on the gyro -- and its effect wired exactly
+ * the way NavTask_step wires it: a rejection makes Ahrs_update()'s `valid`
+ * FALSE for that tick and nothing else (SWE1-FW-001's debounce owns the
+ * rest, unchanged).
+ * ======================================================================== */
+
+#define T15_DT   (1.0f / 1014.2f)   /* measured DRDY rate, docs/IMU_INTERRUPT.md */
+
+void test_gyro_slew_ok_accepts_zero_change(void)
+{
+    const float32 gyro[3] = { 0.0f, 0.0f, 0.0f };
+    const float32 prev[3] = { 0.0f, 0.0f, 0.0f };
+    TEST_ASSERT_TRUE(NavTask_gyroSlewOk(gyro, prev, T15_DT));
+}
+
+void test_gyro_slew_ok_accepts_at_the_boundary(void)
+{
+    /* 200 000 deg/s^2 * T15_DT = 197.088 deg/s -- boundary-inclusive
+     * (NavTask_gyroSlewOk uses <=/>=, not strict). */
+    const float32 bound   = 200000.0f * T15_DT;
+    const float32 gyro[3] = { bound, -bound, 0.0f };
+    const float32 prev[3] = { 0.0f, 0.0f, 0.0f };
+    TEST_ASSERT_TRUE_MESSAGE(NavTask_gyroSlewOk(gyro, prev, T15_DT),
+        "a delta exactly AT the bound must be accepted (boundary-inclusive)");
+}
+
+void test_gyro_slew_ok_rejects_just_past_the_boundary(void)
+{
+    const float32 bound   = 200000.0f * T15_DT;
+    const float32 gyro[3] = { bound + 1.0f, 0.0f, 0.0f };
+    const float32 prev[3] = { 0.0f, 0.0f, 0.0f };
+    TEST_ASSERT_FALSE_MESSAGE(NavTask_gyroSlewOk(gyro, prev, T15_DT),
+        "a delta past the bound must be rejected");
+}
+
+void test_gyro_slew_ok_rejects_nan(void)
+{
+    float32 nan = 0.0f / 0.0f;
+    const float32 gyro[3] = { nan, 0.0f, 0.0f };
+    const float32 prev[3] = { 0.0f, 0.0f, 0.0f };
+    TEST_ASSERT_FALSE_MESSAGE(NavTask_gyroSlewOk(gyro, prev, T15_DT),
+        "NaN compares false against every relational operator -- must be "
+        "rejected, not accepted by omission");
+}
+
+void test_gyro_slew_ok_rejects_nonzero_change_over_zero_dt(void)
+{
+    const float32 gyro[3] = { 1.0f, 0.0f, 0.0f };
+    const float32 prev[3] = { 0.0f, 0.0f, 0.0f };
+    TEST_ASSERT_FALSE_MESSAGE(NavTask_gyroSlewOk(gyro, prev, 0.0f),
+        "no elapsed time cannot excuse a nonzero change");
+}
+
+void test_gyro_slew_ok_accepts_190dps_per_tick_ramp(void)
+{
+    /* Acceptance: a 190 deg/s-per-tick ramp (just under the ~197 deg/s bound
+     * at this dt) is legitimate fast handling and must be accepted EVERY
+     * tick, not just once -- the "does not block real motion" half of the
+     * claim, updating the reference each time exactly as NavTask_step does
+     * on acceptance. */
+    float32 prev[3] = { 0.0f, 0.0f, 0.0f };
+    int     i;
+
+    for (i = 0; i < 20; ++i)
+    {
+        const float32 gyro[3] = { 0.0f, 0.0f, prev[2] + 190.0f };
+        char msg[64];
+
+        (void)snprintf(msg, sizeof msg, "tick %d: gyro_z = %g dps", i, (double)gyro[2]);
+        TEST_ASSERT_TRUE_MESSAGE(NavTask_gyroSlewOk(gyro, prev, T15_DT), msg);
+        prev[0] = gyro[0];
+        prev[1] = gyro[1];
+        prev[2] = gyro[2];
+    }
+}
+
+/* --- the reproduction: the evidence-row scenario, composed exactly the way
+ * NavTask_step composes NavTask_gyroSlewOk() into Ahrs_update()'s `valid`
+ * (test_navtask.c's own Icm42688_read() stub always returns a fixed sample,
+ * so this drives Ahrs_update() directly -- the real, already-host-tested
+ * implementation, linked via the `estimator` library, exactly as every
+ * other Ahrs_update() call in this file's stubs is). --- */
+
+void test_slew_rejection_prevents_corrupt_word_from_moving_yaw(void)
+{
+    Ahrs_Values   v; memset(&v, 0, sizeof v);
+    const float32 accLevel[3]    = { 0.0f, 0.0f, -1.0f };
+    const float32 gyroQuiet[3]   = { 0.0f, 0.0f, 0.0f };
+    const float32 gyroCorrupt[3] = { 0.0f, 0.0f, -1967.0f };   /* evidence row 7D13E62A0B428BE3 */
+    const float32 lastGyro[3]    = { 0.0f, 0.0f, 0.0f };
+    float32       yawBefore;
+    float32       gyroBiasBefore[3];
+    boolean       slewOk;
+    int           i;
+
+    Ahrs_init();
+    for (i = 0; i < 4000; ++i)
+    {
+        Ahrs_update(&v, accLevel, gyroQuiet, T15_DT, TRUE);
+    }
+    TEST_ASSERT_EQUAL(AHRS_RUNNING, v.state);
+
+    yawBefore = v.yawRad;
+    memcpy(gyroBiasBefore, v.gyroBias, sizeof gyroBiasBefore);
+
+    slewOk = NavTask_gyroSlewOk(gyroCorrupt, lastGyro, T15_DT);
+    TEST_ASSERT_FALSE_MESSAGE(slewOk, "the evidence-row magnitude must fail the slew bound");
+
+    /* Exactly NavTask_step's own wiring: a slew rejection makes `valid`
+     * FALSE for this tick and nothing else. */
+    Ahrs_update(&v, accLevel, gyroCorrupt, T15_DT, slewOk);
+
+    {
+        const float32 yawMovedDeg = fabsf((v.yawRad - yawBefore) * (180.0f / 3.14159265f));
+        char          msg[128];
+
+        (void)snprintf(msg, sizeof msg,
+            "yaw moved %.4f deg (baseline defect: 1.94 deg, target < 0.05)",
+            (double)yawMovedDeg);
+        TEST_ASSERT_TRUE_MESSAGE(yawMovedDeg < 0.05f, msg);
+    }
+    TEST_ASSERT_EQUAL_FLOAT_ARRAY_MESSAGE(gyroBiasBefore, v.gyroBias, 3,
+        "both integrals (published via gyroBias) must be bit-unchanged on a rejected tick");
+}
+
+void test_40_consecutive_slew_rejections_do_not_realign(void)
+{
+    Ahrs_Values   v; memset(&v, 0, sizeof v);
+    const float32 accLevel[3]    = { 0.0f, 0.0f, -1.0f };
+    const float32 gyroQuiet[3]   = { 0.0f, 0.0f, 0.0f };
+    const float32 gyroCorrupt[3] = { 0.0f, 0.0f, -1967.0f };
+    const float32 lastGyro[3]    = { 0.0f, 0.0f, 0.0f };
+    uint32        realignsBefore;
+    int           i;
+
+    Ahrs_init();
+    for (i = 0; i < 4000; ++i)
+    {
+        Ahrs_update(&v, accLevel, gyroQuiet, T15_DT, TRUE);
+    }
+    TEST_ASSERT_EQUAL(AHRS_RUNNING, v.state);
+    realignsBefore = g_dbgAhrsRealigns;
+
+    /* 1..40 consecutive rejections: SWE1-FW-001's debounce (AHRS_FAULT_HOLD_S
+     * = 0.05 s) must not have crossed at 40 * T15_DT (~39.4 ms), so no
+     * re-align -- this also proves the slew check keeps comparing against
+     * the same last-KNOWN-GOOD reference rather than chaining off a
+     * previous rejected sample: lastGyro is never updated in this loop,
+     * exactly as NavTask_step never updates s_lastGyroSensor on a rejection. */
+    for (i = 1; i <= 40; ++i)
+    {
+        char    msg[64];
+        boolean slewOk = NavTask_gyroSlewOk(gyroCorrupt, lastGyro, T15_DT);
+
+        Ahrs_update(&v, accLevel, gyroCorrupt, T15_DT, slewOk);
+        (void)snprintf(msg, sizeof msg, "after %d consecutive rejections", i);
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(realignsBefore, g_dbgAhrsRealigns, msg);
+        TEST_ASSERT_EQUAL_MESSAGE(AHRS_RUNNING, v.state, msg);
+    }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -496,5 +662,13 @@ int main(void)
     RUN_TEST(test_duplicate_edge_is_consumed_without_publish_and_widens_next_dt);
     RUN_TEST(test_no_edge_timeout_declares_no_sensor_then_realigns_once);
     RUN_TEST(test_stuck_sample_drops_presence_after_100ms_via_navtask_wiring);
+    RUN_TEST(test_gyro_slew_ok_accepts_zero_change);
+    RUN_TEST(test_gyro_slew_ok_accepts_at_the_boundary);
+    RUN_TEST(test_gyro_slew_ok_rejects_just_past_the_boundary);
+    RUN_TEST(test_gyro_slew_ok_rejects_nan);
+    RUN_TEST(test_gyro_slew_ok_rejects_nonzero_change_over_zero_dt);
+    RUN_TEST(test_gyro_slew_ok_accepts_190dps_per_tick_ramp);
+    RUN_TEST(test_slew_rejection_prevents_corrupt_word_from_moving_yaw);
+    RUN_TEST(test_40_consecutive_slew_rejections_do_not_realign);
     return UNITY_END();
 }

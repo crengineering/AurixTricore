@@ -76,6 +76,27 @@ typedef enum
  *  measured" (dtS == 0.0f) lands on. */
 NavTask_DtClass NavTask_classifyDt(float32 dtS);
 
+/** SYS1-001 strand B task 15 (SWE1-FW-009): reject a gyro sample whose
+ *  per-axis rate changed from the previous ACCEPTED sample by more than
+ *  200 000 deg/s^2 scaled by \p dtS (197 deg/s over one measured 985 us
+ *  tick) -- a bound no legitimate airframe motion reaches (10 000 deg/s^2,
+ *  20x headroom) but the observed corrupt-sample defect (a near-full-scale
+ *  word appearing between two ordinary ticks, ~2 000 000 deg/s^2) sails
+ *  through by 10x. Pure (no bus access, no state -- the caller owns which
+ *  sample counted as "previous accepted"); split out for the host test, the
+ *  same reason NavTask_classifyDt() is.
+ *  \param gyro  this tick's gyro, sensor frame, AS DELIVERED (pre-mount) [deg/s]
+ *  \param prev  the previous ACCEPTED sample's gyro, same frame
+ *  \param dtS   elapsed time since that previous accepted sample [s] -- a
+ *               non-finite, zero or negative dtS makes the bound
+ *               non-positive, so any nonzero change is rejected (correct:
+ *               no elapsed time cannot excuse one)
+ *  \return FALSE if any axis is outside the bound (also FALSE for a NaN
+ *          gyro/prev/dtS -- NaN compares false against every relational
+ *          operator here, so the positive "inside the band" test rejects it
+ *          by construction, never by omission). */
+boolean NavTask_gyroSlewOk(const float32 gyro[3], const float32 prev[3], float32 dtS);
+
 /* --- debug instrumentation (SYS1-001 task 0) -----------------------------
  * Raw map symbols read by tools/xcp_read.py, same precedent as g_imuDrdy*
  * (ImuInt.h) -- no A2L entry, no Xcp_Data field, no GUI change. Declared

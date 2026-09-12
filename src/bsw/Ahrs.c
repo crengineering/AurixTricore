@@ -229,10 +229,19 @@
 #define AHRS_GRAVITY          (9.80665f)
 #define AHRS_TWO_PI           (6.2831853f)
 
-/* Admissible band for a raw sensor sample. Generous: this rejects garbage and
- * non-finite values, it does not police physics. The ICM-42688-P is configured
- * for +/-16 g and +/-2000 deg/s, so anything past this is a corrupt transfer. */
-#define AHRS_INPUT_MAX        (1.0e6f)
+/* SYS1-001 strand B task 15 (SWE1-FW-009): AHRS_INPUT_MAX (1.0e6f) was never
+ * a plausibility bound -- it rejected only NaN and infinity, and every one
+ * of the observed corrupt-sample events (evidence rows 7D13E62A0B428BE3,
+ * 1E1CC203E9702454: 1918-1967 deg/s, 95.9-98.3% of full scale) sailed
+ * through it untouched. Replaced by bounds the sensor and the airframe
+ * actually have: 1.5x the configured full scale on each channel, which
+ * additionally catches a scaling or mounting error, not only a corrupt
+ * transfer. Neither bound alone catches the near-full-scale defect (1967
+ * deg/s is still well under 3000) -- that is what NavTask_gyroSlewOk()
+ * (NavTask.c) and Icm42688_read()'s sentinel check (task 14) are for; this
+ * is the last, cheapest backstop, not the first line of defence. */
+#define AHRS_GYRO_MAX_DPS     (3000.0f)   /* 1.5x the configured +/-2000 dps */
+#define AHRS_ACC_MAX_INPUT_G  (25.0f)     /* 1.5x the configured +/-16 g     */
 
 /* --- mounting transforms -------------------------------------------------
  * Sensor axes to BODY axes (x forward, y right, z DOWN).
@@ -395,7 +404,8 @@ static float32 ahrs_invSqrt(float32 x)
  * elsewhere (ahrs_invSqrt, navTask_dtValid): the caller (Ahrs_update) only
  * ever calls this with a value it just computed from finite inputs times a
  * bounded gain and a bounded dt, so a NaN here would already mean the
- * upstream AHRS_INPUT_MAX/dt-window checks were bypassed, not something
+ * upstream AHRS_GYRO_MAX_DPS/AHRS_ACC_MAX_INPUT_G/dt-window checks were
+ * bypassed, not something
  * this clamp is the right place to paper over. */
 static float32 ahrs_clamp(float32 v, float32 limit)
 {
@@ -419,7 +429,7 @@ static float32 ahrs_clamp(float32 v, float32 limit)
 
 /* B3.4: clamp a scalar into [0, 1] -- the weight-ramp shape both w_norm and
  * w_rate share. A NaN input (e.g. an accNorm computed from a NaN sample --
- * already excluded upstream by AHRS_INPUT_MAX, same reasoning as
+ * already excluded upstream by AHRS_ACC_MAX_INPUT_G, same reasoning as
  * ahrs_clamp above) falls through both comparisons and returns v itself
  * unclamped, same discipline as the rest of this file. */
 static float32 ahrs_clamp01(float32 v)
@@ -952,18 +962,19 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
              * single scheduler hiccup does not blank the channel filters. */
         }
     }
-    else if (!((acc[0] > -AHRS_INPUT_MAX) && (acc[0] < AHRS_INPUT_MAX)
-            && (acc[1] > -AHRS_INPUT_MAX) && (acc[1] < AHRS_INPUT_MAX)
-            && (acc[2] > -AHRS_INPUT_MAX) && (acc[2] < AHRS_INPUT_MAX)
-            && (gyro[0] > -AHRS_INPUT_MAX) && (gyro[0] < AHRS_INPUT_MAX)
-            && (gyro[1] > -AHRS_INPUT_MAX) && (gyro[1] < AHRS_INPUT_MAX)
-            && (gyro[2] > -AHRS_INPUT_MAX) && (gyro[2] < AHRS_INPUT_MAX)))
+    else if (!((acc[0] > -AHRS_ACC_MAX_INPUT_G) && (acc[0] < AHRS_ACC_MAX_INPUT_G)
+            && (acc[1] > -AHRS_ACC_MAX_INPUT_G) && (acc[1] < AHRS_ACC_MAX_INPUT_G)
+            && (acc[2] > -AHRS_ACC_MAX_INPUT_G) && (acc[2] < AHRS_ACC_MAX_INPUT_G)
+            && (gyro[0] > -AHRS_GYRO_MAX_DPS) && (gyro[0] < AHRS_GYRO_MAX_DPS)
+            && (gyro[1] > -AHRS_GYRO_MAX_DPS) && (gyro[1] < AHRS_GYRO_MAX_DPS)
+            && (gyro[2] > -AHRS_GYRO_MAX_DPS) && (gyro[2] < AHRS_GYRO_MAX_DPS)))
     {
-        /* A NaN or infinite sample is dropped exactly like a failed read. The
-         * positive form matters: every comparison against NaN is false, so
-         * negating a positive test is what rejects it. Without this, an
-         * absurd acceleration propagates into accNed and out to the channel
-         * filters as +/-inf. */
+        /* A NaN or infinite sample -- or, since task 15, anything past 1.5x
+         * either sensor's configured full scale -- is dropped exactly like a
+         * failed read. The positive form matters: every comparison against
+         * NaN is false, so negating a positive test is what rejects it.
+         * Without this, an absurd acceleration propagates into accNed and
+         * out to the channel filters as +/-inf. */
     }
     else
     {
