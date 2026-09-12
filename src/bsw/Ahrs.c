@@ -85,6 +85,29 @@
  * block comment above for why 50 ms (not the instantaneous sample). */
 #define AHRS_GYRO_LP_TAU_S        (0.05f)
 
+/* B6.5 (SYS1-001 strand B task 12b, SWE1-FW-006): a half-sine roll spends
+ * 7.7x longer than a trapezoid of the same angle and duration inside the
+ * PARTIAL-weight band (0 < w_rate < 1), because it accelerates/decelerates
+ * slowly at both ends instead of stepping straight to a constant rate. The
+ * rate gate alone (AHRS_ACC_RATE_FULL_DPS/SPAN_DPS) cannot see that: at the
+ * low-rate tail ends of the motion the ANGULAR ACCELERATION -- and with it
+ * the tangential accelerometer disturbance -- is at its maximum, exactly
+ * where w_rate is largest. A partially-weighted eAcc computed against that
+ * disturbed reading still charges s_fbI every tick it is nonzero (Ahrs.c
+ * task 11b measured 2.837 deg at motion end against the 2.0 deg clause).
+ *
+ * Fix: make the accel weight's return to trust ASYMMETRIC IN TIME rather
+ * than adding a third rate-based parameter. Once the low-passed |gyro| has
+ * reached AHRS_ACC_RATE_FULL_DPS + AHRS_ACC_RATE_SPAN_DPS (60 deg/s -- a
+ * manoeuvre, not vibration or a gust), the accelerometer is held OUT of the
+ * P and I paths for a flat AHRS_ACC_HOLDOFF_S regardless of how quickly the
+ * rate then falls back through the partial-weight band -- closing exactly
+ * the window the half-sine's tail ends open. 0.3 s is bounded by
+ * AHRS_FBI_MAX_DPS's own 2.0 deg/s clamp: at most 0.6 deg of coasting error,
+ * and it can only ARM above 60 deg/s, a rate hover never reaches, so hover
+ * behaviour is untouched. */
+#define AHRS_ACC_HOLDOFF_S        (0.3f)
+
 /* Magnetometer trust window [gauss]. Earth's field is 0.25..0.65 G worldwide
  * (~0.48 G in Munich); the band is widened to tolerate a residual hard-iron
  * offset without accepting a value that is wrong by a clean factor — which is
@@ -269,6 +292,9 @@ static float32 s_fbIYaw;           /* Mahony integral feedback [rad/s], about
                                      * the proportional term (B3.1)           */
 static float32 s_gyroLpDps;        /* Task 11: 50 ms low-passed |gyro| [deg/s],
                                      * feeds w_rate -- see AHRS_GYRO_LP_TAU_S */
+static float32 s_accHoldS;         /* B6.5 (task 12b): seconds remaining in
+                                     * the post-manoeuvre accel hold-off --
+                                     * see AHRS_ACC_HOLDOFF_S                  */
 static float32 s_bias[3];          /* boot gyro bias, body frame [deg/s]      */
 static float32 s_calSum[3];
 static float32 s_calMin[3];
@@ -450,6 +476,7 @@ void Ahrs_init(void)
 
     s_fbIYaw       = 0.0f;
     s_gyroLpDps    = 0.0f;
+    s_accHoldS     = 0.0f;
     s_calCount     = 0u;
     s_calWindowS   = 0.0f;
     s_calElapsedS  = 0.0f;
@@ -944,6 +971,11 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
                                    + (gyroBody[1] * gyroBody[1])
                                    + (gyroBody[2] * gyroBody[2]));
 
+                /* B6.5 (task 12b): a re-align says nothing about a
+                 * manoeuvre in progress -- start untrusted-free, same
+                 * reasoning as seeding s_gyroLpDps above rather than 0. */
+                s_accHoldS = 0.0f;
+
                 s_ahrsState = AHRS_RUNNING;
                 g_dbgAhrsRealigns++;
             }
@@ -1004,7 +1036,36 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
                 wRate = ahrs_clamp01(1.0f
                     - ((s_gyroLpDps - AHRS_ACC_RATE_FULL_DPS) / AHRS_ACC_RATE_SPAN_DPS));
 
-                wAcc = wNorm * wRate;
+                /* B6.5 (task 12b): the hold-off is a THIRD gate, applied on
+                 * top of w_norm*w_rate rather than folded into either ramp --
+                 * see AHRS_ACC_HOLDOFF_S for why. Armed only once the
+                 * low-passed rate reaches the upper knee (a manoeuvre); held
+                 * with no countdown through the partial-weight band in
+                 * between (15..60 deg/s, i.e. > AHRS_ACC_RATE_FULL_DPS)
+                 * rather than re-arming on every re-entry; counted down by
+                 * dt only once back inside the full-trust band. */
+                if (s_gyroLpDps >= (AHRS_ACC_RATE_FULL_DPS + AHRS_ACC_RATE_SPAN_DPS))
+                {
+                    s_accHoldS = AHRS_ACC_HOLDOFF_S;
+                }
+                else if (s_gyroLpDps > AHRS_ACC_RATE_FULL_DPS)
+                {
+                    /* still settling from the manoeuvre -- hold, no countdown */
+                }
+                else
+                {
+                    s_accHoldS -= dt;
+                    if (s_accHoldS < 0.0f)
+                    {
+                        s_accHoldS = 0.0f;
+                    }
+                    else
+                    {
+                        /* still counting down */
+                    }
+                }
+
+                wAcc = (s_accHoldS > 0.0f) ? 0.0f : (wNorm * wRate);
             }
 
             ahrs_errorVector(accBody, accNorm, wAcc, eAcc, dB, &eMagD, &accUsed, &magUsed);

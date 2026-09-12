@@ -425,7 +425,9 @@ comfortably inside `[0.85, 1.15]`, while tilting the apparent vertical by
 `accTrusted` is `(w_acc > 0)` — the same outer edge as before; the weight
 itself publishes as `accWeightPct` (0–100) in `Xcp_Fusion`'s previously
 reserved byte at `0x53` (zero offset change). Hover (slow, near-1 g) is
-bit-identical to before this change (`w_acc = 1`).
+bit-identical to before this change (`w_acc = 1`). Task 12b (below) adds a
+third, time-asymmetric hold-off gate on top of `w_norm · w_rate` — see that
+section for why `w_rate` alone is not enough.
 
 **Round 1 (2026-09-12): `w_rate` retuned, and reads a low-pass, not the
 instantaneous sample.** `gyroLp` is a 50 ms one-pole low-pass of `|gyro|`
@@ -458,8 +460,9 @@ constants (15/45°/s, zero at 60°/s) with the low-pass measure
 **0.52°/0.20°/0.03°** on the same constant-60°/s scenario — comfortably
 inside target and close to the architect's own ≈0.5° prediction.
 
-**Open finding, round 1: the half-sine (smooth accel/decel) profile still
-fails.** A smoother velocity profile over the same 90°/1.5 s motion (peak
+**Finding, round 1 (closed by task 12b, below): the half-sine (smooth
+accel/decel) profile still fails.** A smoother velocity profile over the same
+90°/1.5 s motion (peak
 ~94°/s, *higher* than the constant-rate case's 60°/s, so not a softer test)
 measures 2.84°/1.06°/0.15° — failing the first two clauses, worse than the
 constant-rate result despite the higher peak rate. Traced (roll-vs-time
@@ -480,6 +483,53 @@ an implementation defect; a fix (e.g. gating the *integral* path on a
 stricter trust threshold than the proportional path, or reshaping `w_acc`'s
 own transition) is a design decision for the flight-architect, same
 footing as the constants themselves — not made unilaterally here.
+
+**Task 12b (B6.5, 2026-09-12): the half-sine finding closed with a hold-off,
+not a third rate parameter.** The residual after a manoeuvre follows a single
+exponential, `residual = 8.53°·(1 − e^(−twoKpAcc·∫w dt))`, so the ≤2.0° clause
+at motion end is exactly a **budget on `∫w dt` over the whole motion:
+`∫w dt ≤ 0.267 s`**. A trapezoidal 90°/1.5 s roll spends `∫w dt = 0.062 s`
+there — comfortable margin. The half-sine of the same angle and duration
+spends **0.246 s** — not in the middle, where the rate is highest and `w = 0`
+already, but at the two *ends*, where the rate is genuinely low (so `w_rate`
+is non-zero) while the angular *acceleration*, and with it the tangential
+accelerometer disturbance, is at its maximum — a blind spot structural to any
+weight `w(|ω|)` with `w(0) = 1`, closed by making the gate asymmetric in time
+rather than adding a third parameter:
+
+```
+AHRS_ACC_HOLDOFF_S = 0.3 s
+s_accHoldS: set to 0.3 s whenever gyroLp >= 60°/s (the upper knee);
+            held flat, no countdown, while 15 < gyroLp < 60°/s;
+            counted down by dt only while gyroLp <= 15°/s.
+wAcc = (s_accHoldS > 0) ? 0 : w_norm * w_rate
+```
+
+Once the low-passed rate has reached the upper knee — a manoeuvre, not
+vibration or a gust — the accelerometer is held out of **both** the P and I
+paths (they share `wAcc`) for a flat 0.3 s regardless of how quickly the rate
+then falls back through the partial-weight band, which is exactly the window
+the half-sine's tail ends open. The hold can only **arm** above 60°/s, a rate
+hover never reaches, so hover is untouched, and it resets to 0 on every
+re-align (`AHRS_ALIGNING`, beside `s_gyroLpDps`) so a recovery does not start
+artificially held off.
+
+| profile (90°/1.5 s + 0.15 g lateral) | `∫w dt` | motion end | +1 s | +3 s | clause (≤2.0/1.0/0.5°) |
+|---|---|---|---|---|---|
+| trapezoid (round 1, no hold-off) | 0.062 s | 0.52° | 0.20° | 0.03° | pass |
+| half-sine (round 1, no hold-off) | 0.498 s | 2.84° | 1.06° | 0.15° | **fail** (clauses 1–2) |
+| trapezoid (task 12b, hold-off) | 0.062 s | 0.52° | 0.20° | 0.03° | pass (limits only, not pinned bit-identical — see below) |
+| half-sine (task 12b, hold-off) | 0.246 s | 1.92° | 0.95° | 0.13° | pass |
+
+The trapezoid's own `∫w dt` barely moves (0.062 s here vs the architect's
+0.064 s prediction; a sustained rate sitting almost exactly on the 60°/s knee
+is a floating-point knife-edge — measured host results are asserted against
+the ≤2.0/1.0/0.5° limits, not pinned to the pre-task-12b values, per the
+dispatch). Hover (`|ω|_lp50 < 15°/s`, `||a|−1| < 0.05 g`) never arms the hold
+and stays bit-identical to task 11. A 300 s stationary run (`|ω| ≈ 0`
+throughout) never arms it either, so `s_fbI` remains exactly as free to move
+as before task 12b (host-tested: the 45°-persistent-error anti-windup test
+runs at zero gyro rate for 300 s and is unaffected).
 
 Bench, 125 s stationary, fw v1.19.18 (tasks 1–4, calibration restored from
 `calibration/board.json` after the reflash): `g_dbgAhrsRealigns` = 1
