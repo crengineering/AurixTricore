@@ -42,9 +42,19 @@ typedef struct
 
 /** Soft-reset, verify WHO_AM_I, and start the gyro and accelerometer in
  *  low-noise mode at 1 kHz.
- *  \return TRUE if WHO_AM_I matched and every configuration write went out.
+ *
+ *  SYS1-001 strand B task 17 (SWE1-FW-008 clause g): a bounded BOOT PUMP
+ *  over Icm42688_reinitStep() (at most ICM42688_REINIT_MAX_STEPS calls,
+ *  Icm42688_delayMs(1 ms) between them) rather than its own blocking
+ *  sequence, so boot and the runtime recovery path (Icm42688_read()) share
+ *  ONE state machine and one register/timing sequence. Only reachable from
+ *  Cpu1_Main.c before the scheduler starts; the runtime recovery path never
+ *  calls this any more, so Icm42688_delayMs() -- the one remaining blocking
+ *  wait in this file -- is reachable only here, still true "one-time" per
+ *  boot the way it always claimed to be.
+ *  \return TRUE if the state machine reached DONE within the step budget.
  *          Safe to call with no sensor attached — returns FALSE without
- *          hanging (every SPI wait is bounded, see Spi.h). */
+ *          hanging (bounded steps, no unbounded SPI wait, see Spi.h). */
 boolean Icm42688_init(void);
 
 /* There is deliberately no Icm42688_isPresent() — see the note in Bmp581.h:
@@ -152,5 +162,29 @@ extern volatile uint32 g_imuSpiBurstMaxTicks;
  *  Checked BEFORE scaling, on the raw words, so it costs one comparison per
  *  axis regardless of outcome. Raw map symbol, no A2L change. */
 extern volatile uint32 g_dbgImuSentinelWords;
+
+/** SYS1-001 strand B task 17 (B6.4, SWE1-FW-008 clause g): advance the
+ *  non-blocking re-init state machine (IDLE / RESET_WAIT / ID_CHECK /
+ *  WAKE_WAIT / CFG / DONE / FAILED) by AT MOST ONE SPI transaction, and
+ *  NEVER a wait -- the reset and wake delays are accumulated from \p dtS
+ *  across calls, the same "duration, not a count" idiom as
+ *  Icm42688_verifyPresence()/Icm42688_reportPlausibility() above, walking
+ *  the same register/value sequence Icm42688_init() always has (soft
+ *  reset -> 10 ms -> WHO_AM_I, retry once on SPI_MODE_3 -> PWR_MGMT0 ->
+ *  10 ms -> GYRO_CONFIG0/ACCEL_CONFIG0/INT_CONFIG/INT_CONFIG0/INT_CONFIG1/
+ *  INT_SOURCE0, one write per call). Presence becomes TRUE only on
+ *  reaching DONE. A device that never answers ends FAILED and re-arms
+ *  (fresh SPI_MODE_0 attempt) after ICM42688_RECOVERY_PERIOD further calls,
+ *  without ever blocking. Called from Icm42688_read()'s recovery branch on
+ *  every dispatch while absent, and from Icm42688_init()'s bounded boot
+ *  pump.
+ *  \param dtS elapsed time since the LAST call to this function [s]
+ *  \return the (possibly just-updated) presence state (TRUE only on DONE). */
+boolean Icm42688_reinitStep(float32 dtS);
+
+/** Task 17 instrumentation, same class of deviation as g_dbgImuStuckDrops
+ *  above: raw map symbols, no A2L/GUI change. */
+extern volatile uint32 g_dbgImuReinits;      /**< re-init state machine reached DONE */
+extern volatile uint32 g_dbgImuReinitFails;  /**< re-init state machine reached FAILED */
 
 #endif /* ICM42688_H */

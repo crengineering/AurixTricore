@@ -639,6 +639,35 @@ void test_40_consecutive_slew_rejections_do_not_realign(void)
     }
 }
 
+/* ==========================================================================
+ * SYS1-001 strand B task 17 (B6.4, SWE1-FW-008 clause g): g_dbgNavStepMaxTicks
+ * -- a wiring/sanity check only; the actual bound
+ * (NAVTASK_DISPATCH_PERIOD_US, 500 us) is bench-measured, not host-provable
+ * against a fake clock.
+ * ======================================================================== */
+
+void test_navtask_step_measures_its_own_duration(void)
+{
+    uint32 before;
+
+    FakeStm_reset();
+    FakeStm_setAutoAdvance(10u);   /* every SysTime_getTicks() read moves the
+                                     * fake clock, so NavTask_step's own
+                                     * entry/exit bracket sees a nonzero,
+                                     * monotonically sensible delta */
+    NavTask_init();
+
+    before = g_dbgNavStepMaxTicks;
+    NavTask_step();
+
+    TEST_ASSERT_TRUE_MESSAGE(g_dbgNavStepMaxTicks >= before,
+        "g_dbgNavStepMaxTicks must never decrease");
+    TEST_ASSERT_TRUE_MESSAGE(g_dbgNavStepMaxTicks > 0u,
+        "NavTask_step must measure a nonzero duration once the clock advances");
+
+    FakeStm_setAutoAdvance(0u);   /* leave the fake clock as every other test expects it */
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -670,5 +699,6 @@ int main(void)
     RUN_TEST(test_gyro_slew_ok_accepts_190dps_per_tick_ramp);
     RUN_TEST(test_slew_rejection_prevents_corrupt_word_from_moving_yaw);
     RUN_TEST(test_40_consecutive_slew_rejections_do_not_realign);
+    RUN_TEST(test_navtask_step_measures_its_own_duration);
     return UNITY_END();
 }

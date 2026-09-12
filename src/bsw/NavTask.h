@@ -127,4 +127,13 @@ extern volatile uint32 g_dbgNavDtShortMinTicks;
  *  to a short/long-dt classification. */
 extern volatile uint32 g_dbgImuReadFail;
 
+/** SYS1-001 strand B task 17 (B6.4, SWE1-FW-008 clause g): running max
+ *  duration of NavTask_step() itself, STM0 ticks, since boot -- brackets
+ *  the WHOLE dispatch (present or absent, new-sample or timed-out), the
+ *  same way g_imuSpiBurstMaxTicks (Icm42688.c) brackets exactly the SPI
+ *  transfer. Names the number clause (g)'s bound
+ *  ("no single NavTask_step dispatch exceeds NAVTASK_DISPATCH_PERIOD_US")
+ *  is checked against -- nothing measured this before task 17. */
+extern volatile uint32 g_dbgNavStepMaxTicks;
+
 #endif /* NAVTASK_H */

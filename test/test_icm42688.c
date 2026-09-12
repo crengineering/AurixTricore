@@ -1,7 +1,9 @@
 #include "unity.h"
 #include "fakes/Ifx_Types.h"
 #include "fakes/FakeSpi.h"
+#include "fakes/IfxStm.h"
 #include "../src/bsw/Icm42688.h"
+#include "../src/bsw/Spi.h"   /* SPI_MODE_0/SPI_MODE_3 -- task 17 mode-retry tests */
 #include <math.h>
 #include <stdio.h>
 
@@ -11,8 +13,45 @@
  * NavTask.c actually would. */
 #define B5_DT   (1.0f / 1014.2f)
 
-void setUp(void) { FakeSpi_reset(); }
+/* SYS1-001 strand B task 17 (B6.4): the same rate, used to drive
+ * Icm42688_reinitStep() the way Icm42688_read()'s absent branch actually
+ * would (NavTask_step polls every ~500 us; a genuinely absent sensor's own
+ * edges never arrive, so every dispatch takes the no-new-edge path and
+ * calls Icm42688_read() at that rate). */
+#define T17_DT  (0.0005f)
+
+void setUp(void)
+{
+    FakeSpi_reset();
+    FakeStm_reset();
+    /* Task 17: these two are plain production globals (Icm42688.h), not
+     * reset by any driver call -- zero them per test the same way FakeSpi/
+     * FakeStm reset their own state, so each test's assertions are against
+     * a known baseline rather than whatever earlier tests accumulated. */
+    g_dbgImuReinits     = 0u;
+    g_dbgImuReinitFails = 0u;
+}
 void tearDown(void) {}
+
+/* Task 17: Icm42688_reinitStep()'s state machine is file-scope static in
+ * Icm42688.c and persists across tests within this executable (like
+ * s_icm42688Present always has) -- there is no test-only reset, so a test
+ * that needs a FRESH IDLE start drives the module there through its own
+ * public interface: a healthy Icm42688_init() first guarantees a known
+ * DONE (present TRUE), then one read() with the bus down forces exactly
+ * the "Lost it" path (Icm42688_reinitStart()) into IDLE. */
+static void icm42688_forceIdle(void)
+{
+    Icm42688_Sample sample;
+
+    FakeSpi_setWhoAmI(ICM42688_WHO_AM_I_VALUE);
+    FakeSpi_setBusOk(TRUE);
+    TEST_ASSERT_TRUE_MESSAGE(Icm42688_init(), "test setup: boot must reach DONE");
+
+    FakeSpi_setBusOk(FALSE);
+    (void)Icm42688_read(&sample);
+    FakeSpi_setBusOk(TRUE);
+}
 
 void test_nominal_plausible(void)
 {
@@ -200,44 +239,240 @@ void test_single_overrange_sample_does_not_drop_presence(void)
     }
 }
 
-void test_replug_reruns_init_exactly_once(void)
+void test_replug_reinitialises_via_the_nonblocking_state_machine(void)
 {
+    /* Task 17 (B6.4) superseded the old exact-soft-reset-count assertion:
+     * the state machine now re-attempts on its OWN cadence (RESET_WAIT/
+     * WAKE_WAIT timing plus the FAILED backoff), not a single lightweight
+     * probe every ICM42688_RECOVERY_PERIOD calls -- what must still hold is
+     * the OUTCOME: a bus that keeps failing never falsely reports present,
+     * a replugged device recovers, and a device that stays present is never
+     * re-initialised again. */
     Icm42688_Sample sample;
     int             i;
+    boolean         present;
 
     TEST_ASSERT_TRUE(Icm42688_init());
-    TEST_ASSERT_EQUAL_UINT32(1u, FakeSpi_softResetWriteCount());
+    TEST_ASSERT_EQUAL_UINT32(1u, g_dbgImuReinits);
+    FakeStm_reset();   /* the boot pump's own delayMs calls are legitimate;
+                        * only the runtime recovery path below must be silent */
+
+    /* Icm42688_read()'s absent branch measures ITS OWN dt from SysTime_
+     * getTicks() (it has no dtS parameter) -- auto-advance the fake clock
+     * by ~500 us/call (50000 STM0 ticks @ 100 MHz), the real poll rate
+     * NavTask_step drives it at, or the wait states never see elapsed time
+     * and the machine never leaves RESET_WAIT. */
+    FakeStm_setAutoAdvance(50000u);
 
     /* Unplug: the bus itself now fails outright (the driver's EXISTING
-     * read-fail path, unchanged by task 5). Run through more than two full
-     * ICM42688_RECOVERY_PERIOD (50-call) cycles -- both recovery attempts
-     * fail because the bus is down, so Icm42688_init() must not run again. */
+     * read-fail path). Run through several full attempt+backoff cycles --
+     * presence must never read TRUE while the bus is down, and the
+     * non-blocking contract must hold throughout. */
     FakeSpi_setBusOk(FALSE);
-    for (i = 0; i < 120; ++i)
+    present = TRUE;
+    for (i = 0; i < 400; ++i)
     {
-        (void)Icm42688_read(&sample);
+        present = Icm42688_read(&sample);
+        TEST_ASSERT_FALSE_MESSAGE(present, "a failing bus must never report present");
     }
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1u, FakeSpi_softResetWriteCount(),
-        "a bus that keeps failing must never re-run init");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1u, g_dbgImuReinits,
+        "a bus that keeps failing must never reach DONE");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0u, FakeStm_waitTicksCallCount(),
+        "the runtime recovery path must never call Icm42688_delayMs()");
 
-    /* Replug: the bus (and WHO_AM_I) answer correctly again. The recovery
-     * probe fires again within one more 50-call window. */
+    /* Replug: the bus (and WHO_AM_I) answer correctly again. Recovery is
+     * bounded but not instantaneous -- drive enough calls for at least one
+     * full attempt cycle. */
     FakeSpi_setBusOk(TRUE);
-    for (i = 0; i < 50; ++i)
+    for (i = 0; (i < 400) && (present == FALSE); ++i)
     {
-        (void)Icm42688_read(&sample);
+        present = Icm42688_read(&sample);
     }
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(2u, FakeSpi_softResetWriteCount(),
-        "a replugged, correctly-answering device must re-run init exactly once");
+    TEST_ASSERT_TRUE_MESSAGE(present, "a replugged, correctly-answering device must recover");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(2u, g_dbgImuReinits,
+        "exactly one more DONE for this one replug");
 
     /* And exactly once -- continuing to read a healthy, present device must
-     * never call init again. */
-    for (i = 0; i < 200; ++i)
+     * never re-initialise again. */
+    for (i = 0; i < 500; ++i)
     {
         (void)Icm42688_read(&sample);
     }
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(2u, FakeSpi_softResetWriteCount(),
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(2u, g_dbgImuReinits,
         "a device that stays present must never be re-initialised");
+}
+
+/* ==========================================================================
+ * SYS1-001 strand B task 17 (B6.4, SWE1-FW-008 clause g): the non-blocking
+ * re-init state machine, Icm42688_reinitStep().
+ * ======================================================================== */
+
+void test_reinitstep_issues_at_most_one_spi_transaction_per_call(void)
+{
+    int i;
+
+    for (i = 0; i < 200; ++i)
+    {
+        const uint32 before = FakeSpi_transferCallCount();
+        uint32       delta;
+        char         msg[64];
+
+        (void)Icm42688_reinitStep(T17_DT);
+        delta = FakeSpi_transferCallCount() - before;
+        (void)snprintf(msg, sizeof msg, "call %d issued %u SPI transactions", i, (unsigned)delta);
+        TEST_ASSERT_TRUE_MESSAGE(delta <= 1u, msg);
+    }
+}
+
+void test_reinitstep_never_calls_delayms(void)
+{
+    int i;
+
+    for (i = 0; i < 200; ++i)
+    {
+        (void)Icm42688_reinitStep(T17_DT);
+    }
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0u, FakeStm_waitTicksCallCount(),
+        "Icm42688_reinitStep() must never wait -- Icm42688_delayMs() is boot-pump-only");
+}
+
+void test_reinitstep_register_sequence_is_byte_identical_to_blocking(void)
+{
+    /* Golden trace, captured from the pre-task-17 blocking Icm42688_init():
+     * DEVICE_CONFIG=SOFT_RESET, PWR_MGMT0, GYRO_CONFIG0, ACCEL_CONFIG0,
+     * INT_CONFIG, INT_CONFIG0, INT_CONFIG1, INT_SOURCE0, in that order --
+     * the WHO_AM_I read between the first two is a READ (rx != NULL_PTR),
+     * not logged here, same as the fake's write-only log always excluded
+     * it. */
+    static const uint8 expectReg[8] = { 0x11u, 0x4Eu, 0x4Fu, 0x50u, 0x14u, 0x63u, 0x64u, 0x65u };
+    static const uint8 expectVal[8] = { 0x01u, 0x0Fu, 0x06u, 0x06u, 0x03u, 0x00u, 0x00u, 0x08u };
+    int i;
+
+    TEST_ASSERT_TRUE(Icm42688_init());
+    TEST_ASSERT_EQUAL_UINT32(8u, FakeSpi_writeLogCount());
+    for (i = 0; i < 8; ++i)
+    {
+        char msg[64];
+        (void)snprintf(msg, sizeof msg, "write %d: reg 0x%02X val 0x%02X",
+            i, FakeSpi_writeLogReg((uint32)i), FakeSpi_writeLogValue((uint32)i));
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(expectReg[i], FakeSpi_writeLogReg((uint32)i), msg);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(expectVal[i], FakeSpi_writeLogValue((uint32)i), msg);
+    }
+}
+
+void test_reinitstep_reaches_done_in_40_to_64_steps_at_500us(void)
+{
+    boolean present = FALSE;
+    int     steps;
+
+    icm42688_forceIdle();
+    for (steps = 1; (steps <= 64) && (present == FALSE); ++steps)
+    {
+        present = Icm42688_reinitStep(T17_DT);
+    }
+    {
+        char msg[64];
+        (void)snprintf(msg, sizeof msg, "DONE reached at step %d", steps - 1);
+        TEST_ASSERT_TRUE_MESSAGE(present, msg);
+        TEST_ASSERT_TRUE_MESSAGE((steps - 1) >= 40, msg);
+        TEST_ASSERT_TRUE_MESSAGE((steps - 1) <= 64, msg);
+    }
+}
+
+void test_reinitstep_mode0_failure_retries_mode3_exactly_once_then_failed(void)
+{
+    /* A WHO_AM_I that never matches on EITHER mode: ID_CHECK fails, retries
+     * once on SPI_MODE_3 (exactly one extra Spi_setMode() call beyond
+     * Icm42688_reinitStart()'s own initial MODE_0), then FAILED --
+     * observable via g_dbgImuReinitFails, since FAILED and "still working"
+     * are otherwise both just "present == FALSE". */
+    int i;
+    boolean present = TRUE;
+
+    icm42688_forceIdle();
+    FakeSpi_reset();            /* clean SPI-side counters; FSM stays IDLE */
+    FakeStm_reset();            /* forceIdle()'s own boot pump legitimately
+                                  * called delayMs -- only what follows here
+                                  * must stay silent */
+    FakeSpi_setWhoAmI(0x00u);   /* never matches ICM42688_WHO_AM_I_VALUE */
+
+    for (i = 0; (i < 64) && (g_dbgImuReinitFails == 0u); ++i)
+    {
+        present = Icm42688_reinitStep(T17_DT);
+    }
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1u, g_dbgImuReinitFails,
+        "a WHO_AM_I that never matches must reach FAILED exactly once");
+    TEST_ASSERT_FALSE(present);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SPI_MODE_3, Spi_getMode(),
+        "the retry must have switched to SPI_MODE_3");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1u, FakeSpi_setModeCallCount(),
+        "exactly one retry switch, from a state machine already parked at "
+        "SPI_MODE_0 (icm42688_forceIdle() + FakeSpi_reset())");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0u, FakeStm_waitTicksCallCount(),
+        "reaching FAILED must never have blocked");
+}
+
+void test_reinitstep_reaches_failed_and_rearms_after_recovery_period(void)
+{
+    /* Continuation of the scenario above: FAILED must not be permanent --
+     * ICM42688_RECOVERY_PERIOD (50) further calls re-arm a fresh attempt
+     * (SPI_MODE_0 again), all without ever blocking. */
+    int i;
+
+    icm42688_forceIdle();
+    FakeSpi_reset();
+    FakeStm_reset();
+    FakeSpi_setWhoAmI(0x00u);
+    for (i = 0; (i < 64) && (g_dbgImuReinitFails == 0u); ++i)
+    {
+        (void)Icm42688_reinitStep(T17_DT);
+    }
+    TEST_ASSERT_EQUAL_UINT32(1u, g_dbgImuReinitFails);
+
+    for (i = 0; i < 50; ++i)
+    {
+        (void)Icm42688_reinitStep(T17_DT);
+    }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SPI_MODE_0, Spi_getMode(),
+        "50 calls in FAILED must re-arm a fresh SPI_MODE_0 attempt");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0u, FakeStm_waitTicksCallCount(),
+        "the FAILED backoff must never have blocked");
+
+    /* And the re-armed attempt can actually succeed once WHO_AM_I starts
+     * answering correctly again. */
+    FakeSpi_setWhoAmI(ICM42688_WHO_AM_I_VALUE);
+    {
+        boolean present = FALSE;
+        for (i = 0; (i < 64) && (present == FALSE); ++i)
+        {
+            present = Icm42688_reinitStep(T17_DT);
+        }
+        TEST_ASSERT_TRUE_MESSAGE(present, "the re-armed attempt must be able to reach DONE");
+    }
+}
+
+void test_reinitstep_presence_true_only_on_done(void)
+{
+    int i;
+
+    icm42688_forceIdle();
+    for (i = 0; i < 48; ++i)
+    {
+        const boolean present = Icm42688_reinitStep(T17_DT);
+        if (present != FALSE)
+        {
+            /* the ONLY way present can read TRUE is DONE -- confirmed by
+             * the 40-64 step test above; here just confirm it eventually
+             * happens and never earlier than the reset+wake timing allows */
+            char msg[64];
+            (void)snprintf(msg, sizeof msg, "present became TRUE at call %d (< 40 is too early)", i);
+            TEST_ASSERT_TRUE_MESSAGE(i >= 39, msg);
+        }
+        else
+        {
+            /* still IDLE/RESET_WAIT/ID_CHECK/WAKE_WAIT/CFG -- correct */
+        }
+    }
 }
 
 /* ==========================================================================
@@ -351,7 +586,14 @@ int main(void)
     RUN_TEST(test_silent_drdy_with_good_whoami_keeps_presence);
     RUN_TEST(test_silent_drdy_with_failing_whoami_drops_within_200ms);
     RUN_TEST(test_single_overrange_sample_does_not_drop_presence);
-    RUN_TEST(test_replug_reruns_init_exactly_once);
+    RUN_TEST(test_replug_reinitialises_via_the_nonblocking_state_machine);
+    RUN_TEST(test_reinitstep_issues_at_most_one_spi_transaction_per_call);
+    RUN_TEST(test_reinitstep_never_calls_delayms);
+    RUN_TEST(test_reinitstep_register_sequence_is_byte_identical_to_blocking);
+    RUN_TEST(test_reinitstep_reaches_done_in_40_to_64_steps_at_500us);
+    RUN_TEST(test_reinitstep_mode0_failure_retries_mode3_exactly_once_then_failed);
+    RUN_TEST(test_reinitstep_reaches_failed_and_rearms_after_recovery_period);
+    RUN_TEST(test_reinitstep_presence_true_only_on_done);
     RUN_TEST(test_single_sentinel_word_is_rejected_but_presence_unchanged);
     RUN_TEST(test_0x8001_word_one_lsb_off_sentinel_is_accepted);
     return UNITY_END();

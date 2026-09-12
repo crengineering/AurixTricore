@@ -222,6 +222,13 @@ volatile uint32 g_dbgNavDtShortMinTicks;
 volatile uint32 g_dbgImuReadFail;
 /* cppcheck-suppress-end misra-c2012-8.7 */
 
+/* cppcheck-suppress-begin misra-c2012-8.7 ; deviation: read over XCP
+ * SHORT_UPLOAD by raw address (tools/xcp_read.py), never referenced by C
+ * code outside this file -- same class of deviation as g_imuSpiBurstMaxTicks
+ * (Icm42688.c). SYS1-001 task 17 instrumentation: see NavTask.h. */
+volatile uint32 g_dbgNavStepMaxTicks;
+/* cppcheck-suppress-end misra-c2012-8.7 */
+
 void NavTask_init(void)
 {
     NavState_init();        /* the publish target, before anything publishes */
@@ -264,6 +271,13 @@ void NavTask_init(void)
  * period) is the real clock. See the body below for the gate. */
 void NavTask_step(void)
 {
+    /* SYS1-001 strand B task 17 (B6.4, SWE1-FW-008 clause g): bracket the
+     * WHOLE dispatch, the same way g_imuSpiBurstTicks (Icm42688.c) brackets
+     * exactly the SPI transfer -- this is the number the clause's own
+     * "no single NavTask_step dispatch exceeds NAVTASK_DISPATCH_PERIOD_US"
+     * bound is checked against, and none existed before this task. */
+    const uint32 stepStartTicks = (uint32)SysTime_getTicks();
+    uint32  stepTicks;
     uint32  edgeSeq;
     uint32  edgeTicks;
     boolean newSample;
@@ -544,5 +558,15 @@ void NavTask_step(void)
                               sample.acc, sample.gyro, sample.tempC,
                               s_imuLivenessAccum);
         }
+    }
+
+    stepTicks = (uint32)SysTime_getTicks() - stepStartTicks;
+    if (stepTicks > g_dbgNavStepMaxTicks)
+    {
+        g_dbgNavStepMaxTicks = stepTicks;
+    }
+    else
+    {
+        /* not a new max */
     }
 }
