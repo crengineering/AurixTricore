@@ -51,6 +51,16 @@
  * spare. */
 #define NAVTASK_NO_EDGE_TIMEOUT_S   (0.02f)
 
+/* B4b (SYS1-001 strand B, evidence 952275AD99001303): how long DRDY may stay
+ * silent before this task starts actively probing WHO_AM_I
+ * (Icm42688_verifyPresence()), deliberately LONGER than
+ * NAVTASK_NO_EDGE_TIMEOUT_S above -- that fallback already re-reads the bus
+ * every dispatch once silent, which is what catches a genuine SPI failure;
+ * this one exists for the case that read keeps SUCCEEDING (a frozen frame),
+ * so it must not fire on every ordinary short gap the first fallback already
+ * handles cleanly. */
+#define NAVTASK_STUCK_VERIFY_TIMEOUT_S   (0.2f)
+
 /* flight-reviewer FAIL, SYS1-001 regression: the no-new-edge (timed out)
  * branch below reports elapsedTime = 0.0f -- deliberately, so it stays
  * outside the dt window and ahrsInputOk/fusionInputOk are never tricked into
@@ -355,6 +365,24 @@ void NavTask_step(void)
                 g_dbgImuReadFail++;
             }
 
+            /* B4b trigger 1: DRDY has been silent for a while (longer than
+             * the dt-window fallback above, which already re-reads the bus
+             * every dispatch) -- ask the sensor directly whether it is still
+             * there. Only relevant on the pure-timeout path: a genuine new
+             * edge (even a LONG one) means DRDY is not silent at all. Updates
+             * `present` in place so a drop is visible to ahrsInputOk/
+             * fusionInputOk on THIS same tick, not one tick late. */
+            if ((newSample == FALSE)
+                && (((float32)g_imuDrdyStaleTicks * NAVTASK_TICKS_TO_S)
+                    >= NAVTASK_STUCK_VERIFY_TIMEOUT_S))
+            {
+                present = Icm42688_verifyPresence(NAVTASK_TIMEDOUT_FAULT_DT_S);
+            }
+            else
+            {
+                /* not silent long enough yet -- trigger 1 stays quiet */
+            }
+
             /* Attitude first, then navigation: the channel filters need
              * acceleration resolved into NED, and only the AHRS can do that.
              * ahrs.state does not exist yet at this point, so this first gate
@@ -420,8 +448,20 @@ void NavTask_step(void)
              * tick's contribution -- see NavState_t.imuLiveness. */
             {
                 float32 sampleLiveness = 0.0f;
+                boolean plausible;
+                float32 plausibleDt = elapsedTime;
 
-                (void)Icm42688_plausible(&sample, &sampleLiveness);
+                /* Same override as ahrsDt above and for the same reason:
+                 * elapsedTime is deliberately 0.0f on the no-new-edge path,
+                 * but Icm42688_reportPlausibility()'s hold clock (B4b
+                 * trigger 2) needs a real, positive duration on every call. */
+                if (newSample == FALSE)
+                {
+                    plausibleDt = NAVTASK_TIMEDOUT_FAULT_DT_S;
+                }
+
+                plausible = Icm42688_plausible(&sample, &sampleLiveness);
+                present   = Icm42688_reportPlausibility(plausible, plausibleDt);
                 s_imuLivenessAccum += sampleLiveness;
             }
 

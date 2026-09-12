@@ -92,6 +92,46 @@
 #define ICM42688_RESET_MS            (10u)
 #define ICM42688_WAKE_MS             (10u)
 
+/* B4b (SYS1-001 strand B, evidence 952275AD99001303): "present" going stale
+ * without ever going FALSE. Icm42688_read()'s own SPI-failure path (below)
+ * only fires when the transfer itself errors; an unpowered/floating part
+ * still clocks out a well-formed, frozen frame (constant 0x8000/axis), so
+ * that path never trips. Two independent, time-gated triggers close the
+ * gap, neither reachable while the sensor streams real data:
+ *   trigger 1 -- Icm42688_verifyPresence(): NavTask calls this on its OWN
+ *     no-edge path once DRDY has been silent for a while (longer than the
+ *     dt-window fallback that already exists) -- one WHO_AM_I read, capped
+ *     at this rate so a genuinely dead/unplugged part is not hammered.
+ *   trigger 2 -- Icm42688_reportPlausibility(): NavTask forwards its own
+ *     Icm42688_plausible() result (NavTask.c already computes it and used to
+ *     discard it) every dispatch; a CONSECUTIVE run of implausible samples
+ *     this long (INT1 still firing, payload stuck) also drops presence.
+ * Both accumulate a DURATION from the caller's dt, not a sample/call count --
+ * same idiom as Ahrs.c's AHRS_FAULT_HOLD_S/s_faultHoldS, for the same reason
+ * T14 gives (docs/REFACTORING_PLAN.md §3.8): a count silently changes meaning
+ * with the task rate, a duration does not. */
+#define ICM42688_STUCK_HOLD_S     (0.1f)    /* trigger 2: 100 ms continuously implausible */
+#define ICM42688_VERIFY_PERIOD_S  (0.2f)    /* trigger 1: <= 5 Hz repeat rate on the probe */
+
+/* Upper bound on a dt accepted by either hold-clock -- same discipline as
+ * Ahrs.c's AHRS_FAULT_DT_MAX_S: reject only what must never be trusted as a
+ * real duration (<=0, NaN -- compares false against every relational
+ * operator here -- or absurd), not a plausible NavTask dispatch interval.
+ * 1 s is generous headroom over anything NavTask.c can pass (its own
+ * NAVTASK_DT_MAX_S is 0.2 s). */
+#define ICM42688_HOLD_DT_MAX_S    (1.0f)
+
+static float32 s_icm42688StuckHoldS;      /* trigger 2: consecutive implausible dt [s] */
+static float32 s_icm42688VerifySinceS;    /* trigger 1: dt since the last WHO_AM_I probe [s] */
+
+/* cppcheck-suppress-begin misra-c2012-8.7 ; deviation: read over XCP
+ * SHORT_UPLOAD by raw address (tools/xcp_read.py), never referenced by C
+ * code outside this file -- same class of deviation as g_imuSpiBurst*
+ * above and g_dbgAhrsRealigns (Ahrs.c). */
+volatile uint32 g_dbgImuStuckDrops;      /**< trigger 2 fired: presence dropped */
+volatile uint32 g_dbgImuWhoAmIFail;      /**< trigger 1's probe read a bad/no WHO_AM_I */
+/* cppcheck-suppress-end misra-c2012-8.7 */
+
 /* Hot-plug recovery: retry this often, in CALLS, while the device is missing.
  * Was "50 per second, ~1 s" at the 20 ms IMU task (T13 and earlier); T15
  * (docs/REFACTORING_PLAN.md §3.6) gates NavTask_step's call to this function
@@ -254,6 +294,14 @@ boolean Icm42688_init(void)
     }
 
     s_icm42688Present = ok;
+
+    /* B4b: a (re)init is exactly the point at which any stale hold state
+     * from before must not carry over -- a freshly (re)configured part gets
+     * a full, immediate trigger-1 allowance (see Icm42688_verifyPresence())
+     * and a clean trigger-2 window. */
+    s_icm42688StuckHoldS   = 0.0f;
+    s_icm42688VerifySinceS = ICM42688_VERIFY_PERIOD_S;
+
     return ok;
 }
 
@@ -332,6 +380,102 @@ boolean Icm42688_read(Icm42688_Sample *sample)
         }
     }
     return ok;
+}
+
+boolean Icm42688_verifyPresence(float32 dtS)
+{
+    if (s_icm42688Present != FALSE)
+    {
+        if ((dtS > 0.0f) && (dtS < ICM42688_HOLD_DT_MAX_S))
+        {
+            s_icm42688VerifySinceS += dtS;
+        }
+        else
+        {
+            /* not a usable interval -- do not advance the rate-cap clock */
+        }
+
+        if (s_icm42688VerifySinceS >= ICM42688_VERIFY_PERIOD_S)
+        {
+            uint8 whoAmI = 0u;
+            boolean ok;
+
+            s_icm42688VerifySinceS = 0.0f;
+            ok = Icm42688_readWhoAmI(&whoAmI);
+            if ((ok == FALSE) || (whoAmI != ICM42688_WHO_AM_I_VALUE))
+            {
+                /* Answers, but wrongly, or does not answer at all: either
+                 * way the device this task has been trusting is gone. Drop
+                 * presence -- the existing recovery probe in Icm42688_read()
+                 * (gated on s_icm42688Present == FALSE) takes it from here,
+                 * unchanged. */
+                g_dbgImuWhoAmIFail++;
+                s_icm42688Present = FALSE;
+            }
+            else
+            {
+                /* Answered correctly: alive, just not producing DRDY edges
+                 * right now (a legitimately quiet bus, or an INT1 problem
+                 * that a data path is not the one to diagnose). Keep it. */
+            }
+        }
+        else
+        {
+            /* below the rate cap -- no bus access this call */
+        }
+    }
+    else
+    {
+        /* Already known absent -- Icm42688_read()'s own recovery probe owns
+         * reconnection; nothing for this trigger to add, and it must not
+         * keep accumulating a stale rate-cap window while absent. */
+        s_icm42688VerifySinceS = 0.0f;
+    }
+
+    return s_icm42688Present;
+}
+
+boolean Icm42688_reportPlausibility(boolean plausible, float32 dtS)
+{
+    if (s_icm42688Present != FALSE)
+    {
+        if (plausible != FALSE)
+        {
+            s_icm42688StuckHoldS = 0.0f;
+        }
+        else
+        {
+            if ((dtS > 0.0f) && (dtS < ICM42688_HOLD_DT_MAX_S))
+            {
+                s_icm42688StuckHoldS += dtS;
+            }
+            else
+            {
+                /* not a usable interval -- do not advance the hold clock */
+            }
+
+            if (s_icm42688StuckHoldS >= ICM42688_STUCK_HOLD_S)
+            {
+                /* INT1 kept firing (this function is only ever reached
+                 * because a sample was read) but the payload itself has
+                 * stopped moving for the whole hold window -- a frozen,
+                 * well-formed frame, exactly evidence 952275AD99001303. */
+                g_dbgImuStuckDrops++;
+                s_icm42688Present = FALSE;
+            }
+            else
+            {
+                /* still within the hold window -- one bad sample must not
+                 * drop a live sensor */
+            }
+        }
+    }
+    else
+    {
+        s_icm42688StuckHoldS = 0.0f;
+    }
+
+    return s_icm42688Present;
 }
 
 boolean Icm42688_plausible(const Icm42688_Sample *sample, float32 *liveness)

@@ -85,6 +85,37 @@ boolean Icm42688_read(Icm42688_Sample *sample);
  *  \return FALSE on a bus error (outputs undefined). */
 boolean Icm42688_debugDump(uint8 cfg[ICM42688_DUMP_CFG_LEN], uint8 raw[14]);
 
+/** B4b (SYS1-001 strand B, evidence 952275AD99001303): trigger 1 -- a
+ *  targeted liveness probe for the "silent AND maybe gone" case, which
+ *  Icm42688_read()'s own SPI-failure path cannot see (a dead-but-still-
+ *  answering part clocks out a well-formed, frozen frame forever). Call
+ *  from NavTask.c's own no-edge path once DRDY has been silent longer than
+ *  its existing (shorter) dt-window fallback -- \p dtS is the elapsed time
+ *  since the LAST call to this function (same "duration, not a count" idiom
+ *  as Ahrs.c's s_faultHoldS), used only to self-limit the probe to
+ *  <= 5 Hz (ICM42688_VERIFY_PERIOD_S) once presence is being watched; the
+ *  first call after a (re)init fires immediately. No-op (returns the
+ *  current presence unchanged) while already known absent -- the existing
+ *  Icm42688_read() recovery probe owns reconnection.
+ *  \return the (possibly just-updated) presence state. */
+boolean Icm42688_verifyPresence(float32 dtS);
+
+/** B4b: trigger 2 -- drop presence when the sensor answers every SPI
+ *  transfer but the payload has stopped moving (INT1 still firing). Call
+ *  once per NavTask_step dispatch that reads a sample, passing that read's
+ *  own Icm42688_plausible() result and the elapsed time since the LAST call
+ *  (same duration idiom as above). Resets the hold the instant a plausible
+ *  sample is seen, so one implausible sample amid a healthy stream (e.g. a
+ *  single sample past 17 g) never drops a live sensor -- only
+ *  ICM42688_STUCK_HOLD_S (100 ms) of CONSECUTIVE implausible samples does.
+ *  \return the (possibly just-updated) presence state. */
+boolean Icm42688_reportPlausibility(boolean plausible, float32 dtS);
+
+/** B4b instrumentation, same class of deviation as g_imuSpiBurst* above:
+ *  raw map symbols read by tools/xcp_read.py, no A2L/GUI change. */
+extern volatile uint32 g_dbgImuStuckDrops;    /**< trigger 2 dropped presence */
+extern volatile uint32 g_dbgImuWhoAmIFail;    /**< trigger 1 read a bad/no WHO_AM_I */
+
 /** Plausibility band. |a| must stay inside the configured +/-16 g full
  *  scale; a sustained 0 g means a dead element rather than free fall, which
  *  never lasts seconds on the bench. \p liveness receives the sum of every

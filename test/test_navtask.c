@@ -56,6 +56,59 @@ boolean Icm42688_plausible(const Icm42688_Sample *sample, float32 *liveness)
     return FALSE;
 }
 
+/* B4b (SYS1-001 strand B): link-only stubs for the two new presence
+ * triggers, same treatment as Icm42688_read()/Icm42688_plausible() above --
+ * NavTask.c's own wiring (WHEN it calls these, with what dt) is what this
+ * file tests; the triggers' OWN internal logic is the real Icm42688.c,
+ * covered by test_icm42688.c. Trigger 1 is a plain pass-through: nothing
+ * here exercises the no-edge/silent path at the presence level (that is a
+ * driver-only concern once NavTask.c has decided to call it, which
+ * test_navtask.c's stale-tick tests already cover). Trigger 2 keeps a real,
+ * minimal duration accumulator mirroring Icm42688.c's own ICM42688_STUCK_HOLD_S
+ * (0.1 s) so ONE integration test below can prove NavTask_step's wiring
+ * actually drops presence end-to-end; every OTHER existing test in this file
+ * calls Icm42688_plausible() (stubbed FALSE, above) for far fewer than 0.1 s
+ * of accumulated dt, so this does not change their behaviour. */
+static float32 s_stuckHoldS;
+
+boolean Icm42688_verifyPresence(float32 dtS)
+{
+    (void)dtS;
+    return s_icm42688Present;
+}
+
+boolean Icm42688_reportPlausibility(boolean plausible, float32 dtS)
+{
+    if (s_icm42688Present != FALSE)
+    {
+        if (plausible != FALSE)
+        {
+            s_stuckHoldS = 0.0f;
+        }
+        else if ((dtS > 0.0f) && (dtS < 1.0f))
+        {
+            s_stuckHoldS += dtS;
+            if (s_stuckHoldS >= 0.1f)
+            {
+                g_dbgImuStuckDrops++;
+                s_icm42688Present = FALSE;
+            }
+        }
+        else
+        {
+            /* not a usable interval */
+        }
+    }
+    else
+    {
+        s_stuckHoldS = 0.0f;
+    }
+    return s_icm42688Present;
+}
+
+volatile uint32 g_dbgImuStuckDrops;
+volatile uint32 g_dbgImuWhoAmIFail;
+
 /* I5, docs/IMU_INTERRUPT.md 5.5: NavTask_step now reads/writes these two.
  * Their real storage is in ImuInt.c, which pulls in ERU/SRC/Port headers
  * with no host fakes -- stubbed here like every other target-only symbol
@@ -76,6 +129,11 @@ volatile uint32 g_imuDrdyMissedEdges;
 
 void setUp(void)
 {
+    /* B4b: s_stuckHoldS is file-scope so the one integration test below can
+     * observe it end-to-end; reset before every test so accumulation from a
+     * PREVIOUS test (e.g. the 150-dispatch no-edge-timeout run) can never
+     * carry into the next one. */
+    s_stuckHoldS = 0.0f;
 }
 
 void tearDown(void)
@@ -372,6 +430,49 @@ void test_no_edge_timeout_declares_no_sensor_then_realigns_once(void)
     s_icm42688Present = FALSE;   /* leave the stub as every other test expects it */
 }
 
+/* --- B4b (SYS1-001 strand B, evidence 952275AD99001303) -- trigger 2's
+ * WIRING through the real NavTask_step, not just the driver logic
+ * (test_icm42688.c covers Icm42688_reportPlausibility() itself; this proves
+ * NavTask.c actually calls it, with a real dt, on the path that matters). --- */
+
+void test_stuck_sample_drops_presence_after_100ms_via_navtask_wiring(void)
+{
+    NavState_t snap;
+    int        i;
+
+    g_dbgImuStuckDrops = 0u;
+    s_icm42688Present  = TRUE;
+    FakeStm_reset();
+
+    FakeStm_setTicks(0u);
+    g_imuEdge.seq   = 0u;
+    g_imuEdge.ticks = 0u;
+    NavTask_init();
+
+    /* No new edge ever arrives -- every dispatch takes the timed-out branch,
+     * Icm42688_plausible() is stubbed FALSE (above), so
+     * Icm42688_reportPlausibility() accumulates NAVTASK_TIMEDOUT_FAULT_DT_S
+     * (0.5 ms) each call. 250 dispatches = 125 ms, comfortably over the
+     * 100 ms hold (Icm42688.c ICM42688_STUCK_HOLD_S, mirrored in this file's
+     * stub). */
+    FakeStm_setTicks(50000000u);
+    for (i = 0; i < 250; ++i)
+    {
+        NavTask_step();
+    }
+
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1u, g_dbgImuStuckDrops,
+        "250 dispatches (125 ms) of a continuously-implausible sample must "
+        "drop presence exactly once");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(FALSE, s_icm42688Present,
+        "the stub's presence flag must reflect the drop");
+    TEST_ASSERT_TRUE(NavState_get(&snap));
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(FALSE, snap.imuPresent,
+        "NavState must publish the drop on the same tick it happens");
+
+    s_icm42688Present = FALSE;   /* leave the stub as every other test expects it */
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -394,5 +495,6 @@ int main(void)
     RUN_TEST(test_classify_nan_is_none);
     RUN_TEST(test_duplicate_edge_is_consumed_without_publish_and_widens_next_dt);
     RUN_TEST(test_no_edge_timeout_declares_no_sensor_then_realigns_once);
+    RUN_TEST(test_stuck_sample_drops_presence_after_100ms_via_navtask_wiring);
     return UNITY_END();
 }
