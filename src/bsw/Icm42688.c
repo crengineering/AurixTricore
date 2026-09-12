@@ -585,9 +585,14 @@ boolean Icm42688_read(Icm42688_Sample *sample)
          * Icm42688_reportPlausibility() below, so it measures its own --
          * same STM0-tick idiom NavTask.c uses). Called every dispatch while
          * absent, same rate the old blocking recovery probe polled at. */
-        const uint32  nowTicks = (uint32)SysTime_getTicks();
-        const float32 dtS = (float32)(nowTicks - s_icm42688LastAbsentPollTicks)
-                          * ICM42688_TICKS_TO_S;
+        const uint32 nowTicks   = (uint32)SysTime_getTicks();
+        /* MISRA 10.8: cast the plain object, not the composite subtraction
+         * -- casting (nowTicks - s_icm42688LastAbsentPollTicks) directly to
+         * float32 would cast a composite expression across essential type
+         * categories (unsigned -> floating). Same idiom NavTask.c uses for
+         * its own edge-tick delta (`s_calSum[i] / (float32)n`, Ahrs.c). */
+        const uint32 deltaTicks = nowTicks - s_icm42688LastAbsentPollTicks;
+        const float32 dtS = (float32)deltaTicks * ICM42688_TICKS_TO_S;
 
         s_icm42688LastAbsentPollTicks = nowTicks;
         (void)Icm42688_reinitStep(dtS);
