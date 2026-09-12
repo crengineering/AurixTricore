@@ -116,6 +116,20 @@
  * gap that long already IS the outage. */
 #define AHRS_FAULT_DT_MAX_S   (60.0f)
 
+/* B3.3 (SYS1-001 strand B, SWE1-FW-005): a backstop, not the fix -- 1-2
+ * remove the mechanism that let the integrals wind up in the first place,
+ * this bounds what a REMAINING one can do (e.g. a calibration/alignment
+ * residual too small to trip the plausibility checks). twoKi is already
+ * slow (tau ~ 50 s) so an unbounded integral only ever loses slowly, but
+ * "only ever loses slowly" is not the same guarantee as "cannot exceed a
+ * known worst case" -- this makes it the latter. 2.0 deg/s per body axis
+ * matches the worst standing roll/pitch error this defect produced (B1
+ * evidence: 2.8 deg over 45 s -- one twoKi time constant's worth); 1.0 deg/s
+ * on the heading integral is 4x the observed 0.5 deg/s boot-to-boot spread
+ * (SWE1-FW-002's own status note). */
+#define AHRS_FBI_MAX_DPS      (2.0f)
+#define AHRS_FBI_YAW_MAX_DPS  (1.0f)
+
 #define AHRS_DEG_TO_RAD       (0.017453293f)
 #define AHRS_RAD_TO_DEG       (57.29578f)
 #define AHRS_GRAVITY          (9.80665f)
@@ -258,6 +272,33 @@ static float32 ahrs_invSqrt(float32 x)
     else
     {
         /* zero or NaN: the caller re-aligns */
+    }
+
+    return r;
+}
+
+/* B3.3: clamp a scalar into [-limit, +limit]. A NaN fails both comparisons
+ * below and falls through unclamped -- matching this file's own discipline
+ * elsewhere (ahrs_invSqrt, navTask_dtValid): the caller (Ahrs_update) only
+ * ever calls this with a value it just computed from finite inputs times a
+ * bounded gain and a bounded dt, so a NaN here would already mean the
+ * upstream AHRS_INPUT_MAX/dt-window checks were bypassed, not something
+ * this clamp is the right place to paper over. */
+static float32 ahrs_clamp(float32 v, float32 limit)
+{
+    float32 r = v;
+
+    if (v > limit)
+    {
+        r = limit;
+    }
+    else if (v < -limit)
+    {
+        r = -limit;
+    }
+    else
+    {
+        /* already inside the band */
     }
 
     return r;
@@ -846,11 +887,18 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
             {
                 const float32 ki = FusionCal_positive(g_fusionCal.twoKi,
                                                       0.0f, AHRS_TWO_KI);
+                /* B3.3: a backstop bound on each integral, applied right
+                 * where it is produced -- see AHRS_FBI_MAX_DPS/
+                 * AHRS_FBI_YAW_MAX_DPS above for why these numbers and why
+                 * this is not the primary fix (1-2 are). */
+                const float32 fbiMaxRad    = AHRS_FBI_MAX_DPS * AHRS_DEG_TO_RAD;
+                const float32 fbiYawMaxRad = AHRS_FBI_YAW_MAX_DPS * AHRS_DEG_TO_RAD;
+
                 for (i = 0u; i < 3u; i++)
                 {
-                    s_fbI[i] += ki * eAcc[i] * dt;
+                    s_fbI[i] = ahrs_clamp(s_fbI[i] + (ki * eAcc[i] * dt), fbiMaxRad);
                 }
-                s_fbIYaw += ki * eMagD * dt;
+                s_fbIYaw = ahrs_clamp(s_fbIYaw + (ki * eMagD * dt), fbiYawMaxRad);
             }
 
             /* The integral terms ARE the gyro-bias estimate: a rotation error

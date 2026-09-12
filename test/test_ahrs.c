@@ -1314,6 +1314,184 @@ void test_b2_return_to_level_after_mag_error_settles_within_2s(void)
 }
 
 /* ==========================================================================
+ * SYS1-001 Strand B, task 3 (B3.3, SWE1-FW-005): AHRS_FBI_MAX_DPS (2.0/axis,
+ * body) and AHRS_FBI_YAW_MAX_DPS (1.0, heading) -- a backstop, not the fix.
+ *
+ * Both tests use a CHASING error: the injected reference is recomputed every
+ * tick from the estimate's OWN current state plus a fixed 45deg offset, so
+ * the fast (proportional) response can never converge it away -- a FIXED
+ * absolute error self-resolves once the proportional loop tracks it (as
+ * task 0/1's tests already showed: kp_acc/kp_eff,mag pull the estimate to
+ * match within a few time constants, and then the integral has nothing left
+ * to feed on). A chasing error is the only way to sustain forcing for the
+ * whole 300 s and actually reach the clamp, rather than one bounded
+ * transient bump that decays on its own.
+ * ======================================================================== */
+
+void test_b3_yaw_integral_clamped_under_persistent_45deg_error(void)
+{
+    const float yawMaxDps = 1.0f;   /* AHRS_FBI_YAW_MAX_DPS, mirrored (private #define) */
+    Ahrs_Values v; memset(&v, 0, sizeof v);
+    float M[9]; mountMatrix(M);
+    float32 accSensor[3];
+    float   prevBiasZDeg;
+    boolean everNonzero = FALSE;
+    boolean everClamped = FALSE;
+    int     i;
+    const int ticks = (int)(300.0f / B_DT);
+
+    {
+        const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
+        mat3Tvec(M, accLevel, accSensor);
+    }
+    Ahrs_init();
+    bringUp(&v, accSensor);
+    prevBiasZDeg = v.gyroBias[2];
+
+    for (i = 0; i < ticks; ++i)
+    {
+        const float32 wZero[3] = { 0.0f, 0.0f, 0.0f };
+        /* Always 45deg AHEAD of the CURRENT estimate: beta = -(psi_est+45deg)
+         * makes the equilibrium (psi_est = -beta, per test_b1's derivation)
+         * chase itself forever -- see the section comment above. */
+        const float hErrRad = -(v.yawRad + (45.0f * DEG));
+        const float32 fieldNed[3] = { B_MAG_HR * cosf(hErrRad),
+                                       B_MAG_HR * sinf(hErrRad),
+                                       B_MAG_HZ };
+        float32 magS[3];
+        float   biasZDeg;
+        char    msg[128];
+
+        mountInverse(M, fieldNed, magS);
+        Ahrs_setMag(magS, TRUE);
+        Ahrs_update(&v, accSensor, wZero, B_DT, TRUE);
+
+        biasZDeg = v.gyroBias[2];
+        if (fabsf(biasZDeg) > 1.0e-6f) { everNonzero = TRUE; }
+
+        (void)snprintf(msg, sizeof msg,
+            "tick %d: |gyroBias[2]| = %.4f deg/s, must never exceed %.2f deg/s",
+            i, (double)fabsf(biasZDeg), (double)yawMaxDps);
+        TEST_ASSERT_TRUE_MESSAGE(fabsf(biasZDeg) <= (yawMaxDps + 1.0e-3f), msg);
+
+        /* Monotone approach: once moving, must not overshoot back past
+         * where it came from (a bounded, non-oscillating wind-up). */
+        if ((i > 0) && (fabsf(prevBiasZDeg) < (yawMaxDps - 1.0e-3f)))
+        {
+            TEST_ASSERT_TRUE_MESSAGE(fabsf(biasZDeg) >= (fabsf(prevBiasZDeg) - 1.0e-4f),
+                "yaw integral must approach its clamp monotonically, not oscillate");
+        }
+        if (fabsf(biasZDeg) >= (yawMaxDps - 1.0e-3f)) { everClamped = TRUE; }
+        prevBiasZDeg = biasZDeg;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(everNonzero, "the chasing error never moved the yaw integral at all");
+    TEST_ASSERT_TRUE_MESSAGE(everClamped, "300 s of a persistent 45deg error never reached the clamp");
+}
+
+void test_b3_body_integral_clamped_under_persistent_45deg_error(void)
+{
+    const float fbiMaxDps = 2.0f;   /* AHRS_FBI_MAX_DPS, mirrored (private #define) */
+    Ahrs_Values v; memset(&v, 0, sizeof v);
+    float M[9]; mountMatrix(M);
+    float   prevBiasYDeg;
+    boolean everNonzero = FALSE;
+    boolean everClamped = FALSE;
+    int     i;
+    const int ticks = (int)(300.0f / B_DT);
+
+    {
+        const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
+        float32 accSensor[3];
+        mat3Tvec(M, accLevel, accSensor);
+        Ahrs_init();
+        bringUp(&v, accSensor);
+    }
+    prevBiasYDeg = v.gyroBias[1];
+
+    for (i = 0; i < ticks; ++i)
+    {
+        const float32 wZero[3] = { 0.0f, 0.0f, 0.0f };
+        /* Always 45deg AHEAD of the current PITCH estimate -- same chasing
+         * construction as the yaw test above, applied to a pure-pitch
+         * attitude (Spec 3.1's aBody = [sinTheta, 0, -cosTheta] at phi=0)
+         * instead of a heading. Pitch (not roll) because gyroBias[1] is the
+         * axis this drives, matching the standard p/q/r = roll/pitch/yaw
+         * body-rate convention this file uses throughout. */
+        const float pitchChase = v.pitchRad + (45.0f * DEG);
+        const float32 aBody[3] = { sinf(pitchChase), 0.0f, -cosf(pitchChase) };
+        float32 accS[3];
+        float   biasYDeg;
+        char    msg[128];
+
+        mat3Tvec(M, aBody, accS);
+        Ahrs_update(&v, accS, wZero, B_DT, TRUE);
+
+        biasYDeg = v.gyroBias[1];
+        if (fabsf(biasYDeg) > 1.0e-6f) { everNonzero = TRUE; }
+
+        (void)snprintf(msg, sizeof msg,
+            "tick %d: |gyroBias[1]| = %.4f deg/s, must never exceed %.2f deg/s",
+            i, (double)fabsf(biasYDeg), (double)fbiMaxDps);
+        TEST_ASSERT_TRUE_MESSAGE(fabsf(biasYDeg) <= (fbiMaxDps + 1.0e-3f), msg);
+
+        if ((i > 0) && (fabsf(prevBiasYDeg) < (fbiMaxDps - 1.0e-3f)))
+        {
+            TEST_ASSERT_TRUE_MESSAGE(fabsf(biasYDeg) >= (fabsf(prevBiasYDeg) - 1.0e-4f),
+                "body integral must approach its clamp monotonically, not oscillate");
+        }
+        if (fabsf(biasYDeg) >= (fbiMaxDps - 1.0e-3f)) { everClamped = TRUE; }
+        prevBiasYDeg = biasYDeg;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(everNonzero, "the chasing error never moved the body integral at all");
+    TEST_ASSERT_TRUE_MESSAGE(everClamped, "300 s of a persistent 45deg error never reached the clamp");
+}
+
+void test_b3_integral_bit_unchanged_on_untrusted_ticks_even_near_clamp(void)
+{
+    /* Wind the yaw integral up close to its clamp, then feed a run of
+     * invalid ticks (SYS1-001 task 2's freeze path, unaffected by this
+     * task) and check gyroBias is bit-identical across every one of them --
+     * the clamp must never itself touch state on a tick where valid ==
+     * FALSE freezes everything else. */
+    Ahrs_Values v; memset(&v, 0, sizeof v);
+    float M[9]; mountMatrix(M);
+    float32 accSensor[3];
+    float   biasBefore[3];
+    int     i;
+
+    {
+        const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
+        mat3Tvec(M, accLevel, accSensor);
+    }
+    Ahrs_init();
+    bringUp(&v, accSensor);
+
+    for (i = 0; i < (int)(60.0f / B_DT); ++i)
+    {
+        const float32 wZero[3] = { 0.0f, 0.0f, 0.0f };
+        const float   hErrRad  = -(v.yawRad + (45.0f * DEG));
+        const float32 fieldNed[3] = { B_MAG_HR * cosf(hErrRad),
+                                       B_MAG_HR * sinf(hErrRad),
+                                       B_MAG_HZ };
+        float32 magS[3];
+
+        mountInverse(M, fieldNed, magS);
+        Ahrs_setMag(magS, TRUE);
+        Ahrs_update(&v, accSensor, wZero, B_DT, TRUE);
+    }
+    memcpy(biasBefore, v.gyroBias, sizeof biasBefore);
+
+    for (i = 0; i < 40; ++i)
+    {
+        const float32 gyro[3] = { 5.0f, -3.0f, 2.0f };
+        Ahrs_update(&v, accSensor, gyro, 0.001f, FALSE);
+        TEST_ASSERT_EQUAL_FLOAT_ARRAY(biasBefore, v.gyroBias, 3);
+    }
+}
+
+/* ==========================================================================
  * SYS1-001 task 2 -- fault debounce (dispatch/"SYS1-001 - Dispatch.md" §4).
  * The defect: one rejected tick used to re-initialise the whole attitude
  * (deadbeat yaw from the mag, gyro-bias integral zeroed) instead of merely
@@ -1444,6 +1622,9 @@ int main(void)
     RUN_TEST(test_b1_yaw_time_constant_matches_the_bench_fit);
     RUN_TEST(test_b2_mag_error_at_roll90_no_longer_moves_body_bias);
     RUN_TEST(test_b2_return_to_level_after_mag_error_settles_within_2s);
+    RUN_TEST(test_b3_yaw_integral_clamped_under_persistent_45deg_error);
+    RUN_TEST(test_b3_body_integral_clamped_under_persistent_45deg_error);
+    RUN_TEST(test_b3_integral_bit_unchanged_on_untrusted_ticks_even_near_clamp);
     RUN_TEST(test_no_admissible_input_produces_nan);
     RUN_TEST(test_recovers_after_garbage);
     RUN_TEST(test_invalid_sample_freezes_the_estimate);
