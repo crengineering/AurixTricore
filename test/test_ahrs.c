@@ -38,6 +38,11 @@
 #define G_MPS2  9.80665f
 #define DEG     (float)(M_PI / 180.0)
 
+/* AHRS_TWO_KP_ACC is a private #define in Ahrs.c (not part of Ahrs.h) --
+ * mirrored here, read-only, purely to print it next to a MEASURED kp_eff in
+ * test_b0_todays_accel_path_kp_eff below. Not consulted for pass/fail. */
+#define AHRS_TWO_KP_ACC_TEST   (1.0f)
+
 void NvmFake_identity(void);
 
 void setUp(void)
@@ -586,6 +591,283 @@ void test_invalid_sample_freezes_the_estimate(void)
 }
 
 /* ==========================================================================
+ * SYS1-001 Strand B, task 0 -- scaffolding only (dispatch "SYS1-001 -
+ * Dispatch.md" strand B, B4 task 0): characterise TODAY's numbers on
+ * unmodified Ahrs.c, before the mag-decoupling fix (tasks 1-4). Nothing here
+ * changes Ahrs.c; the point is a repeatable, host-only measurement of the
+ * three quantities B2/B3 argue about, so tasks 1-4's own tests have a
+ * baseline to demonstrably beat.
+ * ======================================================================== */
+
+#define B_DT   (1.0f / 1014.2f)     /* measured DRDY rate (docs/IMU_INTERRUPT.md), not the 200 Hz DT above */
+
+/* docs/FUSION.md §5: kp_eff,mag = twoKpMag * h_r^2, h_r = sqrt(h0^2+h1^2)/|B|
+ * the HORIZONTAL fraction of the field, fit from the bench (tau = 7.10 s,
+ * twoKpMag = 0.5) as h_r^2 = (1/7.10)/0.5 = 0.2817 -> h_r = 0.531. This
+ * board's field is far enough from horizontal (magnetic inclination) that
+ * h_z = sqrt(1 - h_r^2) = 0.847 is NOT negligible -- B2(a)'s whole point is
+ * that this nonzero h_z is what puts a north-axis parasite into e_mag; a
+ * synthetic field with h_z = 0 (purely horizontal) would show none, hiding
+ * exactly the mechanism task 0 is meant to characterise. Unit-magnitude
+ * (|B| = 1): only the direction matters, ahrs_errorVector() normalises
+ * s_magB internally either way. */
+#define B_MAG_HR   (0.531f)
+#define B_MAG_HZ   (0.847f)
+
+/** Drive a 1014 Hz trajectory: ramp roll 0 -> rollDeg linearly over rampS
+ *  (pure roll: pitch/yaw held at 0, so body rate = [phiDot,0,0] exactly --
+ *  same kinematics test_yaw_advances_clockwise_and_stays_in_range already
+ *  relies on for a single-axis Euler rate), with an optional lateral accel
+ *  disturbance during the ramp ONLY, then holds at rollDeg (disturbance
+ *  removed) until every checkpoint time has been sampled.
+ *
+ *  The disturbance is applied TANGENT to the roll circle -- d(phi) =
+ *  [0, -cos(phi), sin(phi)], i.e. d/dphi of the true gravity direction
+ *  v(phi) = [0, -sin(phi), -cos(phi)] -- not along body X. Two reasons: (1)
+ *  it is orthogonal to v(phi) by construction, so |a| = sqrt(1+lateralG^2)
+ *  at every phi regardless of the ramp progress (B2(b): "0.15 g lateral ->
+ *  |a| = 1.011 g, inside the window"); (2) it is the ONLY direction that can
+ *  perturb the ROLL-axis correction e[0] = kp*(ay*vz - az*vy) at all -- a
+ *  body-X disturbance is orthogonal to the roll plane entirely and leaves
+ *  e[0] untouched (verified: it moved e[1]/e[2], not e[0], and the measured
+ *  roll error stayed sub-0.02 deg regardless of lateralG). Physically this
+ *  is exactly what a lateral hand disturbance during a roll looks like to
+ *  the accelerometer: an apparent EXTRA rotation, which is what fools the
+ *  correction into pulling the roll estimate off during the maneuver.
+ *  Records |commanded roll - v->rollRad| at each checkpointS[k] (seconds
+ *  from t=0) into errDegAtCheckpoint[k]. All sensor vectors go through M
+ *  (mountMatrix()) exactly as Ahrs_update would decode a real IMU. */
+static void rollRampWithLateralAccel(const float M[9], float rollDeg, float rampS,
+                                      float lateralG, Ahrs_Values *v,
+                                      float *errDegAtCheckpoint,
+                                      const float *checkpointS, int nCheckpoints)
+{
+    const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
+    float32 accSensor0[3];
+    const float phiDotDeg = rollDeg / rampS;
+    const int   rampSteps = (int)(rampS / B_DT + 0.5f);
+    float t  = 0.0f;
+    int   cp = 0;
+    int   i;
+
+    memset(v, 0, sizeof *v);
+    mat3Tvec(M, accLevel, accSensor0);
+    Ahrs_init();
+    bringUp(v, accSensor0);      /* 200 Hz bring-up is fine: only M matters */
+
+    for (i = 0; i < rampSteps; ++i)
+    {
+        const float  phi    = phiDotDeg * t;
+        const float  phiRad = phi * DEG;
+        const float  aBody[3] = { 0.0f,
+                                   -sinf(phiRad) - (lateralG * cosf(phiRad)),
+                                   -cosf(phiRad) + (lateralG * sinf(phiRad)) };
+        const float  wBody[3] = { phiDotDeg, 0.0f, 0.0f };
+        float32 accS[3];
+        float32 gyroS[3];
+
+        mat3Tvec(M, aBody,  accS);
+        mat3Tvec(M, wBody,  gyroS);
+        Ahrs_update(v, accS, gyroS, B_DT, TRUE);
+        t += B_DT;
+
+        while ((cp < nCheckpoints) && (t >= checkpointS[cp]))
+        {
+            errDegAtCheckpoint[cp] = fabsf(rollDeg - (v->rollRad / DEG));
+            cp++;
+        }
+    }
+
+    {
+        const float   aBodyHold[3] = { 0.0f, -sinf(rollDeg * DEG), -cosf(rollDeg * DEG) };
+        const float32 wZero[3]     = { 0.0f, 0.0f, 0.0f };
+        float32 accS[3];
+
+        mat3Tvec(M, aBodyHold, accS);
+        while (cp < nCheckpoints)
+        {
+            Ahrs_update(v, accS, wZero, B_DT, TRUE);
+            t += B_DT;
+            if (t >= checkpointS[cp])
+            {
+                errDegAtCheckpoint[cp] = fabsf(rollDeg - (v->rollRad / DEG));
+                cp++;
+            }
+        }
+    }
+}
+
+void test_b0_todays_lag_after_90deg_roll_with_lateral_accel(void)
+{
+    /* B3.4's own worked expectation is checked at motion end, +1 s and +3 s
+     * -- task 4 asserts <=2.0/<=1.0/<=0.5 deg there and must FAIL against
+     * this baseline; this test only has to report a real, finite number. */
+    float M[9]; mountMatrix(M);
+    Ahrs_Values v;
+    const float checkpoints[3] = { 1.5f, 2.5f, 4.5f };
+    float err[3];
+
+    rollRampWithLateralAccel(M, 90.0f, 1.5f, 0.15f, &v, err, checkpoints, 3);
+
+    printf("\n  [StrandB task0] 90deg/1.5s roll + 0.15g lateral accel, TODAY's baseline:\n");
+    printf("    error at motion end (t=1.5s): %.3f deg\n", (double)err[0]);
+    printf("    error at t=2.5s (motion +1s): %.3f deg\n", (double)err[1]);
+    printf("    error at t=4.5s (motion +3s): %.3f deg\n", (double)err[2]);
+
+    TEST_ASSERT_TRUE_MESSAGE(isFiniteF(err[0]) && isFiniteF(err[1]) && isFiniteF(err[2]),
+        "lag measurement must produce a finite number even on today's code");
+}
+
+void test_b0_todays_accel_path_kp_eff(void)
+{
+    /* B2(a): "back level, theta_ss = s_fbI/kp_eff (predicted 1.45deg,
+     * measured 2.8deg -- open factor of 2, task 0 settles it)". Force a 20deg
+     * mag heading error while LEVEL for 15 s (the parasite is dominant along
+     * body X per the root cause -- e_mag is not a rotation about the
+     * vertical), read s_fbI[0] there, then remove the disturbance and read
+     * the standing roll error 10 accel time-constants later, true input
+     * staying exactly level throughout.
+     *
+     * The isolated small-signal algebra gives kp_eff == twoKpAcc == 1.0
+     * exactly (e_acc[0] linearises to -kp_acc*sin(theta_est) for a pure roll
+     * offset, so at equilibrium theta_ss = s_fbI0/kp_acc, no factor of 2).
+     * What this experiment actually measures is smaller by roughly two
+     * orders of magnitude -- because e_mag also has a LARGE yaw component
+     * (e[2], tau=7.1s) that is still converging at t=15s, and continues
+     * converging (in the opposite sense, back toward true north) during the
+     * "removed" window; the roll estimate this test reads at the end reflects
+     * that whole coupled yaw/roll trajectory, not s_fbI0 acting in isolation.
+     * That coupling -- not a clean, single-axis proportional gain -- IS
+     * B2(a)'s point, and is exactly what B3.1 (task 1, projecting e_mag onto
+     * d_b) removes. Both numbers are reported; task 1's own acceptance test
+     * (|e_mag x d_b| < 1e-6) is the one that actually settles the mechanism.
+     * gyroBias[i] = s_bias[i] - s_fbI[i]*RAD_TO_DEG (Ahrs.c); bringUp() with
+     * gyro==0 leaves s_bias == 0, so s_fbI[0] = -gyroBias[0]*DEG. */
+    Ahrs_Values v; memset(&v, 0, sizeof v);
+    float M[9]; mountMatrix(M);
+    float32 accSensor[3];
+    float   sFbI0;
+    float   thetaSsDeg;
+    float   kpEff;
+    int     i;
+
+    {
+        const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
+        mat3Tvec(M, accLevel, accSensor);
+    }
+    Ahrs_init();
+    bringUp(&v, accSensor);
+
+    /* 15 s standing 20deg mag heading error, level (matches B2(a)'s own 15 s
+     * worked-example window) -- long enough to move s_fbI[0] measurably,
+     * short enough that the twoKi (tau=50s) slow pole has not yet decayed it. */
+    {
+        const float32 wZero[3] = { 0.0f, 0.0f, 0.0f };
+        const float   hErrRad  = 20.0f * DEG;
+        float32 magBody[3];
+        float32 magS[3];
+
+        magBody[0] = B_MAG_HR * cosf(hErrRad);
+        magBody[1] = B_MAG_HR * sinf(hErrRad);
+        magBody[2] = B_MAG_HZ;
+        mountInverse(M, magBody, magS);
+        Ahrs_setMag(magS, TRUE);
+
+        for (i = 0; i < (int)(15.0f / B_DT); ++i)
+        {
+            Ahrs_update(&v, accSensor, wZero, B_DT, TRUE);
+        }
+    }
+    sFbI0 = -v.gyroBias[0] * DEG;     /* rad/s; s_bias[0] == 0 (still bring-up) */
+
+    /* Remove the disturbance (true north again) and let the fast accel loop
+     * settle -- true input stays exactly level throughout, so any roll the
+     * estimate shows from here on is the false bias made visible. */
+    {
+        const float32 wZero[3] = { 0.0f, 0.0f, 0.0f };
+        float32 magS[3];
+        const float32 magBodyTrue[3] = { B_MAG_HR, 0.0f, B_MAG_HZ };
+
+        mountInverse(M, magBodyTrue, magS);
+        Ahrs_setMag(magS, TRUE);
+
+        for (i = 0; i < (int)(10.0f / B_DT); ++i)   /* ~10 accel time constants */
+        {
+            Ahrs_update(&v, accSensor, wZero, B_DT, TRUE);
+        }
+    }
+    thetaSsDeg = v.rollRad / DEG;
+    kpEff = fabsf(sFbI0) / fabsf(thetaSsDeg * DEG);
+
+    printf("\n  [StrandB task0] accel-path kp_eff, TODAY's baseline:\n");
+    printf("    s_fbI[0] after 15s/20deg mag error (level): %.5f rad/s (%.4f deg/s)\n",
+           (double)sFbI0, (double)(sFbI0 / DEG));
+    printf("    standing roll error back at level:          %.4f deg\n", (double)thetaSsDeg);
+    printf("    kp_eff = |s_fbI0| / |theta_ss|:              %.4f 1/s"
+           " (twoKpAcc = %.2f, twoKpAcc/2 = %.2f)\n",
+           (double)kpEff, (double)AHRS_TWO_KP_ACC_TEST, (double)(AHRS_TWO_KP_ACC_TEST * 0.5f));
+
+    TEST_ASSERT_TRUE_MESSAGE(isFiniteF(kpEff) && (kpEff > 0.0f),
+        "kp_eff measurement must produce a finite, positive number");
+}
+
+void test_b0_todays_delta_s_fbi_after_60s_roll90_with_20deg_mag_error(void)
+{
+    /* Task 2's own acceptance ("20deg mag error at roll 90 for 60s moves
+     * s_fbI[0..2] < 0.05 deg/s") must FAIL against this baseline -- report
+     * what today's undivided integrator actually does. */
+    Ahrs_Values v; memset(&v, 0, sizeof v);
+    float M[9]; mountMatrix(M);
+    float bias0[3];
+    float dSfbi[3];
+    int   i;
+
+    {
+        float checkpoints[1] = { 1.5f };
+        float err[1];
+        rollRampWithLateralAccel(M, 90.0f, 1.5f, 0.0f, &v, err, checkpoints, 1);
+    }
+    memcpy(bias0, v.gyroBias, sizeof bias0);
+
+    {
+        const float32 accBody90[3] = { 0.0f, -1.0f, 0.0f };
+        const float32 wZero[3]     = { 0.0f, 0.0f, 0.0f };
+        const float   hErrRad      = 20.0f * DEG;
+        const float32 fieldNed[3]  = { B_MAG_HR * cosf(hErrRad),
+                                        B_MAG_HR * sinf(hErrRad),
+                                        B_MAG_HZ };
+        float32 accS[3];
+        float32 magBody[3];
+        float32 magS[3];
+
+        mat3Tvec(M, accBody90, accS);
+        /* The field is fixed in NED (heading error rotates it about the
+         * vertical, same as a wrong stored declination/hard-iron residual
+         * would); at roll 90 body != NED, so project through the CURRENT
+         * attitude (Ahrs_nedToBody, public) rather than assuming body
+         * north == NED north the way the level-attitude test above could. */
+        Ahrs_nedToBody(fieldNed, magBody);
+        mountInverse(M, magBody, magS);
+        Ahrs_setMag(magS, TRUE);
+
+        for (i = 0; i < (int)(60.0f / B_DT); ++i)
+        {
+            Ahrs_update(&v, accS, wZero, B_DT, TRUE);
+        }
+    }
+
+    for (i = 0; i < 3; ++i) { dSfbi[i] = (bias0[i] - v.gyroBias[i]) * DEG; }   /* rad/s */
+
+    printf("\n  [StrandB task0] Delta s_fbI after 60s at roll 90deg, 20deg mag error, TODAY's baseline:\n");
+    for (i = 0; i < 3; ++i)
+    {
+        printf("    axis %d: %.5f rad/s (%.4f deg/s)\n", i, (double)dSfbi[i], (double)(dSfbi[i] / DEG));
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(allFinite(dSfbi, 3), "Delta s_fbI measurement must be finite");
+}
+
+/* ==========================================================================
  * SYS1-001 task 2 -- fault debounce (dispatch/"SYS1-001 - Dispatch.md" §4).
  * The defect: one rejected tick used to re-initialise the whole attitude
  * (deadbeat yaw from the mag, gyro-bias integral zeroed) instead of merely
@@ -708,6 +990,9 @@ int main(void)
     RUN_TEST(test_right_wing_down_reads_roll_plus_90);
     RUN_TEST(test_yaw_advances_clockwise_and_stays_in_range);
     RUN_TEST(test_gravity_removed_at_rest_in_any_orientation);
+    RUN_TEST(test_b0_todays_lag_after_90deg_roll_with_lateral_accel);
+    RUN_TEST(test_b0_todays_accel_path_kp_eff);
+    RUN_TEST(test_b0_todays_delta_s_fbi_after_60s_roll90_with_20deg_mag_error);
     RUN_TEST(test_no_admissible_input_produces_nan);
     RUN_TEST(test_recovers_after_garbage);
     RUN_TEST(test_invalid_sample_freezes_the_estimate);

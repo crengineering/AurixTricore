@@ -102,4 +102,18 @@ static inline void mat3Tvec(const float m[9], const float v[3], float o[3])
     o[2] = m[2] * v[0] + m[5] * v[1] + m[8] * v[2];
 }
 
+/** SYS1-001 Strand B task 0: the mag-mount inverse. Ahrs.c's AHRS_MAG_MOUNT_*
+ *  constants are identical to AHRS_MOUNT_* today (both a swap of sensor X/Y
+ *  plus a Z flip -- see Ahrs.c's mounting-transform comment, which also flags
+ *  the mag side as "still a HYPOTHESIS" pending calibration). A test that
+ *  wants a KNOWN body-frame field (to inject a controlled heading error) can
+ *  therefore invert the SAME M test_ahrs.c already measures through the
+ *  accelerometer (mountMatrix()) rather than assuming a second, unverified
+ *  matrix -- this is exactly mat3Tvec, named separately so a mag call site
+ *  reads as what it is. */
+static inline void mountInverse(const float M[9], const float bodyVec[3], float sensorVec[3])
+{
+    mat3Tvec(M, bodyVec, sensorVec);
+}
+
 #endif /* TEST_UTIL_MATH_H */
