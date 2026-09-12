@@ -222,7 +222,12 @@ extern volatile Xcp_Data g_xcpData;
  *   0x50  uint8   ahrsState    Ahrs_State
  *   0x51  uint8   accTrusted
  *   0x52  uint8   magTrusted
- *   0x53  uint8   reserved
+ *   0x53  uint8   accWeightPct SYS1-001 strand B (B3.4): continuous accel
+ *                              trust, 0..100 -- w_norm*w_rate*100, the SAME
+ *                              scalar that now multiplies twoKpAcc's P and I
+ *                              contribution every tick (Ahrs.c). Was the
+ *                              reserved byte here; zero offset change, no
+ *                              A2L/GUI field moves
  *   --- vertical channel ---
  *   0x54  float32 posD         [m], positive DOWN, vs the origin
  *   0x58  float32 velD         [m/s]
@@ -287,7 +292,7 @@ typedef struct
     uint8   ahrsState;
     uint8   accTrusted;
     uint8   magTrusted;
-    uint8   reserved;
+    uint8   accWeightPct;
 
     float32 posD;
     float32 velD;

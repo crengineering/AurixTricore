@@ -35,9 +35,33 @@
 
 /* Accelerometer trust window [g]. Outside it the vector is contaminated by
  * real acceleration and no longer points at gravity, so the filter coasts on
- * the gyro. At rest this board measures |a| = 0.998 g. */
+ * the gyro. At rest this board measures |a| = 0.998 g. Still used verbatim
+ * for the one-shot ahrs_align() gate (a clean, unambiguous reading to start
+ * from); the RUNNING correction below no longer uses it as a hard cut --
+ * see AHRS_ACC_TRUST_FULL_G. */
 #define AHRS_ACC_MIN_G        (0.85f)
 #define AHRS_ACC_MAX_G        (1.15f)
+
+/* B3.4 (SYS1-001 strand B, SWE1-FW-006): a hard |a| window alone accepted a
+ * lateral disturbance at full gain right up to its edge -- 0.15 g sideways
+ * on a 1 g reading gives |a| = 1.011 g, comfortably INSIDE [0.85, 1.15],
+ * while tilting the apparent vertical by 8.5 deg (B2(b)). Two continuous
+ * weights replace the single hard cut, multiplied together into w_acc,
+ * which scales twoKpAcc's P AND I contribution (both go through eAcc, so
+ * scaling eAcc scales both integrator paths that read it):
+ *   w_norm  ramps from 1 (|dev| <= AHRS_ACC_TRUST_FULL_G, +/-5%) down to 0
+ *           at |dev| == AHRS_ACC_MAX_G - 1 (+/-15%, TODAY's outer edge --
+ *           nothing previously rejected is newly accepted).
+ *   w_rate  ramps from 1 (|gyro| <= AHRS_ACC_RATE_FULL_DPS) down to 0 at
+ *           AHRS_ACC_RATE_FULL_DPS + AHRS_ACC_RATE_SPAN_DPS (120 deg/s) --
+ *           fast handling rides the gyro path already (no lag there); this
+ *           is about not trusting the accel DURING it.
+ * accTrusted (Ahrs_Values) becomes (w_acc > 0), the same outer edge as
+ * before; accWeightPct (0..100) publishes w_acc itself. */
+#define AHRS_ACC_TRUST_FULL_G     (0.05f)
+#define AHRS_ACC_TRUST_SPAN_G     ((AHRS_ACC_MAX_G - 1.0f) - AHRS_ACC_TRUST_FULL_G)
+#define AHRS_ACC_RATE_FULL_DPS    (30.0f)
+#define AHRS_ACC_RATE_SPAN_DPS    (90.0f)
 
 /* Magnetometer trust window [gauss]. Earth's field is 0.25..0.65 G worldwide
  * (~0.48 G in Munich); the band is widened to tolerate a residual hard-iron
@@ -299,6 +323,31 @@ static float32 ahrs_clamp(float32 v, float32 limit)
     else
     {
         /* already inside the band */
+    }
+
+    return r;
+}
+
+/* B3.4: clamp a scalar into [0, 1] -- the weight-ramp shape both w_norm and
+ * w_rate share. A NaN input (e.g. an accNorm computed from a NaN sample --
+ * already excluded upstream by AHRS_INPUT_MAX, same reasoning as
+ * ahrs_clamp above) falls through both comparisons and returns v itself
+ * unclamped, same discipline as the rest of this file. */
+static float32 ahrs_clamp01(float32 v)
+{
+    float32 r = v;
+
+    if (v > 1.0f)
+    {
+        r = 1.0f;
+    }
+    else if (v < 0.0f)
+    {
+        r = 0.0f;
+    }
+    else
+    {
+        /* already inside [0,1] */
     }
 
     return r;
@@ -582,8 +631,8 @@ static void ahrs_align(const float32 accBody[3], float32 accNorm)
  *            is untrusted, same as s_fbI[i] keeps contributing through an
  *            accel dropout. */
 static void ahrs_errorVector(const float32 accBody[3], float32 accNorm,
-                             float32 eAcc[3], float32 dB[3], float32 *eMagD,
-                             boolean *accUsed, boolean *magUsed)
+                             float32 wAcc, float32 eAcc[3], float32 dB[3],
+                             float32 *eMagD, boolean *accUsed, boolean *magUsed)
 {
     const float32 downNed[3] = { 0.0f, 0.0f, 1.0f };
 
@@ -596,12 +645,15 @@ static void ahrs_errorVector(const float32 accBody[3], float32 accNorm,
 
     ahrs_nedToBody(downNed, dB);
 
-    if ((accNorm > AHRS_ACC_MIN_G) && (accNorm < AHRS_ACC_MAX_G))
+    if (wAcc > 0.0f)
     {
         /* Where the filter BELIEVES the specific force points: minus the NED
          * down axis, expressed in body. The cross product with what the
          * accelerometer actually measured is the rotation that reconciles the
-         * two — small-angle, so no trigonometry is needed. */
+         * two — small-angle, so no trigonometry is needed. B3.4: wAcc (the
+         * continuous weight, Ahrs_update) scales the WHOLE correction here,
+         * so both the proportional (this) and integral (s_fbI, fed by eAcc)
+         * paths see it together. */
         const float32 up[3] = { 0.0f, 0.0f, -1.0f };
         const float32 recip = 1.0f / accNorm;
         const float32 ax = accBody[0] * recip;
@@ -612,7 +664,7 @@ static void ahrs_errorVector(const float32 accBody[3], float32 accNorm,
         ahrs_nedToBody(up, v);
 
         const float32 kp = FusionCal_positive(g_fusionCal.twoKpAcc, 0.0f,
-                                             AHRS_TWO_KP_ACC);
+                                             AHRS_TWO_KP_ACC) * wAcc;
 
         eAcc[0] = kp * ((ay * v[2]) - (az * v[1]));
         eAcc[1] = kp * ((az * v[0]) - (ax * v[2]));
@@ -622,7 +674,8 @@ static void ahrs_errorVector(const float32 accBody[3], float32 accNorm,
     }
     else
     {
-        /* Contaminated by real acceleration — coast on the gyro. */
+        /* w_acc == 0: past the old hard edge (|a|-1| >= 15%) either way --
+         * contaminated by real acceleration, coast on the gyro. */
     }
 
     if ((s_magNorm > AHRS_MAG_MIN_G) && (s_magNorm < AHRS_MAG_MAX_G))
@@ -775,13 +828,14 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
                  * exactly as they were. */
             }
 
-            out->accNed[0] = 0.0f;
-            out->accNed[1] = 0.0f;
-            out->accNed[2] = 0.0f;
-            out->rate[0]   = 0.0f;
-            out->rate[1]   = 0.0f;
-            out->rate[2]   = 0.0f;
-            out->accMagG   = 0.0f;
+            out->accNed[0]     = 0.0f;
+            out->accNed[1]     = 0.0f;
+            out->accNed[2]     = 0.0f;
+            out->rate[0]       = 0.0f;
+            out->rate[1]       = 0.0f;
+            out->rate[2]       = 0.0f;
+            out->accMagG       = 0.0f;
+            out->accWeightPct  = 0u;
         }
         else
         {
@@ -874,12 +928,30 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
             float32 eAcc[3];
             float32 dB[3];
             float32 eMagD;
+            float32 wAcc;
             float32 wx;
             float32 wy;
             float32 wz;
             float32 recipNorm;
 
-            ahrs_errorVector(accBody, accNorm, eAcc, dB, &eMagD, &accUsed, &magUsed);
+            /* B3.4: the continuous accel weight, computed once here (both
+             * accBody/accNorm and gyroBody are in scope) and threaded
+             * through ahrs_errorVector rather than recomputed there. */
+            {
+                const float32 devNormG = fabsf(accNorm - 1.0f);
+                const float32 gyroNormDps = sqrtf((gyroBody[0] * gyroBody[0])
+                                                 + (gyroBody[1] * gyroBody[1])
+                                                 + (gyroBody[2] * gyroBody[2]));
+                const float32 wNorm = ahrs_clamp01(1.0f
+                    - ((devNormG - AHRS_ACC_TRUST_FULL_G) / AHRS_ACC_TRUST_SPAN_G));
+                const float32 wRate = ahrs_clamp01(1.0f
+                    - ((gyroNormDps - AHRS_ACC_RATE_FULL_DPS) / AHRS_ACC_RATE_SPAN_DPS));
+
+                wAcc = wNorm * wRate;
+            }
+
+            ahrs_errorVector(accBody, accNorm, wAcc, eAcc, dB, &eMagD, &accUsed, &magUsed);
+            out->accWeightPct = (uint8)(wAcc * 100.0f);
 
             /* B3.2: two independent integrators, never mixed. Gains are read
              * every tick from the calibration block, so a tuning write takes
@@ -960,9 +1032,10 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
         }
         else
         {
-            out->rate[0] = 0.0f;
-            out->rate[1] = 0.0f;
-            out->rate[2] = 0.0f;
+            out->rate[0]      = 0.0f;
+            out->rate[1]      = 0.0f;
+            out->rate[2]      = 0.0f;
+            out->accWeightPct = 0u;
         }
 
         /* The whole reason this file exists: specific force out of the body

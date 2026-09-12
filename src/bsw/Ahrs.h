@@ -67,8 +67,18 @@ typedef struct
     float32 accMagG;       /**< |a| [g]; 1.0 at rest, the health check        */
     float32 magFieldG;     /**< |B| after hard-iron correction [gauss]        */
     uint8   state;         /**< Ahrs_State                                    */
-    uint8   accTrusted;    /**< 1 while |a| is close enough to 1 g to use     */
+    uint8   accTrusted;    /**< 1 while w_acc > 0 (SYS1-001 strand B B3.4);
+                            *   was a hard |a| window, now the outer edge of
+                            *   a continuous weight -- see accWeightPct       */
     uint8   magTrusted;    /**< 1 while |B| is plausible and being used       */
+    uint8   accWeightPct;  /**< SYS1-001 strand B (B3.4): w_norm*w_rate*100,
+                            *   0..100 -- the continuous accel trust that now
+                            *   scales twoKpAcc's P AND I contribution every
+                            *   tick, replacing the old hard |a| window.
+                            *   100 = full trust (|a| within 5% of 1 g AND
+                            *   |gyro| below 30 deg/s); 0 at or beyond the
+                            *   old hard edges (|a|-1| >= 15%, or the
+                            *   plausibility band is exited some other way)  */
     uint8   biasDegraded;  /**< 1 if the boot gyro-bias calibration hit its
                             *   deadline instead of completing a still window,
                             *   i.e. the board was moving at power-on. The

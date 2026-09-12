@@ -156,7 +156,7 @@ typedef char layout_assert_Xcp_Fusion_magFieldG_offset[(offsetof(Xcp_Fusion, mag
 typedef char layout_assert_Xcp_Fusion_ahrsState_offset[(offsetof(Xcp_Fusion, ahrsState) == 0x50u) ? 1 : -1];
 typedef char layout_assert_Xcp_Fusion_accTrusted_offset[(offsetof(Xcp_Fusion, accTrusted) == 0x51u) ? 1 : -1];
 typedef char layout_assert_Xcp_Fusion_magTrusted_offset[(offsetof(Xcp_Fusion, magTrusted) == 0x52u) ? 1 : -1];
-typedef char layout_assert_Xcp_Fusion_reserved_offset[(offsetof(Xcp_Fusion, reserved) == 0x53u) ? 1 : -1];
+typedef char layout_assert_Xcp_Fusion_accWeightPct_offset[(offsetof(Xcp_Fusion, accWeightPct) == 0x53u) ? 1 : -1];
 typedef char layout_assert_Xcp_Fusion_posD_offset[(offsetof(Xcp_Fusion, posD) == 0x54u) ? 1 : -1];
 typedef char layout_assert_Xcp_Fusion_velD_offset[(offsetof(Xcp_Fusion, velD) == 0x58u) ? 1 : -1];
 typedef char layout_assert_Xcp_Fusion_accBiasD_offset[(offsetof(Xcp_Fusion, accBiasD) == 0x5Cu) ? 1 : -1];

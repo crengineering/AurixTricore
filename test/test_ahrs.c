@@ -1492,6 +1492,124 @@ void test_b3_integral_bit_unchanged_on_untrusted_ticks_even_near_clamp(void)
 }
 
 /* ==========================================================================
+ * SYS1-001 Strand B, task 4 (B3.4, SWE1-FW-006): continuous accel weight
+ * w_acc = w_norm*w_rate replacing the hard |a| window.
+ * ======================================================================== */
+
+void test_b4_lag_after_90deg_roll_with_lateral_accel_meets_thresholds(void)
+{
+    /* Task 0's baseline (unmodified Ahrs.c): 6.68 / 2.51 / 0.35 deg. This is
+     * the "after" measurement, same scenario, same helper.
+     *
+     * FINDING (reported, not silently worked around): with w_rate exactly
+     * as specified (full trust <= 30 deg/s, zero at 120 deg/s) and w_norm
+     * exactly as specified (full trust within 5%, zero at 15%), this
+     * constant-60deg/s trapezoidal ramp measures ~5.4 / ~2.0 / ~0.28 deg,
+     * not the dispatch's own "~1.2 / <0.6" estimate -- because the 0.15 g
+     * disturbance stays inside w_norm's full-trust band (|a| = 1.011,
+     * 1.1% deviation, band edge is 5%) the WHOLE time, so only w_rate
+     * suppresses it, and at a sustained 60 deg/s that is w_rate = 1 -
+     * (60-30)/90 = 0.667 -- two thirds of kp_acc's authority, integrated
+     * over the full 1.5 s, is enough to reproduce most of the pre-fix
+     * error. A half-sine (smooth accel/decel) velocity profile -- peak
+     * ~94 deg/s -- was also tried and gives materially the same numbers
+     * (~5.3 / ~2.0 / ~0.28), so the motion PROFILE shape is not the
+     * variable; the two constants (30/90 deg/s span) are. Left as a
+     * red host test rather than silently retuned or softened: retuning
+     * w_rate's span without the flight-architect's sign-off would be
+     * exactly the kind of scope decision this role does not make alone. */
+    float M[9]; mountMatrix(M);
+    Ahrs_Values v;
+    const float checkpoints[3] = { 1.5f, 2.5f, 4.5f };
+    float err[3];
+    char  msg[128];
+
+    rollRampWithLateralAccel(M, 90.0f, 1.5f, 0.15f, &v, err, checkpoints, 3);
+
+    printf("\n  [StrandB task4] 90deg/1.5s roll + 0.15g lateral accel, w_acc active:\n");
+    printf("    error at motion end (t=1.5s): %.3f deg (baseline 6.68, target <= 2.0)\n", (double)err[0]);
+    printf("    error at t=2.5s (motion +1s): %.3f deg (baseline 2.51, target <= 1.0)\n", (double)err[1]);
+    printf("    error at t=4.5s (motion +3s): %.3f deg (baseline 0.35, target <= 0.5)\n", (double)err[2]);
+
+    (void)snprintf(msg, sizeof msg, "motion-end error %.3f deg, target <= 2.0", (double)err[0]);
+    TEST_ASSERT_TRUE_MESSAGE(err[0] <= 2.0f, msg);
+    (void)snprintf(msg, sizeof msg, "+1s error %.3f deg, target <= 1.0", (double)err[1]);
+    TEST_ASSERT_TRUE_MESSAGE(err[1] <= 1.0f, msg);
+    (void)snprintf(msg, sizeof msg, "+3s error %.3f deg, target <= 0.5", (double)err[2]);
+    TEST_ASSERT_TRUE_MESSAGE(err[2] <= 0.5f, msg);
+}
+
+void test_b4_hover_case_bit_identical_to_task3(void)
+{
+    /* Hover: |gyro| < 30 deg/s and the disturbance < 0.05 g -> w_norm =
+     * w_rate = 1 exactly (both comfortably inside the "full trust" band),
+     * so w_acc = 1 and eAcc must be bit-identical to task 3's code (which
+     * always used kp*1.0, no weight at all). Verified via the published
+     * accWeightPct (must read 100) and a bit-exact settle trajectory
+     * against the analytic prediction test_gravity_removed_at_rest_in_any_
+     * orientation already uses. */
+    float M[9]; mountMatrix(M);
+    Ahrs_Values v;
+    const float32 att[3] = { 0.3f, -0.2f, -0.93f };   /* |a| ~= 1.0, small tilt */
+    float32 accSensor[3];
+    int i;
+
+    mat3Tvec(M, att, accSensor);
+    Ahrs_init();
+    bringUp(&v, accSensor);
+
+    for (i = 0; i < 50; ++i)
+    {
+        const float32 gyro[3] = { 2.0f, -1.0f, 0.5f };   /* well under 30 deg/s */
+        Ahrs_update(&v, accSensor, gyro, DT, TRUE);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(100u, v.accWeightPct,
+            "hover case (slow, near-1g) must publish full accel weight");
+    }
+    TEST_ASSERT_TRUE_MESSAGE(isFiniteF(norm3(v.accNed)), "hover trajectory must stay finite");
+}
+
+void test_b4_accweightpct_ramps_continuously_with_rate_and_norm(void)
+{
+    /* Direct check of the two ramps' shape, at the values B3.4 names
+     * explicitly: full trust inside +/-5% and below 30 deg/s; ~50% at the
+     * midpoints; zero at/beyond the old 15% edge or 120 deg/s. */
+    float M[9]; mountMatrix(M);
+    Ahrs_Values v;
+    float32 accSensor[3];
+
+    /* Full trust: level, slow. */
+    {
+        const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
+        const float32 gyroSlow[3] = { 0.0f, 0.0f, 0.0f };
+        mat3Tvec(M, accLevel, accSensor);
+        Ahrs_init();
+        bringUp(&v, accSensor);
+        Ahrs_update(&v, accSensor, gyroSlow, DT, TRUE);
+        TEST_ASSERT_EQUAL_UINT8(100u, v.accWeightPct);
+    }
+
+    /* Zero: at the old 15% edge (|a| = 1.15, AHRS_ACC_MAX_G). */
+    {
+        const float32 accEdge[3] = { 0.0f, 0.0f, -1.15f };
+        const float32 gyroSlow[3] = { 0.0f, 0.0f, 0.0f };
+        float32 accS[3];
+        mat3Tvec(M, accEdge, accS);
+        Ahrs_update(&v, accS, gyroSlow, DT, TRUE);
+        TEST_ASSERT_EQUAL_UINT8(0u, v.accWeightPct);
+    }
+
+    /* Zero: fast tumble (well past 120 deg/s), level accel. */
+    {
+        const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
+        const float32 gyroFast[3] = { 300.0f, 0.0f, 0.0f };
+        float32 accS[3];
+        mat3Tvec(M, accLevel, accS);
+        Ahrs_update(&v, accS, gyroFast, DT, TRUE);
+        TEST_ASSERT_EQUAL_UINT8(0u, v.accWeightPct);
+    }
+}
+
+/* ==========================================================================
  * SYS1-001 task 2 -- fault debounce (dispatch/"SYS1-001 - Dispatch.md" §4).
  * The defect: one rejected tick used to re-initialise the whole attitude
  * (deadbeat yaw from the mag, gyro-bias integral zeroed) instead of merely
@@ -1625,6 +1743,9 @@ int main(void)
     RUN_TEST(test_b3_yaw_integral_clamped_under_persistent_45deg_error);
     RUN_TEST(test_b3_body_integral_clamped_under_persistent_45deg_error);
     RUN_TEST(test_b3_integral_bit_unchanged_on_untrusted_ticks_even_near_clamp);
+    RUN_TEST(test_b4_lag_after_90deg_roll_with_lateral_accel_meets_thresholds);
+    RUN_TEST(test_b4_hover_case_bit_identical_to_task3);
+    RUN_TEST(test_b4_accweightpct_ramps_continuously_with_rate_and_norm);
     RUN_TEST(test_no_admissible_input_produces_nan);
     RUN_TEST(test_recovers_after_garbage);
     RUN_TEST(test_invalid_sample_freezes_the_estimate);
