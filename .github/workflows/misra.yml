@@ -68,7 +68,7 @@ jobs:
         # refuses to report a clean result if the addon did not load; this
         # step just puts the exact CI-side version string in the log
         # alongside that check's own output for a quick visual diff.
-        run: "$HOME/cppcheck-install/bin/cppcheck" --version
+        run: $HOME/cppcheck-install/bin/cppcheck --version
 
       - name: Run MISRA check
         run: CPPCHECK="$HOME/cppcheck-install/bin/cppcheck" python3 tools/misra_check.py
