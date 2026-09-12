@@ -1129,6 +1129,191 @@ void test_b1_yaw_time_constant_matches_the_bench_fit(void)
 }
 
 /* ==========================================================================
+ * SYS1-001 Strand B, task 2 (B3.2, SWE1-FW-004): split s_fbI (body, e_acc
+ * only) from s_fbIYaw (about d_b, eMagD only). Baseline-failure evidence is
+ * task 0's own test above (test_b0_todays_delta_s_fbi_after_60s_roll90_with_
+ * 20deg_mag_error): on the undivided integrator, axis 1 alone moved
+ * -0.1424..-0.1573 deg/s under this EXACT scenario, already past the 0.05
+ * deg/s acceptance below -- these tests are the "after" half.
+ * ======================================================================== */
+
+void test_b2_mag_error_at_roll90_no_longer_moves_body_bias(void)
+{
+    /* s_fbI[0..2] (BODY, frame-fixed) is not directly observable through
+     * gyroBias while tilted: published gyroBias[i] = s_bias[i] -
+     * (s_fbI[i] + s_fbIYaw*dB[i])*RAD_TO_DEG, and at roll 90 dB is close to
+     * a BODY AXIS itself (down rotates from Z toward Y as roll goes 0->90),
+     * so s_fbIYaw's own, EXPECTED response to the heading error legitimately
+     * shows up in gyroBias[1] at that exact attitude -- that is not the
+     * defect (SWE1-FW-002's standing yaw drift is normal); the defect this
+     * task removes is s_fbI[0..2] (BODY, frame-fixed) itself retaining a
+     * bias that does NOT go away on its own. So this measures gyroBias
+     * AFTER returning to level, where dB = [0,0,1] exactly and
+     * gyroBias[0]/gyroBias[1] read s_fbI[0]/s_fbI[1] purely (s_fbIYaw
+     * projects fully onto axis 2 at level, not 0/1) -- axis 2 is excluded
+     * on purpose, for the same reason. */
+    Ahrs_Values v; memset(&v, 0, sizeof v);
+    float M[9]; mountMatrix(M);
+    float bias0[3];
+    int   i;
+
+    {
+        float checkpoints[1] = { 1.5f };
+        float err[1];
+        rollRampWithLateralAccel(M, 90.0f, 1.5f, 0.0f, &v, err, checkpoints, 1);
+    }
+    memcpy(bias0, v.gyroBias, sizeof bias0);
+
+    {
+        const float32 accBody90[3] = { 0.0f, -1.0f, 0.0f };
+        const float32 wZero[3]     = { 0.0f, 0.0f, 0.0f };
+        const float   hErrRad      = 20.0f * DEG;
+        const float32 fieldNed[3]  = { B_MAG_HR * cosf(hErrRad),
+                                        B_MAG_HR * sinf(hErrRad),
+                                        B_MAG_HZ };
+        float32 accS[3];
+        float32 magBody[3];
+        float32 magS[3];
+
+        mat3Tvec(M, accBody90, accS);
+        Ahrs_nedToBody(fieldNed, magBody);
+        mountInverse(M, magBody, magS);
+        Ahrs_setMag(magS, TRUE);
+
+        for (i = 0; i < (int)(60.0f / B_DT); ++i)
+        {
+            Ahrs_update(&v, accS, wZero, B_DT, TRUE);
+        }
+    }
+
+    /* Roll back to level, no disturbance, mag reverted to true north --
+     * dB = [0,0,1] exactly there, isolating s_fbI[0]/s_fbI[1]. */
+    {
+        const float rampS = 1.5f;
+        const int   steps = (int)(rampS / B_DT + 0.5f);
+        const float phiDotDeg = -90.0f / rampS;
+        float t = 0.0f;
+        float32 magS[3];
+
+        mountInverse(M, (const float32[3]){ B_MAG_HR, 0.0f, B_MAG_HZ }, magS);
+        Ahrs_setMag(magS, TRUE);
+
+        for (i = 0; i < steps; ++i)
+        {
+            const float phi = 90.0f + (phiDotDeg * t);
+            const float aBody[3] = { 0.0f, -sinf(phi * DEG), -cosf(phi * DEG) };
+            const float wBody[3] = { phiDotDeg, 0.0f, 0.0f };
+            float32 accS[3];
+            float32 gyroS[3];
+
+            mat3Tvec(M, aBody, accS);
+            mat3Tvec(M, wBody, gyroS);
+            Ahrs_update(&v, accS, gyroS, B_DT, TRUE);
+            t += B_DT;
+        }
+        for (i = 0; i < (int)(2.0f / B_DT); ++i)
+        {
+            const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
+            const float32 wZero[3]    = { 0.0f, 0.0f, 0.0f };
+            float32 accS[3];
+            mat3Tvec(M, accLevel, accS);
+            Ahrs_update(&v, accS, wZero, B_DT, TRUE);
+        }
+    }
+
+    for (i = 0; i < 2; ++i)
+    {
+        char  msg[128];
+        const float dGyroBiasDeg = v.gyroBias[i] - bias0[i];
+        (void)snprintf(msg, sizeof msg,
+            "axis %d (s_fbI, isolated at level) moved %.4f deg/s, must stay < 0.05 deg/s",
+            i, (double)dGyroBiasDeg);
+        TEST_ASSERT_TRUE_MESSAGE(fabsf(dGyroBiasDeg) < 0.05f, msg);
+    }
+}
+
+void test_b2_return_to_level_after_mag_error_settles_within_2s(void)
+{
+    /* Roll to 90, hold under a 20deg mag error for 60 s (as above), then
+     * roll BACK to level with no disturbance and check the roll error 2 s
+     * after motion ends -- must be < 0.5deg. On the undivided integrator
+     * this was task 0's B1-evidence scenario (standing error, slow decay);
+     * with s_fbI no longer touched by the mag error at all, there is
+     * nothing left to decay. */
+    Ahrs_Values v; memset(&v, 0, sizeof v);
+    float M[9]; mountMatrix(M);
+    int   i;
+
+    {
+        float checkpoints[1] = { 1.5f };
+        float err[1];
+        rollRampWithLateralAccel(M, 90.0f, 1.5f, 0.0f, &v, err, checkpoints, 1);
+    }
+
+    {
+        const float32 accBody90[3] = { 0.0f, -1.0f, 0.0f };
+        const float32 wZero[3]     = { 0.0f, 0.0f, 0.0f };
+        const float   hErrRad      = 20.0f * DEG;
+        const float32 fieldNed[3]  = { B_MAG_HR * cosf(hErrRad),
+                                        B_MAG_HR * sinf(hErrRad),
+                                        B_MAG_HZ };
+        float32 accS[3];
+        float32 magBody[3];
+        float32 magS[3];
+
+        mat3Tvec(M, accBody90, accS);
+        Ahrs_nedToBody(fieldNed, magBody);
+        mountInverse(M, magBody, magS);
+        Ahrs_setMag(magS, TRUE);
+
+        for (i = 0; i < (int)(60.0f / B_DT); ++i)
+        {
+            Ahrs_update(&v, accS, wZero, B_DT, TRUE);
+        }
+    }
+
+    /* Roll back to level over 1.5 s, no disturbance -- reuse the ramp
+     * helper by driving it from 90 down to 0 (negative rate). */
+    {
+        const float32 accLevel[3] = { 0.0f, 0.0f, -1.0f };
+        const float rampS = 1.5f;
+        const int   steps = (int)(rampS / B_DT + 0.5f);
+        const float phiDotDeg = -90.0f / rampS;
+        float t = 0.0f;
+
+        for (i = 0; i < steps; ++i)
+        {
+            const float phi = 90.0f + (phiDotDeg * t);
+            const float aBody[3] = { 0.0f, -sinf(phi * DEG), -cosf(phi * DEG) };
+            const float wBody[3] = { phiDotDeg, 0.0f, 0.0f };
+            float32 accS[3];
+            float32 gyroS[3];
+
+            mat3Tvec(M, aBody, accS);
+            mat3Tvec(M, wBody, gyroS);
+            Ahrs_update(&v, accS, gyroS, B_DT, TRUE);
+            t += B_DT;
+        }
+
+        for (i = 0; i < (int)(2.0f / B_DT); ++i)
+        {
+            float32 accS[3];
+            const float32 wZero[3] = { 0.0f, 0.0f, 0.0f };
+            mat3Tvec(M, accLevel, accS);
+            Ahrs_update(&v, accS, wZero, B_DT, TRUE);
+        }
+    }
+
+    {
+        char msg[128];
+        const float rollErrDeg = fabsf(v.rollRad / DEG);
+        (void)snprintf(msg, sizeof msg,
+            "roll error 2s after returning to level: %.4f deg, must be < 0.5", (double)rollErrDeg);
+        TEST_ASSERT_TRUE_MESSAGE(rollErrDeg < 0.5f, msg);
+    }
+}
+
+/* ==========================================================================
  * SYS1-001 task 2 -- fault debounce (dispatch/"SYS1-001 - Dispatch.md" §4).
  * The defect: one rejected tick used to re-initialise the whole attitude
  * (deadbeat yaw from the mag, gyro-bias integral zeroed) instead of merely
@@ -1257,6 +1442,8 @@ int main(void)
     RUN_TEST(test_b1_mag_correction_is_pure_yaw_at_every_attitude);
     RUN_TEST(test_b1_level_case_yaw_component_bit_identical_to_pre_fix);
     RUN_TEST(test_b1_yaw_time_constant_matches_the_bench_fit);
+    RUN_TEST(test_b2_mag_error_at_roll90_no_longer_moves_body_bias);
+    RUN_TEST(test_b2_return_to_level_after_mag_error_settles_within_2s);
     RUN_TEST(test_no_admissible_input_produces_nan);
     RUN_TEST(test_recovers_after_garbage);
     RUN_TEST(test_invalid_sample_freezes_the_estimate);

@@ -199,7 +199,14 @@ static float32 s_q1;
 static float32 s_q2;
 static float32 s_q3;
 
-static float32 s_fbI[3];           /* Mahony integral feedback [rad/s]        */
+static float32 s_fbI[3];           /* Mahony integral feedback [rad/s], BODY --
+                                     * B3.2 (SYS1-001 strand B): fed ONLY by
+                                     * eAcc now, never by the magnetometer     */
+static float32 s_fbIYaw;           /* Mahony integral feedback [rad/s], about
+                                     * the estimated vertical (d_b) -- fed
+                                     * ONLY by eMagD. Applied as s_fbIYaw*dB,
+                                     * same "one degree of freedom" split as
+                                     * the proportional term (B3.1)           */
 static float32 s_bias[3];          /* boot gyro bias, body frame [deg/s]      */
 static float32 s_calSum[3];
 static float32 s_calMin[3];
@@ -327,6 +334,7 @@ void Ahrs_init(void)
         s_magB[i]   = 0.0f;
     }
 
+    s_fbIYaw       = 0.0f;
     s_calCount     = 0u;
     s_calWindowS   = 0.0f;
     s_calElapsedS  = 0.0f;
@@ -518,16 +526,34 @@ static void ahrs_align(const float32 accBody[3], float32 accNorm)
     ahrs_setEuler(roll, pitch, yaw);
 }
 
-/* The Mahony correction: a rotation-error vector built from whichever
- * drift-free references are usable this sample. */
+/* The Mahony correction. B3.2 (SYS1-001 strand B, SWE1-FW-004) splits what
+ * used to be one combined e[3] into the two pieces the two integrators
+ * (s_fbI, s_fbIYaw -- Ahrs_update) need kept apart:
+ *   eAcc[3]  the accelerometer's full body-frame correction, unprojected --
+ *            it is already perpendicular to d_b by construction (it IS the
+ *            correction that keeps d_b aligned with gravity).
+ *   eMagD    the magnetometer's correction, ALREADY projected onto d_b and
+ *            ALREADY scaled by kp -- a single scalar along the one axis
+ *            (heading, about d_b) the magnetometer is allowed to touch.
+ *   dB       the current estimated vertical in body frame (nedToBody(0,0,1)),
+ *            returned on EVERY call regardless of magUsed: Ahrs_update needs
+ *            it to apply s_fbIYaw*dB even on a tick where the field itself
+ *            is untrusted, same as s_fbI[i] keeps contributing through an
+ *            accel dropout. */
 static void ahrs_errorVector(const float32 accBody[3], float32 accNorm,
-                             float32 e[3], boolean *accUsed, boolean *magUsed)
+                             float32 eAcc[3], float32 dB[3], float32 *eMagD,
+                             boolean *accUsed, boolean *magUsed)
 {
-    e[0] = 0.0f;
-    e[1] = 0.0f;
-    e[2] = 0.0f;
+    const float32 downNed[3] = { 0.0f, 0.0f, 1.0f };
+
+    eAcc[0] = 0.0f;
+    eAcc[1] = 0.0f;
+    eAcc[2] = 0.0f;
+    *eMagD  = 0.0f;
     *accUsed = FALSE;
     *magUsed = FALSE;
+
+    ahrs_nedToBody(downNed, dB);
 
     if ((accNorm > AHRS_ACC_MIN_G) && (accNorm < AHRS_ACC_MAX_G))
     {
@@ -535,21 +561,21 @@ static void ahrs_errorVector(const float32 accBody[3], float32 accNorm,
          * down axis, expressed in body. The cross product with what the
          * accelerometer actually measured is the rotation that reconciles the
          * two — small-angle, so no trigonometry is needed. */
-        const float32 down[3] = { 0.0f, 0.0f, -1.0f };
+        const float32 up[3] = { 0.0f, 0.0f, -1.0f };
         const float32 recip = 1.0f / accNorm;
         const float32 ax = accBody[0] * recip;
         const float32 ay = accBody[1] * recip;
         const float32 az = accBody[2] * recip;
         float32 v[3];
 
-        ahrs_nedToBody(down, v);
+        ahrs_nedToBody(up, v);
 
         const float32 kp = FusionCal_positive(g_fusionCal.twoKpAcc, 0.0f,
                                              AHRS_TWO_KP_ACC);
 
-        e[0] += kp * ((ay * v[2]) - (az * v[1]));
-        e[1] += kp * ((az * v[0]) - (ax * v[2]));
-        e[2] += kp * ((ax * v[1]) - (ay * v[0]));
+        eAcc[0] = kp * ((ay * v[2]) - (az * v[1]));
+        eAcc[1] = kp * ((az * v[0]) - (ax * v[2]));
+        eAcc[2] = kp * ((ax * v[1]) - (ay * v[0]));
 
         *accUsed = TRUE;
     }
@@ -582,44 +608,26 @@ static void ahrs_errorVector(const float32 accBody[3], float32 accNorm,
         const float32 kp = FusionCal_positive(g_fusionCal.twoKpMag, 0.0f,
                                              AHRS_TWO_KP_MAG);
 
-        /* B3.1 (SYS1-001 strand B, dispatch B2(a)): the raw cross product
-         * mn x w is NOT a rotation about the vertical -- for a heading error
-         * psi its NED components are (h_r*h_z*sinPsi, h_r*h_z*(1-cosPsi),
-         * -h_r^2*sinPsi), dominant along NORTH (docs/FUSION.md documents the
-         * corrected pole arithmetic; the false "rotation about the vertical
-         * only" claim this comment used to make is deleted). Summed
-         * unprojected into e[0..2] below, a standing heading error wrote a
-         * false ROLL/PITCH gyro-bias through s_fbI.
-         *
-         * Fix: the magnetometer gets exactly the one degree of freedom it is
-         * allowed -- heading, about the CURRENT estimated vertical d_b --
-         * by projecting the raw correction onto d_b before adding it.
-         * eMagD = raw . d_b is exactly -h_r^2*sinPsi, the same kp_eff,mag =
-         * twoKpMag*h_r^2 the 7.1 s time-constant fit already measures
-         * (docs/FUSION.md section 5), so yaw dynamics are unchanged; e_acc
-         * is already perpendicular to d_b by construction (it IS the
-         * correction that keeps d_b aligned with gravity), so the two
-         * corrections now span orthogonal subspaces at every attitude. At
-         * level d_b = [0,0,1] exactly, so this keeps only raw[2] -- bit-
-         * identical to the old e[2] term -- and discards raw[0]/raw[1]
-         * (the parasite) instead of summing them. */
+        /* B3.1 (dispatch B2(a)): the raw cross product mn x w is NOT a
+         * rotation about the vertical -- for a heading error psi its NED
+         * components are (h_r*h_z*sinPsi, h_r*h_z*(1-cosPsi), -h_r^2*sinPsi),
+         * dominant along NORTH (docs/FUSION.md documents the corrected pole
+         * arithmetic; the false "rotation about the vertical only" claim
+         * this comment used to make is deleted). Projecting onto d_b keeps
+         * exactly the one degree of freedom (heading) the magnetometer is
+         * allowed: *eMagD = raw . d_b is exactly -h_r^2*sinPsi, the same
+         * kp_eff,mag = twoKpMag*h_r^2 the 7.1 s time-constant fit already
+         * measures (docs/FUSION.md section 5), so yaw dynamics are
+         * unchanged. At level d_b = [0,0,1] exactly, so this reduces to
+         * raw[2] alone -- bit-identical to the pre-B3.1 e[2] term. */
         {
-            const float32 downNed[3] = { 0.0f, 0.0f, 1.0f };
-            float32 dB[3];
             float32 raw[3];
-            float32 eMagD;
-
-            ahrs_nedToBody(downNed, dB);
 
             raw[0] = (my * w[2]) - (mz * w[1]);
             raw[1] = (mz * w[0]) - (mx * w[2]);
             raw[2] = (mx * w[1]) - (my * w[0]);
 
-            eMagD = (raw[0] * dB[0]) + (raw[1] * dB[1]) + (raw[2] * dB[2]);
-
-            e[0] += kp * eMagD * dB[0];
-            e[1] += kp * eMagD * dB[1];
-            e[2] += kp * eMagD * dB[2];
+            *eMagD = kp * ((raw[0] * dB[0]) + (raw[1] * dB[1]) + (raw[2] * dB[2]));
         }
 
         *magUsed = TRUE;
@@ -805,6 +813,7 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
                 {
                     s_fbI[i] = 0.0f;
                 }
+                s_fbIYaw = 0.0f;
 
                 s_ahrsState = AHRS_RUNNING;
                 g_dbgAhrsRealigns++;
@@ -821,31 +830,43 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
 
         if (s_ahrsState == AHRS_RUNNING)
         {
-            float32 e[3];
+            float32 eAcc[3];
+            float32 dB[3];
+            float32 eMagD;
             float32 wx;
             float32 wy;
             float32 wz;
             float32 recipNorm;
 
-            ahrs_errorVector(accBody, accNorm, e, &accUsed, &magUsed);
+            ahrs_errorVector(accBody, accNorm, eAcc, dB, &eMagD, &accUsed, &magUsed);
 
-            /* Gains are read every tick from the calibration block, so a tuning
-             * write takes effect on the next update rather than the next flash. */
+            /* B3.2: two independent integrators, never mixed. Gains are read
+             * every tick from the calibration block, so a tuning write takes
+             * effect on the next update rather than the next flash. */
             {
                 const float32 ki = FusionCal_positive(g_fusionCal.twoKi,
                                                       0.0f, AHRS_TWO_KI);
                 for (i = 0u; i < 3u; i++)
                 {
-                    s_fbI[i] += ki * e[i] * dt;
+                    s_fbI[i] += ki * eAcc[i] * dt;
                 }
+                s_fbIYaw += ki * eMagD * dt;
             }
 
-            /* The integral term IS the gyro-bias estimate: a rotation error
-             * that keeps pointing the same way can only be a rate offset. */
+            /* The integral terms ARE the gyro-bias estimate: a rotation error
+             * that keeps pointing the same way can only be a rate offset.
+             * The proportional terms stay combined (eAcc + eMagD*dB spans
+             * the same three axes eAcc alone used to, exactly as before
+             * B3.1/B3.2 -- only which INTEGRATOR accumulates each piece
+             * changed), and so does s_fbIYaw's contribution: applied along
+             * dB on every axis, same as the integral always was. */
 
-            wx = ((gyroBody[0] - s_bias[0]) * AHRS_DEG_TO_RAD) + e[0] + s_fbI[0];
-            wy = ((gyroBody[1] - s_bias[1]) * AHRS_DEG_TO_RAD) + e[1] + s_fbI[1];
-            wz = ((gyroBody[2] - s_bias[2]) * AHRS_DEG_TO_RAD) + e[2] + s_fbI[2];
+            wx = ((gyroBody[0] - s_bias[0]) * AHRS_DEG_TO_RAD)
+               + eAcc[0] + (eMagD * dB[0]) + s_fbI[0] + (s_fbIYaw * dB[0]);
+            wy = ((gyroBody[1] - s_bias[1]) * AHRS_DEG_TO_RAD)
+               + eAcc[1] + (eMagD * dB[1]) + s_fbI[1] + (s_fbIYaw * dB[1]);
+            wz = ((gyroBody[2] - s_bias[2]) * AHRS_DEG_TO_RAD)
+               + eAcc[2] + (eMagD * dB[2]) + s_fbI[2] + (s_fbIYaw * dB[2]);
 
             /* q_dot = 0.5 * q (x) [0, w]; the half is folded into h. */
             {
@@ -967,12 +988,32 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
 
         out->yawRad = yaw;
 
-        for (i = 0u; i < 3u; i++)
+        /* B3.2: gyroBias keeps the SAME meaning and the SAME publish
+         * formula shape -- s_fbI[i] + s_fbIYaw*dB[i] is simply the total
+         * integral feedback now split across two accumulators instead of
+         * one, so this is still "the constant found at boot plus whatever
+         * the integral has tracked since". dB is recomputed fresh here
+         * (cheap, one nedToBody call) rather than carried out of the
+         * RUNNING block above, since it must reflect the ATTITUDE JUST
+         * PUBLISHED (post quaternion update), not the one the correction
+         * was computed against a moment earlier -- the two agree to within
+         * one integration step regardless, but this keeps the invariant
+         * exact rather than approximate. */
         {
-            /* Report the total: the constant found at boot plus whatever the
-             * integral has tracked since. The sign is flipped because the
-             * integral is ADDED to the gyro, so it holds minus the bias. */
-            out->gyroBias[i] = s_bias[i] - (s_fbI[i] * AHRS_RAD_TO_DEG);
+            float32 dBPub[3];
+            const float32 downNed[3] = { 0.0f, 0.0f, 1.0f };
+
+            ahrs_nedToBody(downNed, dBPub);
+
+            for (i = 0u; i < 3u; i++)
+            {
+                /* Report the total: the constant found at boot plus whatever
+                 * the integral has tracked since. The sign is flipped
+                 * because the integral is ADDED to the gyro, so it holds
+                 * minus the bias. */
+                out->gyroBias[i] = s_bias[i]
+                                 - ((s_fbI[i] + (s_fbIYaw * dBPub[i])) * AHRS_RAD_TO_DEG);
+            }
         }
 
         out->biasDegraded = (s_biasDegraded != FALSE) ? 1u : 0u;
