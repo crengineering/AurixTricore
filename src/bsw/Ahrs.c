@@ -53,15 +53,37 @@
  *           at |dev| == AHRS_ACC_MAX_G - 1 (+/-15%, TODAY's outer edge --
  *           nothing previously rejected is newly accepted).
  *   w_rate  ramps from 1 (|gyro| <= AHRS_ACC_RATE_FULL_DPS) down to 0 at
- *           AHRS_ACC_RATE_FULL_DPS + AHRS_ACC_RATE_SPAN_DPS (120 deg/s) --
- *           fast handling rides the gyro path already (no lag there); this
- *           is about not trusting the accel DURING it.
+ *           AHRS_ACC_RATE_FULL_DPS + AHRS_ACC_RATE_SPAN_DPS -- fast handling
+ *           rides the gyro path already (no lag there); this is about not
+ *           trusting the accel DURING it.
  * accTrusted (Ahrs_Values) becomes (w_acc > 0), the same outer edge as
- * before; accWeightPct (0..100) publishes w_acc itself. */
+ * before; accWeightPct (0..100) publishes w_acc itself.
+ *
+ * Task 11 (review round 1): the constants moved (30/90 -> 15/45, zero trust
+ * at 60 deg/s instead of 120) and w_rate now reads a 50 ms low-passed |gyro|
+ * (s_gyroLpDps below), not the instantaneous sample, for two reasons:
+ *   - mean vs. peak vibration: an instantaneous |gyro| sample on a real
+ *     airframe is dominated by vibration spikes riding on top of the real
+ *     angular rate; gating on the INSTANTANEOUS value chatters the weight
+ *     tick-to-tick on noise the accelerometer correction never actually
+ *     needed protecting against -- the low-pass tracks the real motion,
+ *     not the noise floor on top of it.
+ *   - ~150 ms re-engagement hold-off: tau = 0.05 s means roughly 3 tau
+ *     (~150 ms) after a fast rotation ends before the low-passed value
+ *     decays back under AHRS_ACC_RATE_FULL_DPS and the accel correction
+ *     re-engages at full weight -- deliberate: the vertical estimate right
+ *     after a fast manoeuvre is exactly when the accelerometer is least
+ *     trustworthy (settling structural vibration, residual specific force),
+ *     so re-arming instantly would undo the point of gating on rate at all.
+ */
 #define AHRS_ACC_TRUST_FULL_G     (0.05f)
 #define AHRS_ACC_TRUST_SPAN_G     ((AHRS_ACC_MAX_G - 1.0f) - AHRS_ACC_TRUST_FULL_G)
-#define AHRS_ACC_RATE_FULL_DPS    (30.0f)
-#define AHRS_ACC_RATE_SPAN_DPS    (90.0f)
+#define AHRS_ACC_RATE_FULL_DPS    (15.0f)
+#define AHRS_ACC_RATE_SPAN_DPS    (45.0f)
+
+/* Task 11: time constant of the |gyro| low-pass that feeds w_rate -- see the
+ * block comment above for why 50 ms (not the instantaneous sample). */
+#define AHRS_GYRO_LP_TAU_S        (0.05f)
 
 /* Magnetometer trust window [gauss]. Earth's field is 0.25..0.65 G worldwide
  * (~0.48 G in Munich); the band is widened to tolerate a residual hard-iron
@@ -245,6 +267,8 @@ static float32 s_fbIYaw;           /* Mahony integral feedback [rad/s], about
                                      * ONLY by eMagD. Applied as s_fbIYaw*dB,
                                      * same "one degree of freedom" split as
                                      * the proportional term (B3.1)           */
+static float32 s_gyroLpDps;        /* Task 11: 50 ms low-passed |gyro| [deg/s],
+                                     * feeds w_rate -- see AHRS_GYRO_LP_TAU_S */
 static float32 s_bias[3];          /* boot gyro bias, body frame [deg/s]      */
 static float32 s_calSum[3];
 static float32 s_calMin[3];
@@ -425,6 +449,7 @@ void Ahrs_init(void)
     }
 
     s_fbIYaw       = 0.0f;
+    s_gyroLpDps    = 0.0f;
     s_calCount     = 0u;
     s_calWindowS   = 0.0f;
     s_calElapsedS  = 0.0f;
@@ -910,6 +935,15 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
                 }
                 s_fbIYaw = 0.0f;
 
+                /* Task 11: seed the low-pass from the INSTANTANEOUS |gyro|
+                 * on entry to RUNNING, not 0 -- a re-align after a genuine
+                 * outage says nothing about the rate the board is moving at
+                 * right now, and starting the filter at 0 would report full
+                 * accel trust for one time constant regardless of reality. */
+                s_gyroLpDps = sqrtf((gyroBody[0] * gyroBody[0])
+                                   + (gyroBody[1] * gyroBody[1])
+                                   + (gyroBody[2] * gyroBody[2]));
+
                 s_ahrsState = AHRS_RUNNING;
                 g_dbgAhrsRealigns++;
             }
@@ -944,8 +978,31 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
                                                  + (gyroBody[2] * gyroBody[2]));
                 const float32 wNorm = ahrs_clamp01(1.0f
                     - ((devNormG - AHRS_ACC_TRUST_FULL_G) / AHRS_ACC_TRUST_SPAN_G));
-                const float32 wRate = ahrs_clamp01(1.0f
-                    - ((gyroNormDps - AHRS_ACC_RATE_FULL_DPS) / AHRS_ACC_RATE_SPAN_DPS));
+                float32 wRate;
+
+                /* Task 11: w_rate reads the LOW-PASSED |gyro|, not the
+                 * instantaneous sample -- see AHRS_GYRO_LP_TAU_S's block
+                 * comment for the two reasons (mean-vs-peak vibration,
+                 * ~150 ms re-engagement hold-off). One-pole update, same
+                 * "duration, not a count" arithmetic as every other dt-scaled
+                 * accumulator in this file. The coefficient is capped at 1.0:
+                 * dt is bounded above by NAVTASK_DT_MAX_S (0.2 s), 4x
+                 * AHRS_GYRO_LP_TAU_S, and an uncapped one-pole update
+                 * overshoots (and can even go transiently negative -- an
+                 * unphysical "rate" that would then read back as spurious
+                 * full trust) once dt/tau exceeds the [0,1] BIBO-stable,
+                 * non-overshooting range. Capping to 1.0 makes a rare
+                 * near-boundary LONG dt behave as an instant re-seed
+                 * (k=1 -> s_gyroLpDps = gyroNormDps exactly) instead --
+                 * still correct, never an overshoot. */
+                {
+                    const float32 lpK = (dt < AHRS_GYRO_LP_TAU_S)
+                                       ? (dt / AHRS_GYRO_LP_TAU_S) : 1.0f;
+                    s_gyroLpDps += (gyroNormDps - s_gyroLpDps) * lpK;
+                }
+
+                wRate = ahrs_clamp01(1.0f
+                    - ((s_gyroLpDps - AHRS_ACC_RATE_FULL_DPS) / AHRS_ACC_RATE_SPAN_DPS));
 
                 wAcc = wNorm * wRate;
             }
