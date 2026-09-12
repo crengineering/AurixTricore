@@ -58,5 +58,17 @@ jobs:
           cmake --build cppcheck-build -j"$(nproc)"
           cmake --install cppcheck-build
 
+      - name: Print cppcheck version
+        # Task 18: a CI-only misra-c2012-10.8 finding (Icm42688.c:589, run
+        # 34702638061) was invisible to a local run reporting "0 findings"
+        # on the identical commit, both sides claiming cppcheck 2.21.0 --
+        # root cause was a local distribution missing addons/misra.py
+        # entirely (silently running NO analysis), not a version or flag
+        # difference. tools/misra_check.py now verifies this itself and
+        # refuses to report a clean result if the addon did not load; this
+        # step just puts the exact CI-side version string in the log
+        # alongside that check's own output for a quick visual diff.
+        run: "$HOME/cppcheck-install/bin/cppcheck" --version
+
       - name: Run MISRA check
         run: CPPCHECK="$HOME/cppcheck-install/bin/cppcheck" python3 tools/misra_check.py

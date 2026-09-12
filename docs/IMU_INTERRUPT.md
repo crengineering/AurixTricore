@@ -635,6 +635,13 @@ New counters (same "raw symbol, no A2L" class as `g_imuDrdyDtMax` etc.):
 `g_dbgImuStuckDrops` (trigger 2 fired), `g_dbgImuWhoAmIFail` (trigger 1's
 probe read a bad/no WHO_AM_I).
 
+Task 17 (B6.4) made `Icm42688_init()` a bounded pump over the same
+non-blocking `Icm42688_reinitStep()` the runtime recovery path uses, and
+that pump saves and restores `g_dbgImuReinits`/`g_dbgImuReinitFails`
+around itself — a boot that ends in `FAILED` still reports both counters
+as 0, so `Icm42688_init()`'s own return value and `ImuPresent` are the
+only boot-failure signals; the two counters name RUNTIME re-inits only.
+
 **Recovery budget:** unplug → ≤ 20 ms no-edge timeout (§I5's own
 `NAVTASK_NO_EDGE_TIMEOUT_S`) → 200 ms silence before trigger 1 starts
 probing → presence drops → `Icm42688_read()`'s existing periodic recovery
