@@ -44,6 +44,20 @@ running anything, and (2) inspects cppcheck's own stdout for "did not find
 addon" and refuses to report a clean result if the addon never actually
 loaded -- reproducing CI's finding, or failing loudly, is the only two
 outcomes now; silently checking nothing is not a third one any more.
+
+Follow-up (reviewer spot-check, same task): the ADDON_FAILURE_MARKERS check
+above is a blocklist of specific strings, not a safety net -- a stub
+cppcheck (or a crashed addon, or a truncated command line) that reports a
+plausible version and then emits NO output at all still yielded
+findings == [] and matched none of those markers, so the OLD baseline
+comparison read "0 findings against a 234-violation baseline" as 234
+violations having been FIXED and exited 0. evaluate() now enforces the
+positive invariant instead: a non-empty baseline requires the run to have
+found something recognisable, and refuses (exit 1) both when findings is
+completely empty and when an implausible fraction (> 50%) of the baseline
+disappeared in one run without --update-baseline. Run `python
+tools/misra_check.py --selftest` to exercise this offline, no cppcheck
+needed.
 """
 
 import argparse
@@ -67,12 +81,22 @@ RULE_TEXTS = ROOT / "tools" / "misra_rule_texts.txt"
 EXPECTED_CPPCHECK_VERSION = "2.21.0"
 
 # Substrings cppcheck itself prints (to STDOUT, not stderr) when --addon=misra
-# could not be loaded -- seen locally: "Did not find addon misra.py".
+# could not be loaded -- seen locally: "Did not find addon misra.py". An
+# early, SPECIFIC diagnosis when it matches -- but a blocklist of strings
+# is not a safety net (reviewer spot-check on task 18): a stub cppcheck, a
+# crashed addon that prints nothing, or a truncated command line all yield
+# empty output that matches none of these markers, and the general guard
+# below (evaluate()) is what actually has to catch those.
 ADDON_FAILURE_MARKERS = (
     "did not find addon",
     "unable to load addon",
     "failed to execute addon",
 )
+
+# evaluate(): a run whose findings disappear against MORE than this
+# fraction of the non-empty baseline, without --update-baseline, is judged
+# broken rather than improved (see evaluate()'s own docstring for why).
+IMPLAUSIBLE_DISAPPEARANCE_FRACTION = 0.5
 
 CHECK_DIRS = ["src"]
 DEFINES = ["DEVICE_TC39XB", "__TASKING__"]
@@ -234,11 +258,132 @@ def save_baseline(counts):
     BASELINE.write_text("\n".join(lines) + "\n")
 
 
+def evaluate(current, baseline, findings):
+    """Pure decision logic: given this run's findings-by-(rule,path) Counter
+    and the loaded baseline Counter, decide OK/FAIL and build the report.
+    Separated from main() so selftest() below can exercise it directly with
+    synthetic data -- no cppcheck, no subprocess, no filesystem.
+
+    Reviewer spot-check on task 18: the ADDON_FAILURE_MARKERS blocklist in
+    run_cppcheck() is an early, specific diagnosis, not a safety net -- a
+    stub cppcheck, a crashed addon that prints nothing, or a truncated
+    command line all produce EMPTY findings that match none of those
+    markers, and the old code here read that as "234 baselined violations
+    no longer occur" and exited 0. The positive invariant: a run cannot be
+    trusted to represent "fixed" unless it found something close to what
+    the baseline expects. Returns (exit_code, message).
+    """
+    baseline_total = sum(baseline.values())
+
+    if baseline_total > 0:
+        if not findings:
+            return 1, (
+                "error: cppcheck produced ZERO misra findings while the "
+                f"baseline expects {baseline_total} across {len(baseline)} "
+                "rule/file group(s) -- this is almost certainly a broken "
+                "run (a crashed addon, a truncated command line, or no "
+                "output at all -- see run_cppcheck()'s addon-marker check "
+                "for the most common named cause), not a genuine "
+                "improvement. Investigate before trusting this result; "
+                "only use --update-baseline once the violations are "
+                "verified to actually be fixed."
+            )
+
+        disappeared = sum(max(0, n - current.get(k, 0)) for k, n in baseline.items())
+        disappeared_fraction = disappeared / baseline_total
+        if disappeared_fraction > IMPLAUSIBLE_DISAPPEARANCE_FRACTION:
+            return 1, (
+                f"error: {disappeared} of {baseline_total} baselined "
+                f"violation(s) ({disappeared_fraction:.0%}) disappeared in "
+                "one run without --update-baseline -- implausible for a "
+                "genuine fix and far more likely a broken run (partial "
+                "output, wrong include paths, an addon that failed on most "
+                "files). Investigate before trusting this result."
+            )
+    # else: nothing baselined yet -- an empty run is unremarkable.
+
+    regressions = {k: (current[k], baseline.get(k, 0))
+                   for k in current if current[k] > baseline.get(k, 0)}
+    improvements = {k: (current.get(k, 0), baseline[k])
+                    for k in baseline if current.get(k, 0) < baseline[k]}
+
+    if regressions:
+        lines = [f"FAIL: {len(regressions)} rule/file group(s) exceed the baseline", ""]
+        for (rule, path), (now, base) in sorted(regressions.items()):
+            lines.append(f"  {rule} in {path}: {now} violation(s), baseline allows {base}")
+            for r, p, line, msg in findings:
+                if (r, p) == (rule, path):
+                    lines.append(f"    {p}:{line}: {msg}")
+            lines.append("")
+        lines.append("Fix the new violations, add a justified inline suppression\n"
+                      "(/* cppcheck-suppress misra-c2012-X.Y ; deviation: ... */),\n"
+                      "or intentionally re-baseline with --update-baseline.")
+        return 1, "\n".join(lines)
+
+    total = sum(current.values())
+    lines = [f"OK: {total} finding(s), all covered by the baseline"]
+    if improvements:
+        fixed = sum(b - n for n, b in improvements.values())
+        lines.append(f"note: {fixed} baselined violation(s) no longer occur - "
+                      "run with --update-baseline to lock in the improvement")
+    return 0, "\n".join(lines)
+
+
+def selftest():
+    """Task 18 follow-up (reviewer spot-check): prove evaluate() actually
+    refuses the exact broken-run shape the reviewer reproduced (a stub
+    cppcheck reporting a plausible version but empty output against a
+    non-empty baseline), plus the neighbouring cases that must NOT trip
+    the new guard. Cheap: pure function calls, no cppcheck needed."""
+    cases = [
+        ("empty findings, non-empty baseline (the reviewer's repro)",
+         Counter(),
+         Counter({("misra-c2012-10.8", "src/bsw/Icm42688.c"): 234}),
+         [],
+         1),
+        ("empty findings, empty baseline -- nothing to check, unremarkable",
+         Counter(), Counter(), [], 0),
+        ("a small genuine fix, well under the disappearance bound",
+         Counter({("misra-c2012-8.7", "src/bsw/X.c"): 200}),
+         Counter({("misra-c2012-8.7", "src/bsw/X.c"): 216}),
+         [("misra-c2012-8.7", "src/bsw/X.c", 1, "msg")] * 200,
+         0),
+        ("over half the baseline disappeared in one run -- implausible",
+         Counter({("misra-c2012-8.7", "src/bsw/X.c"): 50}),
+         Counter({("misra-c2012-8.7", "src/bsw/X.c"): 216}),
+         [("misra-c2012-8.7", "src/bsw/X.c", 1, "msg")] * 50,
+         1),
+        ("a genuine new violation still fails -- the regression path is unaffected",
+         Counter({("misra-c2012-8.7", "src/bsw/X.c"): 5}),
+         Counter({("misra-c2012-8.7", "src/bsw/X.c"): 2}),
+         [("misra-c2012-8.7", "src/bsw/X.c", 1, "msg")] * 5,
+         1),
+    ]
+    failed = 0
+    for name, current, baseline, findings, expected in cases:
+        exit_code, _ = evaluate(current, baseline, findings)
+        ok = exit_code == expected
+        print(f"  [{'ok' if ok else 'FAIL'}] {name}: exit {exit_code} (expected {expected})")
+        if not ok:
+            failed += 1
+    if failed:
+        print(f"selftest: {failed}/{len(cases)} case(s) failed")
+        return 1
+    print(f"selftest: {len(cases)}/{len(cases)} case(s) passed")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--update-baseline", action="store_true",
                         help="record the current findings as the new baseline")
+    parser.add_argument("--selftest", action="store_true",
+                        help="run evaluate()'s offline decision-logic self-test "
+                             "and exit -- no cppcheck required")
     args = parser.parse_args()
+
+    if args.selftest:
+        return selftest()
 
     exe = find_cppcheck()
     check_cppcheck_version(exe)
@@ -252,31 +397,9 @@ def main():
         return 0
 
     baseline = load_baseline()
-    regressions = {k: (current[k], baseline.get(k, 0))
-                   for k in current if current[k] > baseline.get(k, 0)}
-    improvements = {k: (current.get(k, 0), baseline[k])
-                    for k in baseline if current.get(k, 0) < baseline[k]}
-
-    if regressions:
-        print(f"FAIL: {len(regressions)} rule/file group(s) exceed the baseline\n")
-        for (rule, path), (now, base) in sorted(regressions.items()):
-            print(f"  {rule} in {path}: {now} violation(s), baseline allows {base}")
-            for r, p, line, msg in findings:
-                if (r, p) == (rule, path):
-                    print(f"    {p}:{line}: {msg}")
-            print()
-        print("Fix the new violations, add a justified inline suppression\n"
-              "(/* cppcheck-suppress misra-c2012-X.Y ; deviation: ... */),\n"
-              "or intentionally re-baseline with --update-baseline.")
-        return 1
-
-    total = sum(current.values())
-    print(f"OK: {total} finding(s), all covered by the baseline")
-    if improvements:
-        fixed = sum(b - n for n, b in improvements.values())
-        print(f"note: {fixed} baselined violation(s) no longer occur - "
-              "run with --update-baseline to lock in the improvement")
-    return 0
+    exit_code, message = evaluate(current, baseline, findings)
+    print(message)
+    return exit_code
 
 
 if __name__ == "__main__":
