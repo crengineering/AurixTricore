@@ -280,8 +280,8 @@
  * (-1), Z_SRC=sensor Z (+1): spread 3.4-4.9 deg across the three datasets,
  * mean 33 deg from down (Munich dip 64 deg => 26 deg expected, 7 deg residual
  * = soft/hard-iron). The previous mapping (+sensorY, +sensorX, -sensorZ)
- * ranked 32nd of 48 (spread 29.5 deg) with the field pointing UP instead of
- * down.
+ * ranked 31st-32nd of 48 (tied, spread 29.5 deg) with the field pointing UP
+ * instead of down.
  *
  * This table has determinant -1 and that is INTENTIONAL, unlike the IMU
  * mount above: the magnetometer is a polar vector, not a pseudovector, so the
@@ -289,11 +289,16 @@
  * no per-axis sign of its own and there is no datasheet naming which axis the
  * silicon reports mirrored (docs/MMC5983MA.md SS7/SS9) — the reflection in
  * this table cancels a reflection already present in the delivered data, so
- * the net physical-to-body map is proper. The real fix is a driver sign once
- * a datasheet exists to name the mirrored axis; that would invalidate the
- * NVM/board.json hard-iron offsets (magOffZ or magOffY, whichever axis turns
- * out to be mirrored) and require re-calibration in exchange for encoding a
- * currently-unfalsifiable guess, so it is deferred (SYS1-001 B9 alt 1). */
+ * the net physical-to-body map is proper. That the mirror is in the DATA, not
+ * a free choice of table, is not merely assumed: the 48-permutation search
+ * covers every determinant-+1 (proper) candidate too, and the best of THOSE
+ * still puts the field pointing UP at Munich's +64 deg dip -- physically
+ * impossible for a correctly-oriented sensor. No proper mount fits the data;
+ * a driver-side mirror is the only hypothesis the search leaves standing.
+ * The real fix is a driver sign once a datasheet exists to name the mirrored
+ * axis; that would invalidate the NVM/board.json hard-iron offsets (magOffZ
+ * or magOffY, whichever axis turns out to be mirrored) and require
+ * re-calibration, so it is deferred (SYS1-001 B9 alt 1). */
 #define AHRS_MOUNT_X_SRC      (1u)        /* body forward <- sensor Y */
 #define AHRS_MOUNT_X_SGN      ( 1.0f)
 #define AHRS_MOUNT_Y_SRC      (0u)        /* body right   <- sensor X */
