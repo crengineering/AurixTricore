@@ -244,6 +244,32 @@ orientation-dependent amount, so it cannot hold yaw — it only replaces gyro
 drift with its own. Roll and pitch are unaffected, which is the signature: the
 mag correction is confined to the vertical axis by construction.
 
+> ⚠️ **Retracted, 2026-09-13 (SYS1-001 B9).** "The transform is validated"
+> above only ever checked the horizontal rotation SENSE at level — and the old
+> and new mappings both preserve that sense, so the clean 360° sweep never
+> distinguished them. It did not check the VERTICAL component, which only
+> shows up once the board is tilted: rolled 90° the old mapping put yaw
+> ~180° off (Chris, bench, 2026-09-13).
+>
+> **Measured mount (SYS1-001 B9):** a yaw-independent search over all 48
+> signed axis permutations against three six-position recordings found
+> angle(magnetic field, gravity-down) constant only for **body = (+sensor X,
+> −sensor Y, +sensor Z)** — spread 3.4–4.9° across the three datasets, mean
+> 33° from down (Munich dip 64° ⇒ 26° expected, 7° residual is soft/hard-iron
+> leftover). The old mapping (+sensor Y, +sensor X, −sensor Z, i.e. the same
+> table as the IMU mount above) ranked 32nd of 48, spread 29.5°, field
+> pointing UP instead of down. See `docs/MMC5983MA.md` §7 for why the fix
+> lives in this table (determinant −1, legitimate for a polar vector) rather
+> than in `Mmc5983.c` — there is no datasheet to name which axis the driver
+> actually mirrors.
+>
+> **Level heading shifts by +90°** relative to every number quoted above
+> (the rotation SENSE is unchanged, so `magTrusted`/sweep-smoothness evidence
+> above still holds). Declination (3.9°, Munich) is unaffected — it is
+> applied after the mount, at the AHRS output. **Any "yaw points north"
+> claim needs a handheld-compass re-check at level; this is not yet done**
+> (SYS1-001 B9 task 4, bench, Chris).
+
 ---
 
 ## 5. Failure modes that are already handled

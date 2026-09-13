@@ -168,6 +168,30 @@ Scaling assumed: unsigned **18-bit** per axis, zero field at mid-scale
 Axis assembly: `[17:10]` from the first byte, `[9:2]` from the second, `[1:0]`
 from `XYZout2` at bit offset 6 (X), 4 (Y), 2 (Z).
 
+**⚠️ The driver applies no per-axis sign of its own** — `Mmc5983.c:188-190`
+computes all three axes with the identical expression
+`(raw18 - 131072) / 16384`, so whatever handedness the silicon reports is
+passed straight through. SYS1-001 B9 (2026-09-13) found, by a yaw-independent
+search over all 48 signed axis permutations against three six-position bench
+recordings, that the delivered triad is **mirrored relative to a
+right-handed frame**: `Ahrs.c`'s `AHRS_MAG_MOUNT_*` mount table needs
+determinant −1 (diag(+1,−1,+1), no axis swap) to make angle(magnetic field,
+gravity) come out constant across attitude, where every OTHER sensor on this
+board (accelerometer, gyroscope — both pseudovector/true-vector arguments)
+needs determinant +1. Because §6 there is no device datasheet, **which axis
+the silicon actually mirrors cannot be named**: `diag(+1,−1,+1)` is
+observationally identical to a face-down mount with a driver-side Y
+mirroring, or a face-up mount with a driver-side Z mirroring, and nothing
+measurable from outside the die distinguishes them. The mount table is
+therefore where the correction lives today, not the driver — it is a
+polar-vector argument (Ahrs.h), so a table determinant of −1 is legitimate
+there in a way it would not be for the IMU. Moving the sign into
+`Mmc5983.c` once a datasheet identifies the mirrored axis is the real fix,
+but it would invalidate the hard-iron offsets already in
+`calibration/board.json` (magOffZ or magOffY, whichever axis turns out to be
+the mirrored one) and force a re-calibration in exchange for encoding a
+currently-unfalsifiable guess — deferred until a datasheet exists.
+
 Two behaviours worth knowing before debugging anything:
 
 1. **The control registers 0x09–0x0C do not read back what you wrote.**
