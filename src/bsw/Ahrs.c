@@ -273,12 +273,27 @@
  * evidence for this sensor.
  *
  * MAG — the MMC5983MA is a SEPARATE breakout in its own orientation and gets
- * its own transform. This one is still a HYPOTHESIS: it cannot be measured
- * until the hard-iron offsets are calibrated, because uncalibrated |B| swings
- * by a factor of two with orientation (0.428..0.984 G measured) and swamps any
- * axis check. Run tools/mag_cal.py first, then verify that yaw tracks a
- * physical 90 degree rotation. A wrong mag transform shows as yaw that runs
- * backwards or refuses to settle, while roll and pitch stay perfect. */
+ * its own transform. MEASURED 2026-09-13 (SYS1-001 B9): a yaw-independent
+ * search over all 48 signed axis permutations against three six-position
+ * recordings (hard-iron corrected first, tools/mag_cal.py) found angle(mag
+ * field, gravity-down) constant only for X_SRC=sensor X (+1), Y_SRC=sensor Y
+ * (-1), Z_SRC=sensor Z (+1): spread 3.4-4.9 deg across the three datasets,
+ * mean 33 deg from down (Munich dip 64 deg => 26 deg expected, 7 deg residual
+ * = soft/hard-iron). The previous mapping (+sensorY, +sensorX, -sensorZ)
+ * ranked 32nd of 48 (spread 29.5 deg) with the field pointing UP instead of
+ * down.
+ *
+ * This table has determinant -1 and that is INTENTIONAL, unlike the IMU
+ * mount above: the magnetometer is a polar vector, not a pseudovector, so the
+ * zero-or-two-negations rule does not apply to it (Ahrs.h). Mmc5983.c applies
+ * no per-axis sign of its own and there is no datasheet naming which axis the
+ * silicon reports mirrored (docs/MMC5983MA.md SS7/SS9) — the reflection in
+ * this table cancels a reflection already present in the delivered data, so
+ * the net physical-to-body map is proper. The real fix is a driver sign once
+ * a datasheet exists to name the mirrored axis; that would invalidate the
+ * NVM/board.json hard-iron offsets (magOffZ or magOffY, whichever axis turns
+ * out to be mirrored) and require re-calibration in exchange for encoding a
+ * currently-unfalsifiable guess, so it is deferred (SYS1-001 B9 alt 1). */
 #define AHRS_MOUNT_X_SRC      (1u)        /* body forward <- sensor Y */
 #define AHRS_MOUNT_X_SGN      ( 1.0f)
 #define AHRS_MOUNT_Y_SRC      (0u)        /* body right   <- sensor X */
@@ -286,12 +301,12 @@
 #define AHRS_MOUNT_Z_SRC      (2u)        /* body down    <- -sensor Z */
 #define AHRS_MOUNT_Z_SGN      (-1.0f)
 
-#define AHRS_MAG_MOUNT_X_SRC  (1u)
+#define AHRS_MAG_MOUNT_X_SRC  (0u)        /* body forward <- +sensor X */
 #define AHRS_MAG_MOUNT_X_SGN  ( 1.0f)
-#define AHRS_MAG_MOUNT_Y_SRC  (0u)
-#define AHRS_MAG_MOUNT_Y_SGN  ( 1.0f)
-#define AHRS_MAG_MOUNT_Z_SRC  (2u)
-#define AHRS_MAG_MOUNT_Z_SGN  (-1.0f)
+#define AHRS_MAG_MOUNT_Y_SRC  (1u)        /* body right   <- -sensor Y */
+#define AHRS_MAG_MOUNT_Y_SGN  (-1.0f)
+#define AHRS_MAG_MOUNT_Z_SRC  (2u)        /* body down    <- +sensor Z */
+#define AHRS_MAG_MOUNT_Z_SGN  ( 1.0f)
 
 /* Apply the IMU mounting transform. Used for the accelerometer AND the gyro —
  * both must go through the same mapping or the filter tears itself apart. */

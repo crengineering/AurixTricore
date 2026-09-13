@@ -25,7 +25,12 @@
  * the body frame. The transforms are AHRS_MOUNT_* (IMU) and AHRS_MAG_MOUNT_*
  * (magnetometer) in Ahrs.c — negate ZERO or TWO axes, never one, or the frame
  * turns left-handed and the gyro (a pseudovector) starts disagreeing with the
- * accelerometer about which way is up.
+ * accelerometer about which way is up. Exception: this zero-or-two-negations
+ * rule is a PSEUDOVECTOR argument (gyro vs. accelerometer must agree on
+ * handedness). The magnetometer is a polar vector and carries no such
+ * constraint — its mount may legitimately have determinant -1 (one or three
+ * negations) if that is what cancels a mirroring already present in the
+ * delivered data (SYS1-001 B9; see the AHRS_MAG_MOUNT_* comment in Ahrs.c).
  *
  *   BENCH CHECK after any remount, board held still:
  *     level, chip up      -> roll ~0, pitch ~0
