@@ -32,6 +32,7 @@
 #include "Ahrs.h"
 #include "Nvm.h"
 #include "FusionCal.h"
+#include "AhrsLatch.h"
 #include "test_util_math.h"
 
 #define DT      0.005f          /* 200 Hz, the rate the board runs at */
@@ -266,6 +267,7 @@ void test_mounting_transform_is_a_proper_rotation(void)
     }
 }
 
+
 /* ==========================================================================
  * T14 (docs/REFACTORING_PLAN.md §3.8) -- the gyro-bias calibration window is
  * a DURATION accumulated from dt, not a sample count, so it means the same
@@ -378,6 +380,164 @@ static void holdBody(const float M[9], const float aBody[3], Ahrs_Values *v)
     settle(v, accSensor, 40000);
 }
 
+/* ==========================================================================
+ * SYS1-001 B9 (2026-09-13) -- the mag mount table was a HYPOTHESIS never
+ * checked away from level (only the horizontal rotation sense was verified,
+ * and both the old and the new mapping preserve that). A rigid sensor triad
+ * in a locally-uniform field sees a CONSTANT angle between the magnetic
+ * field and gravity, regardless of the board's attitude -- that is the
+ * check the level-only tests could never make. Six-position window means
+ * (measured 2026-09-12, evidence 0F542580C307FA1E,
+ * Measurement Data/2026-09-12_6pos_r3_window_means.json), fed through the
+ * PRODUCTION mag path (Ahrs_setMag: hard-iron subtraction + the real
+ * AHRS_MAG_MOUNT_* transform, read back via g_magLatch) and the production
+ * IMU mount (measured, mountMatrix()).
+ * ======================================================================== */
+
+void test_mag_mount_field_gravity_angle_is_constant(void)
+{
+    /* sensor-frame magRaw_G / accRaw_g, in JSON order (level, roll_p90,
+     * roll_p90b, roll_m90, roll_m90b, nose_up, nose_down, level_end). */
+    static const float32 magRawG[8][3] = {
+        {  0.05246f, -0.34019f, -0.41305f },
+        { -0.00378f, -0.48328f, -1.01070f },
+        { -0.01235f, -0.48752f, -1.01703f },
+        { -0.06635f,  0.33103f, -0.62561f },
+        { -0.00900f,  0.31426f, -0.63662f },
+        { -0.58533f, -0.26785f, -0.59756f },
+        {  0.15009f, -0.28623f, -1.07743f },
+        {  0.06558f, -0.32375f, -0.41028f },
+    };
+    static const float32 accRawG[8][3] = {
+        { -0.01772f, -0.05938f,  0.99486f },
+        { -0.99869f, -0.06778f, -0.00534f },
+        { -1.00056f, -0.03295f, -0.02981f },
+        {  0.97494f,  0.16589f,  0.11123f },
+        {  0.99163f,  0.02788f,  0.07277f },
+        { -0.02193f,  0.99352f,  0.05267f },
+        { -0.00343f, -0.99390f, -0.14970f },
+        { -0.01208f, -0.06262f,  0.99353f },
+    };
+    static const float32 hardIronG[3] = { -0.1940f, -0.0722f, -0.8510f };
+    const unsigned n = 8u;
+    float M[9];
+    float angleDeg[8];
+    float sum, sumSq, mean, variance, std;
+    unsigned i;
+    char msg[192];
+
+    mountMatrix(M);           /* real, measured IMU mount -- unaffected by B9 */
+    g_xcpNvm.magOffX = hardIronG[0];
+    g_xcpNvm.magOffY = hardIronG[1];
+    g_xcpNvm.magOffZ = hardIronG[2];
+
+    sum = 0.0f; sumSq = 0.0f;
+    for (i = 0u; i < n; ++i)
+    {
+        float32 accBody[3];
+        float32 gravityDown[3];
+        float32 magBody[3];
+        float   dot, nAcc, nMag, cosA;
+
+        /* accel: production mount, forward direction (mat3vec, not the
+         * inverse) -- M's column k IS the body direction for sensor axis k
+         * (mountMatrix()'s own comment), so M*sensorVec = bodyVec directly. */
+        mat3vec(M, accRawG[i], accBody);
+        gravityDown[0] = -accBody[0];
+        gravityDown[1] = -accBody[1];
+        gravityDown[2] = -accBody[2];
+
+        /* mag: the ACTUAL production path -- hard-iron subtraction then the
+         * real AHRS_MAG_MOUNT_* transform, read back via the shared latch
+         * exactly as NavTask_step would. */
+        Ahrs_setMag(magRawG[i], TRUE);
+        magBody[0] = g_magLatch.magB[0];
+        magBody[1] = g_magLatch.magB[1];
+        magBody[2] = g_magLatch.magB[2];
+
+        dot  = (magBody[0] * gravityDown[0]) + (magBody[1] * gravityDown[1]) + (magBody[2] * gravityDown[2]);
+        nMag = sqrtf((magBody[0] * magBody[0]) + (magBody[1] * magBody[1]) + (magBody[2] * magBody[2]));
+        nAcc = sqrtf((gravityDown[0] * gravityDown[0]) + (gravityDown[1] * gravityDown[1]) + (gravityDown[2] * gravityDown[2]));
+        cosA = dot / (nMag * nAcc);
+        if (cosA >  1.0f) { cosA =  1.0f; }
+        if (cosA < -1.0f) { cosA = -1.0f; }
+        angleDeg[i] = acosf(cosA) / DEG;
+
+        sum   += angleDeg[i];
+        sumSq += angleDeg[i] * angleDeg[i];
+    }
+
+    mean     = sum / (float)n;
+    variance = (sumSq / (float)n) - (mean * mean);
+    std      = sqrtf((variance > 0.0f) ? variance : 0.0f);
+
+    printf("\n  NEW mag mount: angle(field,gravity) mean=%.2f deg std=%.2f deg\n",
+           (double)mean, (double)std);
+
+    (void)snprintf(msg, sizeof msg,
+        "NEW mag mount: angle(field,gravity) mean=%.2f deg std=%.2f deg "
+        "(want mean in [20,40], std < 6 -- B9: mean 33, spread 3.4-4.9 across 3 datasets)",
+        (double)mean, (double)std);
+    TEST_ASSERT_TRUE_MESSAGE(std < 6.0f, msg);
+    TEST_ASSERT_TRUE_MESSAGE((mean >= 20.0f) && (mean <= 40.0f), msg);
+
+    /* The OLD mapping (AHRS_MAG_MOUNT_* before B9: X_SRC=1/+1, Y_SRC=0/+1,
+     * Z_SRC=2/-1 -- identical to the IMU mount) must NOT look constant: it
+     * ranked 32nd of 48 in the B9 search (spread 29.5 deg, field pointing
+     * UP). The mount is a compile-time table, not a runtime parameter, so
+     * this is reproduced directly on the SAME hard-iron-corrected samples
+     * rather than by rebuilding with the old constants -- this is what
+     * proves the fix is what makes the assertion above pass, not a
+     * coincidence of the acceptance band. */
+    {
+        float oldSum = 0.0f, oldSumSq = 0.0f, oldMean, oldVariance, oldStd;
+
+        for (i = 0u; i < n; ++i)
+        {
+            float32 accBody[3];
+            float32 gravityDown[3];
+            float32 corrected[3];
+            float32 oldMagBody[3];
+            float   dot, nAcc, nMag, cosA, ang;
+
+            mat3vec(M, accRawG[i], accBody);
+            gravityDown[0] = -accBody[0];
+            gravityDown[1] = -accBody[1];
+            gravityDown[2] = -accBody[2];
+
+            corrected[0] = magRawG[i][0] - hardIronG[0];
+            corrected[1] = magRawG[i][1] - hardIronG[1];
+            corrected[2] = magRawG[i][2] - hardIronG[2];
+            oldMagBody[0] =  corrected[1];   /* old X_SRC=1, +1 */
+            oldMagBody[1] =  corrected[0];   /* old Y_SRC=0, +1 */
+            oldMagBody[2] = -corrected[2];   /* old Z_SRC=2, -1 */
+
+            dot  = (oldMagBody[0] * gravityDown[0]) + (oldMagBody[1] * gravityDown[1]) + (oldMagBody[2] * gravityDown[2]);
+            nMag = sqrtf((oldMagBody[0] * oldMagBody[0]) + (oldMagBody[1] * oldMagBody[1]) + (oldMagBody[2] * oldMagBody[2]));
+            nAcc = sqrtf((gravityDown[0] * gravityDown[0]) + (gravityDown[1] * gravityDown[1]) + (gravityDown[2] * gravityDown[2]));
+            cosA = dot / (nMag * nAcc);
+            if (cosA >  1.0f) { cosA =  1.0f; }
+            if (cosA < -1.0f) { cosA = -1.0f; }
+            ang = acosf(cosA) / DEG;
+
+            oldSum   += ang;
+            oldSumSq += ang * ang;
+        }
+
+        oldMean     = oldSum / (float)n;
+        oldVariance = (oldSumSq / (float)n) - (oldMean * oldMean);
+        oldStd      = sqrtf((oldVariance > 0.0f) ? oldVariance : 0.0f);
+
+        printf("  OLD mag mount: angle(field,gravity) mean=%.2f deg std=%.2f deg\n",
+               (double)oldMean, (double)oldStd);
+
+        (void)snprintf(msg, sizeof msg,
+            "OLD mag mount would give mean=%.2f deg std=%.2f deg -- must NOT look "
+            "constant (std > 20), proving the fix is load-bearing",
+            (double)oldMean, (double)oldStd);
+        TEST_ASSERT_TRUE_MESSAGE(oldStd > 20.0f, msg);
+    }
+}
 void test_level_board_reads_zero_roll_and_pitch(void)
 {
     float M[9]; mountMatrix(M);
@@ -1073,8 +1233,11 @@ void test_b1_level_case_yaw_component_bit_identical_to_pre_fix(void)
         float32 magS[3];
 
         /* Level, yaw == 0 -> nedToBody == identity -- the field IS the body
-         * reading directly, no Ahrs_nedToBody needed at this attitude. */
-        mountInverse(M, fieldNed, magS);
+         * reading directly, no Ahrs_nedToBody needed at this attitude.
+         * magMountInverse, not mountInverse(M, ...): this is a bit-identical
+         * comparison against an exact body-frame target, which needs the
+         * REAL mag mount (SYS1-001 B9 changed it away from the IMU mount). */
+        magMountInverse(fieldNed, magS);
         Ahrs_setMag(magS, TRUE);
 
         /* Independent reference: mn (normalised field) x w (flattened
@@ -1175,7 +1338,10 @@ void test_b1_yaw_time_constant_matches_the_bench_fit(void)
         const float32 fieldNed[3] = { B_MAG_HR * cosf(hErrRad), B_MAG_HR * sinf(hErrRad), B_MAG_HZ };
         float32 magS[3];
 
-        mountInverse(M, fieldNed, magS);
+        /* Level, yaw == 0: fieldNed IS the wanted body-frame reading, so this
+         * needs the REAL mag mount (magMountInverse), not the IMU mount M
+         * (SYS1-001 B9) -- same reasoning as the level test above. */
+        magMountInverse(fieldNed, magS);
         Ahrs_setMag(magS, TRUE);
     }
 
@@ -2433,6 +2599,7 @@ int main(void)
     RUN_TEST(test_rotation_preserves_magnitude);
     RUN_TEST(test_body_ned_round_trip);
     RUN_TEST(test_mounting_transform_is_a_proper_rotation);
+    RUN_TEST(test_mag_mount_field_gravity_angle_is_constant);
     RUN_TEST(test_calibration_window_is_a_duration_not_a_sample_count);
     RUN_TEST(test_calibration_deadline_is_a_duration_and_flags_degraded);
     RUN_TEST(test_level_board_reads_zero_roll_and_pitch);
