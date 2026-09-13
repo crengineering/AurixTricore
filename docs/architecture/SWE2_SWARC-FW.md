@@ -9,6 +9,25 @@ per-module truth lives in the linked SWE.3 docs and the headers themselves.
 
 ## Change log
 
+- 2026-09-12 — SYS1-001 strand B: the magnetometer correction in
+  `ahrs_errorVector()` is now projected onto the estimated vertical (`d_b`)
+  before being applied, so it can only ever correct heading — the
+  unprojected cross product had a NORTH-dominant component that wrote a
+  false roll/pitch gyro-bias through the shared Mahony integral. That
+  integral is now two: `s_fbI[3]` (body, accelerometer only) and
+  `s_fbIYaw` (about `d_b`, magnetometer only), each clamped as a backstop
+  (2.0°/s body, 1.0°/s heading). The accelerometer's hard `|a|` trust
+  window is replaced by a continuous weight (`w_norm · w_rate`, published
+  as `accWeightPct`) scaling both its proportional and integral
+  contribution. Detail: `docs/FUSION.md` §5 ("One rejected mag heading
+  writing a false roll/pitch bias").
+- 2026-09-11 — SYS1-001: `Ahrs_update()`'s input-fault handling is now a
+  debounced two-state machine (freeze on one bad tick, `AHRS_NO_SENSOR` only
+  after `AHRS_FAULT_HOLD_S` of persistent invalid input) instead of
+  re-initialising on the first rejected sample; `NavTask_step` treats a
+  SHORT-classified interval (a duplicate DRDY edge) as consumed, not a fault.
+  Detail: `docs/FUSION.md` §5 ("One rejected IMU sample re-initialising the
+  whole attitude").
 - 2026-08-29 — created as-built (post PR #15 core partition); collects what
   `REFACTORING_PLAN.md` (now archive) established.
 
@@ -63,6 +82,13 @@ MISRA C:2012 gate (new code clean); TASKING packs `uint32` at 2-byte
 alignment — struct layout changes ripple into A2L + GUI (`CODEMAP.md`);
 NaN compares false — `isfinite()` guards on every non-finite-capable path;
 no unbounded wait (iLLD spins hung CPU0 before — bounded in-house engines).
+A transient sensor-input fault must freeze the attitude estimate, never
+re-initialise it on the spot (SYS1-001) — `AHRS_FAULT_HOLD_S` (`Ahrs.c`) is
+the one place that boundary is drawn; do not add a second path that declares
+`AHRS_NO_SENSOR` without going through it. The magnetometer may correct
+heading only, never roll or pitch (SYS1-001 strand B) — any new mag-derived
+correction term goes through the `d_b` projection in `ahrs_errorVector()`,
+not summed into `e[]` directly; it feeds `s_fbIYaw`, never `s_fbI[3]`.
 
 ## Open architectural work (waiting on requirements)
 

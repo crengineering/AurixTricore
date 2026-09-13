@@ -25,7 +25,12 @@
  * the body frame. The transforms are AHRS_MOUNT_* (IMU) and AHRS_MAG_MOUNT_*
  * (magnetometer) in Ahrs.c — negate ZERO or TWO axes, never one, or the frame
  * turns left-handed and the gyro (a pseudovector) starts disagreeing with the
- * accelerometer about which way is up.
+ * accelerometer about which way is up. Exception: this zero-or-two-negations
+ * rule is a PSEUDOVECTOR argument (gyro vs. accelerometer must agree on
+ * handedness). The magnetometer is a polar vector and carries no such
+ * constraint — its mount may legitimately have determinant -1 (one or three
+ * negations) if that is what cancels a mirroring already present in the
+ * delivered data (SYS1-001 B9; see the AHRS_MAG_MOUNT_* comment in Ahrs.c).
  *
  *   BENCH CHECK after any remount, board held still:
  *     level, chip up      -> roll ~0, pitch ~0
@@ -67,8 +72,18 @@ typedef struct
     float32 accMagG;       /**< |a| [g]; 1.0 at rest, the health check        */
     float32 magFieldG;     /**< |B| after hard-iron correction [gauss]        */
     uint8   state;         /**< Ahrs_State                                    */
-    uint8   accTrusted;    /**< 1 while |a| is close enough to 1 g to use     */
+    uint8   accTrusted;    /**< 1 while w_acc > 0 (SYS1-001 strand B B3.4);
+                            *   was a hard |a| window, now the outer edge of
+                            *   a continuous weight -- see accWeightPct       */
     uint8   magTrusted;    /**< 1 while |B| is plausible and being used       */
+    uint8   accWeightPct;  /**< SYS1-001 strand B (B3.4): w_norm*w_rate*100,
+                            *   0..100 -- the continuous accel trust that now
+                            *   scales twoKpAcc's P AND I contribution every
+                            *   tick, replacing the old hard |a| window.
+                            *   100 = full trust (|a| within 5% of 1 g AND
+                            *   |gyro| below 30 deg/s); 0 at or beyond the
+                            *   old hard edges (|a|-1| >= 15%, or the
+                            *   plausibility band is exited some other way)  */
     uint8   biasDegraded;  /**< 1 if the boot gyro-bias calibration hit its
                             *   deadline instead of completing a still window,
                             *   i.e. the board was moving at power-on. The
@@ -83,8 +98,14 @@ void Ahrs_init(void);
  *  \param acc    acceleration [g],     SENSOR frame, X/Y/Z
  *  \param gyro   angular rate [deg/s], SENSOR frame, X/Y/Z
  *  \param dt     measured time since the previous call [s]
- *  \param valid  FALSE when the IMU read failed — the estimate is frozen
- *                rather than integrating a stale sample */
+ *  \param valid  FALSE when the IMU read failed — the estimate freezes
+ *                (quaternion and gyro-bias integral held, rate/trust
+ *                reported as zero) rather than integrating a stale sample.
+ *                SYS1-001: a single bad tick, or a short run of them, only
+ *                freezes; the estimator declares AHRS_NO_SENSOR and
+ *                re-aligns on the next good sample only once invalid input
+ *                has PERSISTED for AHRS_FAULT_HOLD_S (Ahrs.c) -- see that
+ *                constant's comment for why. */
 void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
                  float32 dt, boolean valid);
 
@@ -105,5 +126,61 @@ void Ahrs_nedToBody(const float32 vNed[3], float32 vBody[3]);
  *  \param mag    field [gauss], SENSOR frame, X/Y/Z
  *  \param valid  FALSE when the read failed (sample ignored) */
 void Ahrs_setMag(const float32 mag[3], boolean valid);
+
+/* --- debug instrumentation (SYS1-001 task 0) -----------------------------
+ * Raw map symbols read by tools/xcp_read.py, same precedent as g_imuDrdy*
+ * (ImuInt.h) -- no A2L entry, no Xcp_Data field, no GUI change. Declared
+ * here (not just defined in Ahrs.c) for MISRA 8.4: an object with external
+ * linkage needs a visible prior declaration. */
+/** Count of ahrs_align() calls (CALIBRATING/NO_SENSOR -> ALIGNING ->
+ *  RUNNING), including the one at boot. Names the SYS1-001 defect directly:
+ *  a healthy 125 s stationary run should show ~1 (the boot alignment only),
+ *  not the dozens a re-initialising estimator produces. */
+extern volatile uint32 g_dbgAhrsRealigns;
+
+/* --- debug instrumentation (SYS1-001 strand B task 13, SWE1-FW-009) ------
+ * Names the corrupt-IMU-sample defect (evidence rows 7D13E62A0B428BE3,
+ * 1E1CC203E9702454: a single near-full-scale gyro word integrated for one
+ * tick) BEFORE the bounds of tasks 14/15 land -- a mis-set slew gate on the
+ * estimator's input is itself a hazard, so the threshold is confirmed
+ * against a captured event, not only against the derivation. Raw map
+ * symbols, no A2L entry, no Xcp_Data field -- same precedent as
+ * g_dbgAhrsRealigns above. */
+
+/** One-shot latch of the raw inputs and the internal state on the FIRST
+ *  tick g_dbgAhrsBigStep (below) fires. Captured AFTER the tick's full
+ *  correction and integration (so fbI[]/fbIYaw/q are the values THIS tick
+ *  produced, not the ones it started from) -- the same "what did the
+ *  correction paths actually do" witness the dispatch's root-cause analysis
+ *  used externally via 100 ms polling, now available on the very tick it
+ *  happens. */
+typedef struct
+{
+    float32 gyroRaw[3]; /**< gyro AS DELIVERED to Ahrs_update, SENSOR frame,
+                          *   pre-mount [deg/s] -- the raw word the defect
+                          *   analysis needs, not the body-frame value       */
+    float32 accRaw[3];  /**< acc AS DELIVERED to Ahrs_update, SENSOR frame,
+                          *   pre-mount [g]                                  */
+    float32 dt;          /**< dt this tick [s]                               */
+    float32 eMagD;       /**< magnetometer correction along d_b THIS tick,
+                          *   already kp-scaled [rad/s] (Ahrs.c ahrs_errorVector) */
+    float32 fbIYaw;      /**< s_fbIYaw AFTER this tick's integration [rad/s] */
+    float32 fbI[3];      /**< s_fbI[] AFTER this tick's integration, body,
+                          *   [rad/s]                                        */
+    float32 q[4];        /**< published quaternion AFTER this tick, w/x/y/z  */
+    float32 magNorm;     /**< s_magNorm (latched |B|) this tick [gauss]      */
+} Ahrs_BigStepSnapshot;
+
+/** Count of ticks where the gyro delivered this tick, integrated over dt,
+ *  would move the attitude by more than 0.5 deg in a single step -- large
+ *  enough to name a corrupt/near-full-scale sample (the observed defect was
+ *  1918-1967 deg/s, 95.9-98.3% of the +/-2000 dps full scale), small enough
+ *  that no legitimate airframe motion at the ~985 us IMU period reaches it. */
+extern volatile uint32 g_dbgAhrsBigStep;
+
+/** See Ahrs_BigStepSnapshot -- filled once, on the first tick
+ *  g_dbgAhrsBigStep counts; every later occurrence still increments the
+ *  counter but leaves this snapshot alone. */
+extern volatile Ahrs_BigStepSnapshot g_dbgAhrsBigStepSnapshot;
 
 #endif /* AHRS_H */

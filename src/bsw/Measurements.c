@@ -313,12 +313,12 @@ void measurementsSetFusion(const FusionValues *fusion, const Ahrs_Values *ahrs,
         g_xcpFusion.accNed[i]   = ahrs->accNed[i];
     }
 
-    g_xcpFusion.accMagG    = ahrs->accMagG;
-    g_xcpFusion.magFieldG  = ahrs->magFieldG;
-    g_xcpFusion.ahrsState  = ahrs->state;
-    g_xcpFusion.accTrusted = ahrs->accTrusted;
-    g_xcpFusion.magTrusted = ahrs->magTrusted;
-    g_xcpFusion.reserved   = 0u;
+    g_xcpFusion.accMagG      = ahrs->accMagG;
+    g_xcpFusion.magFieldG    = ahrs->magFieldG;
+    g_xcpFusion.ahrsState    = ahrs->state;
+    g_xcpFusion.accTrusted   = ahrs->accTrusted;
+    g_xcpFusion.magTrusted   = ahrs->magTrusted;
+    g_xcpFusion.accWeightPct = ahrs->accWeightPct;
 
     g_xcpFusion.posD     = fusion->a_d;
     g_xcpFusion.velD     = fusion->a_v_d;

@@ -60,9 +60,17 @@ jobs:
     timeout-minutes: 5
     strategy:
       fail-fast: false
-      matrix: 
+      matrix:
         opt: [-Og, -Os]
     steps:
       - uses: actions/checkout@v7
       - name: Run WError
         run: python3 tools/utest.py --werror --build-only --opt=${{ matrix.opt }}
+  docs:
+    name: Docs consistency
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run check_docs
+        run: python3 tools/check_docs.py

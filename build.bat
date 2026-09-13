@@ -70,6 +70,19 @@ for %%F in (o d src) do (
     if exist "%BUILD_DIR%\src\bsw\LayoutAssert.%%F" del "%BUILD_DIR%\src\bsw\LayoutAssert.%%F"
 )
 
+rem --- force every TU that includes Version.h to recompile on every build ---
+rem Same failure as LayoutAssert.c above, hit for real: a Version.h-only edit
+rem (SW_VERSION_STEP bump) left Cpu0_Main.o/Measurements.o/Xcp.o stale, so the
+rem flashed ELF's GET_ID/g_xcpData version bytes did not match Version.h even
+rem though "0 errors" printed (SYS1-001 B9 flash session, 2026-09-13). Derived
+rem by grep rather than hardcoded, so a future file that starts including
+rem Version.h is covered without editing this script.
+for /f "delims=" %%S in ('findstr /m /c:"Version.h" "%PROJECT_DIR%\src\bsw\*.c"') do (
+    for %%F in (o d src) do (
+        if exist "%BUILD_DIR%\src\bsw\%%~nS.%%F" del "%BUILD_DIR%\src\bsw\%%~nS.%%F"
+    )
+)
+
 echo === BUILD ===
 "%ADS%\AURIX-studioc.exe" --launcher.suppressErrors -nosplash ^
   -data "%WORKSPACE%" ^

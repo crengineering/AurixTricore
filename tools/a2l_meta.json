@@ -820,9 +820,6 @@
     "magic": {
       "skip": true
     },
-    "reserved": {
-      "skip": true
-    },
     "reserved2": {
       "skip": true
     },
@@ -903,7 +900,7 @@
     },
     "accTrusted": {
       "name": "AttAccTrusted",
-      "desc": "1 while |a| is close enough to 1 g for gravity to dominate",
+      "desc": "1 while the continuous accel weight (AttAccWeightPct) is above 0 -- same outer edge as the old hard |a| window (+/-15%), now also gated on angular rate",
       "lo": "0",
       "hi": "1"
     },
@@ -912,6 +909,13 @@
       "desc": "1 while |B| is plausible and is correcting yaw",
       "lo": "0",
       "hi": "1"
+    },
+    "accWeightPct": {
+      "name": "AttAccWeightPct",
+      "desc": "SYS1-001 strand B (B3.4): continuous accel trust, w_norm*w_rate*100 -- replaces the old hard |a| window. 100 = full trust (|a| within 5% of 1 g AND |gyro| below 30 deg/s); ramps to 0 at the old +/-15% edge or at 120 deg/s, whichever binds first. Scales twoKpAcc's P and I contribution together every tick",
+      "unit": "%",
+      "lo": "0",
+      "hi": "100"
     },
     "posD": {
       "name": "NavPosDown",

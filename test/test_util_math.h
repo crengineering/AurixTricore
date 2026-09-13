@@ -102,4 +102,41 @@ static inline void mat3Tvec(const float m[9], const float v[3], float o[3])
     o[2] = m[2] * v[0] + m[5] * v[1] + m[8] * v[2];
 }
 
+/** SYS1-001 Strand B task 0: the mag-mount inverse. Historically
+ *  AHRS_MAG_MOUNT_* was identical to AHRS_MOUNT_* (both a swap of sensor X/Y
+ *  plus a Z flip), so a test wanting a KNOWN body-frame field could invert
+ *  the SAME M test_ahrs.c already measures through the accelerometer
+ *  (mountMatrix()) rather than assuming a second, unverified matrix -- this
+ *  is exactly mat3Tvec, named separately so a mag call site reads as what
+ *  it is.
+ *
+ *  SYS1-001 B9 (2026-09-13) made that identity FALSE: the mag mount is now
+ *  diag(+1,-1,+1) (measured, see Ahrs.c's AHRS_MAG_MOUNT_* comment), while
+ *  the IMU mount stays the X/Y-swap-plus-Z-flip above. Most existing tests
+ *  built on mountInverse(M, ...) for mag still pass unchanged: both mounts
+ *  are orthonormal, so composing "intended body field -> mountInverse(M) ->
+ *  sensor -> real mag mount -> actual body field" is a FIXED isometry, and
+ *  a test that only checks a RELATIVE quantity (an injected heading error's
+ *  magnitude, a bias excursion, a clamp) is invariant to it. Only a test
+ *  that pins an EXACT body-frame value from a synthetic field (a
+ *  bit-identical / closed-form comparison) needs the real mag inverse --
+ *  use magMountInverse() below for those, not this function. */
+static inline void mountInverse(const float M[9], const float bodyVec[3], float sensorVec[3])
+{
+    mat3Tvec(M, bodyVec, sensorVec);
+}
+
+/** The real mag-mount inverse (SYS1-001 B9): AHRS_MAG_MOUNT_* is
+ *  diag(+1,-1,+1), no axis permutation, so it is its own inverse. Use this
+ *  where a test needs the sensor-frame reading that DELIVERS a specific,
+ *  known body-frame field through the actual mag path -- e.g. a bit-
+ *  identical comparison at a fixed attitude -- as opposed to mountInverse()
+ *  above, which is fine for relative/qualitative mag-error scenarios. */
+static inline void magMountInverse(const float bodyVec[3], float sensorVec[3])
+{
+    sensorVec[0] =  bodyVec[0];
+    sensorVec[1] = -bodyVec[1];
+    sensorVec[2] =  bodyVec[2];
+}
+
 #endif /* TEST_UTIL_MATH_H */

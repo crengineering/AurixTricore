@@ -242,6 +242,16 @@ def main() -> int:
                     help="only print problems")
     args = ap.parse_args()
 
+    # Same failure class as tools/misra_check.py's addon check: a tool that
+    # silently examined nothing is not the same as a tool that found nothing
+    # wrong. Run from the wrong cwd (or docs/ moved/deleted) and every
+    # check below iterates over zero files and reports "consistent" -- fail
+    # loudly instead, before that false confidence can happen.
+    files = md_files()
+    if len(files) < 10:
+        fail(str(ROOT), f"only {len(files)} markdown file(s) found -- "
+             "run this from the repository root")
+
     check_doc_references()
     check_version()
     check_block_addresses()

@@ -74,6 +74,21 @@ freien" — war seit der GNSS-Integration veraltet; ebenso ist der Kommentar
 > Bits** — sonst stünde `IMU antwortet nie` dauerhaft an und ein permanent
 > rotes Diagnosewort liest niemand mehr. Die Bits kommen zurück, sobald der
 > ICM-42688-P (QSPI0) bestückt und als bestückt deklariert wird.
+>
+> **Nicht zu verwechseln mit `Icm42688_read()`s eigenem Present-Flag**
+> (`s_icm42688Present`, `Icm42688.c`): das läuft unabhängig von diesem
+> `diagStatus`-Bit-Schema und ist AKTIV — es ist der Mechanismus, der
+> `ahrsInputOk`/`NavTask_inputValid` speist (SYS1-001). SYS1-001 strand B
+> (task 5, evidence `952275AD99001303`) schloss dort eine eigene Lücke: ein
+> elektrisch totes IMU, das weiterhin einen wohlgeformten, aber
+> EINGEFRORENEN Frame liefert (konstant 0x8000/Achse), setzte `present`
+> nie zurück — derselbe STUCK_DATA-Fehlertyp wie oben beim MPU-6050
+> beschrieben, nur ohne das getrennte Diagnose-Bit, weil der IMU-Slot
+> stillgelegt ist. Zwei neue, zeitgesteuerte Trigger
+> (`Icm42688_verifyPresence()`, `Icm42688_reportPlausibility()`) schließen
+> die Lücke direkt im Present-Flag; Details, Zustandsdiagramm und
+> Wiederherstellungs-Budget (≤ 2 s, kein Reset) in
+> `docs/IMU_INTERRUPT.md` §5.7.
 
 ### Peripherie-Diagnose lesen (ab v1.13.0)
 
