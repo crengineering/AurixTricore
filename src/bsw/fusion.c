@@ -144,6 +144,16 @@
 
 #define FUSION_RAD_TO_DEG       (57.29577951f)
 
+/* SWE1-FW-015: ZUPT fallback and gate. The gate floor is generous on
+ * purpose -- the whole point of the update is to correct a velocity that
+ * has drifted from zero, so it must not police the very residual it exists
+ * to remove; 1 m/s is far above anything an accelerometer bias produces
+ * over one barometer tick (~0.01 s) and far below any real motion, which
+ * is what RELEASES the lock in the first place, upstream of this ever
+ * running. */
+#define FUSION_SIGMA_ZUPT_DEFAULT (0.01f)
+#define FUSION_ZUPT_GATE_MIN_MPS  (1.0f)
+
 /* --- outlier gates -------------------------------------------------------- */
 
 /* Reject a sample further than this many sigma from what the filter expected.
@@ -1125,6 +1135,36 @@ static void fusion_correctBaro(void)
     }
 }
 
+/* SWE1-FW-014 section 3 / SWE1-FW-015: zero-velocity update, all three
+ * channels, decimated to the barometer rate (called only from the "new
+ * barometer sample" branch of Fusion_update() -- never on the 1014 Hz
+ * predict path). An ordinary measurement (h = [0,1,0,0], z = 0,
+ * R = sigmaZupt^2), NOT a hard x[FS_VEL] = 0: a hard assignment would leave
+ * P claiming the old uncertainty, the same (mean, covariance) incoherence
+ * fusion_correctBaro()'s own re-acquisition comment warns about, and it
+ * would teach the accelerometer-bias states nothing -- the whole point of
+ * locking at all is that a pinned velocity makes residual specific force
+ * attributable to the bias through P[vel][accBias], which only the ordinary
+ * Kalman update (not an assignment) carries forward. */
+static void fusion_correctZupt(void)
+{
+    static const float32 h[FS_N] = { 0.0f, 1.0f, 0.0f, 0.0f };
+    const float32 sz = FusionCal_positive(g_fusionCal.sigmaZupt, 0.0f,
+                                          FUSION_SIGMA_ZUPT_DEFAULT);
+    const float32 r  = sz * sz;
+    float32 y = 0.0f;
+
+    (void)fusion_chanUpdateSlewed(&s_chD, h, 0.0f, r, FUSION_GATE_SIGMA_SQ,
+                                 FUSION_ZUPT_GATE_MIN_MPS * FUSION_ZUPT_GATE_MIN_MPS,
+                                 FUSION_NO_SLEW, &y);
+    (void)fusion_chanUpdateSlewed(&s_chN, h, 0.0f, r, FUSION_GATE_SIGMA_SQ,
+                                 FUSION_ZUPT_GATE_MIN_MPS * FUSION_ZUPT_GATE_MIN_MPS,
+                                 FUSION_NO_SLEW, &y);
+    (void)fusion_chanUpdateSlewed(&s_chE, h, 0.0f, r, FUSION_GATE_SIGMA_SQ,
+                                 FUSION_ZUPT_GATE_MIN_MPS * FUSION_ZUPT_GATE_MIN_MPS,
+                                 FUSION_NO_SLEW, &y);
+}
+
 /* Correct all three channels with the latched GNSS fix. */
 static void fusion_correctGnss(void)
 {
@@ -1271,8 +1311,20 @@ static void fusion_correctGnss(void)
      * happened to accept this specific sample. */
     if (s_gnssTrusted != FALSE)
     {
+        /* Reset even while locked (below): GNSS IS trusted, this fix simply
+         * was not consulted, which must not read as an outage -- SWE1-FW-011's
+         * horizontalOk/freeze timer is about whether GNSS is AVAILABLE and
+         * believed, not about whether the filter happened to need it this
+         * tick. */
         s_dtSinceTrustedFix = 0.0f;
+    }
+    else
+    {
+        /* untrusted: nothing published below changes this tick */
+    }
 
+    if ((s_gnssTrusted != FALSE) && (s_stationaryLocked == FALSE))
+    {
         okN = fusion_chanUpdateSlewed(&s_chN, hPos, zN, rPos,
                                       FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
                                       gateMinSq, FUSION_NO_SLEW, &yN);
@@ -1379,8 +1431,13 @@ static void fusion_correctGnss(void)
     }
     else
     {
-        /* Untrusted: nothing published above changes this tick -- the
-         * position, velocity and altitude updates simply did not run. */
+        /* Untrusted, OR trusted but stationary-locked (SWE1-FW-014/-015):
+         * either way the position, velocity and altitude updates simply did
+         * not run this tick. While locked the ZUPT (fusion_correctZupt(),
+         * at the barometer's own rate) is what anchors the horizontal
+         * channels instead -- position is not moved by GNSS, exactly as the
+         * design requires, and the d/measBias split stays untouched by GNSS
+         * too since the same skip covers the altitude update. */
     }
 }
 
@@ -1530,6 +1587,19 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3],
 
                 fusion_correctBaro();
                 fusion_boundMeasBias(&s_chD);
+
+                /* SWE1-FW-015: ZUPT rides the barometer's own rate -- there
+                 * is no independent ~100 Hz clock here, and piggybacking on
+                 * an event that already happens at roughly the right rate is
+                 * simpler than adding one. */
+                if (s_stationaryLocked != FALSE)
+                {
+                    fusion_correctZupt();
+                }
+                else
+                {
+                    /* not locked: no ZUPT this tick */
+                }
             }
             else
             {

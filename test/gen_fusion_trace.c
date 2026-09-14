@@ -144,7 +144,16 @@ int main(void)
         else if (!strcmp(cmd, "STEP") || !strcmp(cmd, "STEPBAD"))
         {
             double an, ae, ad, dt;
-            double r0 = 0.0, r1 = 0.0, r2 = 0.0, accMagG = 1.0;
+            /* Legacy 4-field callers (every command stream written before
+             * SWE1-FW-014) get a "definitely moving" default, not "at rest":
+             * 0.2 rad/s is safely past relGyroDps at its compiled default in
+             * EITHER unit system, so the stationary lock this file knows
+             * nothing else about can never engage and silently change what
+             * those callers see (found the hard way -- fusion_differential's
+             * independent Python reference has no model of the lock at all,
+             * and a 4-field "at rest" default made the production filter
+             * diverge from it after about a second of simulated time). */
+            double r0 = 0.2, r1 = 0.0, r2 = 0.0, accMagG = 1.0;
             const int n = sscanf(line, "%*s %lf %lf %lf %lf %lf %lf %lf %lf",
                                  &an, &ae, &ad, &dt, &r0, &r1, &r2, &accMagG);
             if ((n == 4) || (n == 8))

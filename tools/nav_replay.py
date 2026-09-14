@@ -148,7 +148,7 @@ CSV_COLUMNS = [
     "posN", "posE", "velN", "velE", "accBiasN", "accBiasE", "innovN",
     "innovE", "pNN", "aN", "aE",
     "rejects", "resets", "gnssRejects", "gnssUpdates", "covResets",
-    "verticalOk", "horizontalOk", "originSet", "gnssTrusted",
+    "verticalOk", "horizontalOk", "originSet", "gnssTrusted", "stationaryLocked",
 ]
 
 FUSION_DT_MIN = 1.0e-4
@@ -198,11 +198,19 @@ class Recording:
         "NavInnovDown", "NavInnovNorth", "NavInnovEast",
     ]
 
+    # SWE1-FW-014/-015/-016: the stationary-lock detector inputs. OPTIONAL,
+    # not NEEDED -- several recordings this tool must still replay (the
+    # from-boot CSV, task 3b) predate them entirely, and a recording missing
+    # them simply cannot exercise the lock, which build_command_stream()
+    # falls back on (a legacy 4-field STEP, "definitely moving" per
+    # gen_fusion_trace.c's own default) rather than refusing the whole file.
+    OPTIONAL = ["AttRate0", "AttRate1", "AttRate2", "AttAccMagnitude"]
+
     def __init__(self, path: Path, start: Optional[float], end: Optional[float]):
         if path.suffix.lower() == ".csv":
-            raw = self._load_csv(path)
+            raw, self.hasLockInputs = self._load_csv(path)
         else:
-            raw = self._load_mf4(path)
+            raw, self.hasLockInputs = self._load_mf4(path)
 
         t_acc = raw["AttAccNed0"][0]
         lo = -np.inf if start is None else start
@@ -225,7 +233,7 @@ class Recording:
             self.sig[name] = hold_at(t_src, x_src, self.t)
 
     @classmethod
-    def _load_mf4(cls, path: Path) -> dict:
+    def _load_mf4(cls, path: Path):
         raw = {}
         with MDF(path) as mdf:
             available = set(mdf.channels_db.keys())
@@ -239,11 +247,13 @@ class Recording:
                     "nav_replay.py cannot reconstruct either from raw "
                     "IMU/GNSS alone (that IS the estimator). Not faked -- "
                     "report this recording as not replayable.")
-            for name in cls.NEEDED:
+            has_lock_inputs = all(name in available for name in cls.OPTIONAL)
+            names = cls.NEEDED + (cls.OPTIONAL if has_lock_inputs else [])
+            for name in names:
                 sig = mdf.get(name)
                 raw[name] = (sig.timestamps.astype(np.float64),
                              sig.samples.astype(np.float64))
-        return raw
+        return raw, has_lock_inputs
 
     @classmethod
     def _load_csv(cls, path: Path) -> dict:
@@ -267,15 +277,17 @@ class Recording:
                     f"{path.name}: not replayable -- missing column(s) "
                     f"{missing}. Not faked -- report this recording as not "
                     "replayable.")
+            has_lock_inputs = all(name in fields for name in cls.OPTIONAL)
+            names = cls.NEEDED + (cls.OPTIONAL if has_lock_inputs else [])
             t: list[float] = []
-            cols: dict[str, list[float]] = {name: [] for name in cls.NEEDED}
+            cols: dict[str, list[float]] = {name: [] for name in names}
             for row in reader:
                 t.append(float(row["t_rel"]))
-                for name in cls.NEEDED:
+                for name in names:
                     cols[name].append(float(row[name]))
         t_arr = np.array(t, dtype=np.float64)
-        return {name: (t_arr, np.array(vals, dtype=np.float64))
-                for name, vals in cols.items()}
+        return ({name: (t_arr, np.array(vals, dtype=np.float64))
+                for name, vals in cols.items()}, has_lock_inputs)
 
     def dt(self) -> np.ndarray:
         d = np.empty_like(self.t)
@@ -284,11 +296,17 @@ class Recording:
         return d
 
 
-def build_command_stream(rec: Recording, cal: dict) -> str:
+def build_command_stream(rec: Recording, cal: dict, on_ground: bool = True) -> str:
     out = io.StringIO()
     out.write("INIT\n")
     for name, value in cal.items():
         out.write(f"CAL {name} {value:.9g}\n")
+    if rec.hasLockInputs:
+        # SWE1-FW-014: every recording this branch can run on is a bench/
+        # outdoor-vehicle-stationary-or-hand-motion capture, never armed --
+        # ONGROUND 1 unless the caller explicitly says otherwise (there is
+        # no recording on file where it should be anything else).
+        out.write(f"ONGROUND {1 if on_ground else 0}\n")
 
     dt = rec.dt()
     gnss_present = rec.sig["GnssPresent"]
@@ -319,7 +337,15 @@ def build_command_stream(rec: Recording, cal: dict) -> str:
         if not (usable(aN) and usable(aE) and usable(aD)
                 and (FUSION_DT_MIN < d < FUSION_DT_MAX)):
             cmd = "STEPBAD"
-        out.write(f"{cmd} {aN:.9g} {aE:.9g} {aD:.9g} {d:.9g}\n")
+        if rec.hasLockInputs:
+            r0 = math.radians(rec.sig["AttRate0"][i])
+            r1 = math.radians(rec.sig["AttRate1"][i])
+            r2 = math.radians(rec.sig["AttRate2"][i])
+            accMagG = rec.sig["AttAccMagnitude"][i]
+            out.write(f"{cmd} {aN:.9g} {aE:.9g} {aD:.9g} {d:.9g} "
+                      f"{r0:.9g} {r1:.9g} {r2:.9g} {accMagG:.9g}\n")
+        else:
+            out.write(f"{cmd} {aN:.9g} {aE:.9g} {aD:.9g} {d:.9g}\n")
 
     return out.getvalue()
 
@@ -785,7 +811,21 @@ def compute_metrics(rows: list[dict], rec: Recording, cal: dict) -> dict:
         "horizontalOk_final": int(col["horizontalOk"][-1]),
         "originSet_final": int(col["originSet"][-1]),
         "gnssTrusted_final": int(col["gnssTrusted"][-1]),
+        "stationaryLocked_final": int(col["stationaryLocked"][-1]),
     }
+    # SWE1-FW-014 (a): fraction locked, and the horizontal velocity/position
+    # p2p while locked -- the whole point of the mechanism.
+    locked = col["stationaryLocked"] != 0
+    metrics["stationaryLocked_pct"] = float(100.0 * locked.sum() / len(locked)) if len(locked) else 0.0
+    if locked.any():
+        vHoriz = np.sqrt((col["velN"][locked] ** 2) + (col["velE"][locked] ** 2))
+        metrics["locked_velHoriz_max"] = float(vHoriz.max())
+        metrics["locked_posN_p2p"] = float(posN[locked].max() - posN[locked].min())
+        metrics["locked_posE_p2p"] = float(posE[locked].max() - posE[locked].min())
+    else:
+        metrics["locked_velHoriz_max"] = None
+        metrics["locked_posN_p2p"] = None
+        metrics["locked_posE_p2p"] = None
     # SWE1-FW-011 (a)/(b): the fraction of the run GNSS was trusted, and the
     # largest sample-to-sample jump in the (supposedly frozen) horizontal
     # position while untrusted.
@@ -848,6 +888,10 @@ def print_report(mf4_path: Path, cal: dict, metrics: dict) -> None:
           + (f"; while untrusted, max|delta| N={metrics['untrusted_posN_max_delta']:.4f} m "
              f"E={metrics['untrusted_posE_max_delta']:.4f} m"
              if metrics["untrusted_posN_max_delta"] is not None else ""))
+    print(f"stationaryLocked {metrics['stationaryLocked_pct']:.2f} % of the run"
+          + (f"; while locked, |v_horiz| max {metrics['locked_velHoriz_max']:.4f} m/s, "
+             f"posN p2p {metrics['locked_posN_p2p']:.4f} m, posE p2p {metrics['locked_posE_p2p']:.4f} m"
+             if metrics["locked_velHoriz_max"] is not None else " (never locked)"))
     if metrics["lift_events"]:
         print()
         print("detected vertical steps (baro-driven, replayable per SWE1-FW-013 a):")

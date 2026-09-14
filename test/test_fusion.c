@@ -26,6 +26,16 @@
 #define TEST_DEG2RAD 0.017453293f
 
 static const float32 ZERO3[3] = { 0.0f, 0.0f, 0.0f };
+/* SWE1-FW-014's stationary lock (task 14) engages on "at rest" gyro/accel
+ * input (rate = 0, accMagG = 1) after ~1 s on the ground, which every test
+ * above the "SWE1-FW-014" section below predates and does not want: MOVING_RATE
+ * (10 deg/s about one axis, safely past both lockGyroDps and relGyroDps at
+ * their compiled defaults) keeps those tests' Fusion_update() calls from
+ * ever locking, so SWE1-FW-014/-015's ZUPT and GNSS-skip cannot confound a
+ * test about something else entirely (found the hard way: several tests
+ * above started failing the moment task 15 turned the flag into a
+ * behaviour, because they fed literal zero rate for convenience). */
+static const float32 MOVING_RATE[3] = { 10.0f * 0.017453293f, 0.0f, 0.0f };
 
 void setUp(void)
 {
@@ -68,7 +78,7 @@ static void anchorBaro(FusionValues *f, float altM, int n)
     for (i = 0; i < n; ++i)
     {
         Fusion_setBaroAlt(altM, TRUE);
-        Fusion_update(f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+        Fusion_update(f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
     }
 }
 
@@ -93,7 +103,7 @@ void test_variance_never_negative_or_nan_under_random_drive(void)
                            600.0f + rngN(&r), 0.1f, 0.0f, 2.4f,
                            (uint32)i, TRUE);
         }
-        Fusion_update(&f, acc, ZERO3, 1.0f, rngF(&r, 0.001f, 0.02f), TRUE);
+        Fusion_update(&f, acc, MOVING_RATE, 1.0f, rngF(&r, 0.001f, 0.02f), TRUE);
 
         if ((i % 1000) == 0)
         {
@@ -116,7 +126,7 @@ void test_predict_does_not_decrease_variance(void)
     int i;
     for (i = 0; i < 4000; ++i)              /* predict only from here on */
     {
-        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
         char msg[200];
         (void)snprintf(msg, sizeof msg,
             "predict step %d shrank a variance: p00 %.9g -> %.9g, pNN %.9g -> %.9g",
@@ -149,12 +159,12 @@ void test_measurement_update_does_not_increase_variance(void)
 
     FusionCal_init(); Fusion_init();
     anchorBaro(&a, 600.0f, prefix);
-    Fusion_update(&a, ZERO3, ZERO3, 1.0f, DT, TRUE);                 /* predict only */
+    Fusion_update(&a, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);                 /* predict only */
 
     FusionCal_init(); Fusion_init();
     anchorBaro(&b, 600.0f, prefix);
     Fusion_setBaroAlt(600.0f, TRUE);
-    Fusion_update(&b, ZERO3, ZERO3, 1.0f, DT, TRUE);                 /* predict + correct */
+    Fusion_update(&b, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);                 /* predict + correct */
 
     char msg[200];
     (void)snprintf(msg, sizeof msg,
@@ -181,7 +191,7 @@ void test_process_noise_zero_is_exact_free_integration(void)
 
     const int n = 2000;                     /* 10 s at 200 Hz */
     int i;
-    for (i = 0; i < n; ++i) { Fusion_update(&f, acc, ZERO3, 1.0f, DT, TRUE); }
+    for (i = 0; i < n; ++i) { Fusion_update(&f, acc, MOVING_RATE, 1.0f, DT, TRUE); }
 
     const float T = (float)n * DT;
     char msg[200];
@@ -223,7 +233,7 @@ void test_process_noise_psd_growth_is_rate_invariant(void)
 
         for (k = 0; k < steps; k++)
         {
-            Fusion_update(&f, ZERO3, ZERO3, 1.0f, dts[r], TRUE);
+            Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, dts[r], TRUE);
         }
         p00[r] = f.p00;
 
@@ -265,7 +275,7 @@ void test_baro_noise_to_zero_snaps_the_measured_combination(void)
     g_fusionCal.gateMinM    = 1e6f;
 
     Fusion_setBaroAlt(600.5f, TRUE);
-    Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+    Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
 
     /* baro counts UP, d counts DOWN, and 600.0 anchored the origin:
      * a rise of 0.5 m is d + measBias = -0.5 m. */
@@ -299,7 +309,7 @@ void test_gnss_noise_to_zero_snaps_position_and_variance(void)
             itow += 100u;
         }
         Fusion_setBaroAlt(600.0f, TRUE);
-        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
     }
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.originSet, "no origin after 35 clean fixes");
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.gnssTrusted, "gnssTrusted never set after 35 clean fixes");
@@ -308,7 +318,7 @@ void test_gnss_noise_to_zero_snaps_position_and_variance(void)
     g_fusionCal.gnssPosRScale = 1e-8f;      /* R -> 0 */
     g_fusionCal.gateSigmaSq   = 1e12f;
     Fusion_setGnss(lat0 + 899, lon0, 600.0f, 0.0f, 0.0f, 2.4f, itow, TRUE);
-    Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+    Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
 
     char msg[240];
     (void)snprintf(msg, sizeof msg,
@@ -362,7 +372,7 @@ static void baroOnlyTenMinutes(FusionValues *f)
     {
         const float drift = 0.19f * ((float)i * DT) / 60.0f;
         Fusion_setBaroAlt(600.0f + drift + rngN(&r) * 0.0197f, TRUE);
-        Fusion_update(f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+        Fusion_update(f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
     }
 }
 
@@ -412,7 +422,7 @@ void test_horizontal_bias_states_stay_put_without_gnss(void)
      * accel bias estimates must not wander away from their initial value. */
     FusionValues f; memset(&f, 0, sizeof f);
     int i;
-    for (i = 0; i < 40000; ++i) { Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE); }
+    for (i = 0; i < 40000; ++i) { Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE); }
     assertFusionSane(&f, "200 s, no GNSS");
     TEST_ASSERT_FLOAT_WITHIN_MESSAGE(1e-6f, 0.0f, f.accBiasN, "accBiasN drifted with no measurement");
     TEST_ASSERT_FLOAT_WITHIN_MESSAGE(1e-6f, 0.0f, f.accBiasE, "accBiasE drifted with no measurement");
@@ -449,7 +459,7 @@ void test_absurd_inputs_do_not_produce_nan(void)
                     Fusion_setGnss(482000000, 116000000, alts[z], amps[a], 0.0f,
                                    (amps[a] < 0.0f) ? -amps[a] : amps[a],
                                    (uint32)(1000 + k), TRUE);
-                    Fusion_update(&f, acc, ZERO3, 1.0f, dts[d], TRUE);
+                    Fusion_update(&f, acc, MOVING_RATE, 1.0f, dts[d], TRUE);
                 }
                 char what[128];
                 (void)snprintf(what, sizeof what, "acc=%g dt=%g alt=%g",
@@ -499,7 +509,7 @@ void test_nan_from_outside_does_not_propagate(void)
             for (k = 0; k < 2000; ++k)
             {
                 Fusion_setBaroAlt(600.0f + 0.01f * (float)(k % 5), TRUE);
-                Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+                Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
             }
 
             const float32 out[] = { f.a_d, f.a_v_d, f.accBiasD, f.baroBias, f.innov,
@@ -545,7 +555,7 @@ void test_nan_measurements_do_not_freeze_the_filter(void)
     for (i = 0; i < 2000; ++i)
     {
         Fusion_setBaroAlt(NAN, TRUE);
-        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
     }
     assertFusionSane(&f, "2000 NaN barometer samples");
 
@@ -581,7 +591,7 @@ static void corruptBurstThenClean(FusionValues *f, uint32 *rejDuringClean)
     for (i = 0; i < 6000; ++i)
     {
         Fusion_setBaroAlt(600.0f + rngN(&r) * 500.0f, TRUE);
-        Fusion_update(f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+        Fusion_update(f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
     }
     const uint32 rejBefore = f->rejects;
     anchorBaro(f, 600.0f, 24000);
@@ -659,7 +669,7 @@ void test_invalid_update_freezes_the_estimate(void)
 
     const float32 acc[3] = { 3.0f, -3.0f, 5.0f };
     int i;
-    for (i = 0; i < 1000; ++i) { Fusion_update(&f, acc, ZERO3, 1.0f, DT, FALSE); }
+    for (i = 0; i < 1000; ++i) { Fusion_update(&f, acc, MOVING_RATE, 1.0f, DT, FALSE); }
 
     TEST_ASSERT_EQUAL_FLOAT_MESSAGE(d0, f.a_d,   "d moved while valid == FALSE");
     TEST_ASSERT_EQUAL_FLOAT_MESSAGE(v0, f.a_v_d, "v_d moved while valid == FALSE");
@@ -688,12 +698,12 @@ void test_gate_does_not_fire_on_a_30cm_hand_movement(void)
         const float s = (float)i / 200.0f;
         const float h = 0.30f * (0.5f - 0.5f * cosf((float)M_PI * s));   /* raised cosine */
         Fusion_setBaroAlt(600.0f + h + rngN(&r) * 0.0197f, TRUE);
-        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
     }
     for (i = 0; i < 1000; ++i)
     {
         Fusion_setBaroAlt(600.30f + rngN(&r) * 0.0197f, TRUE);
-        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
     }
     assertFusionSane(&f, "30 cm lift");
 
@@ -743,7 +753,7 @@ static void anchorGnssAndBaro(FusionValues *f, float altM, float hAccM, int nTic
         {
             Fusion_setBaroAlt(altM, TRUE);
         }
-        Fusion_update(f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+        Fusion_update(f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
     }
 }
 
@@ -800,7 +810,7 @@ void test_gnss_alt_slew_bounds_the_rate_over_600s(void)
         {
             Fusion_setBaroAlt(600.0f, TRUE);
         }
-        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
 
         const float32 t = (float)i * DT;
         /* 2x, not 1x -- see the comment above the function for why. */
@@ -848,7 +858,7 @@ void test_gnss_alt_slew_zero_is_bit_identical_to_no_gnss_altitude(void)
         {
             Fusion_setBaroAlt(600.0f + (0.02f * sinf((float)i * 0.01f)), TRUE);
         }
-        Fusion_update(&fBaroOnly, ZERO3, ZERO3, 1.0f, DT, TRUE);
+        Fusion_update(&fBaroOnly, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
     }
 
     /* Run B: identical barometer sequence, GNSS offered at 10 Hz with a
@@ -868,7 +878,7 @@ void test_gnss_alt_slew_zero_is_bit_identical_to_no_gnss_altitude(void)
             {
                 Fusion_setBaroAlt(600.0f + (0.02f * sinf((float)i * 0.01f)), TRUE);
             }
-            Fusion_update(&fSlewZero, ZERO3, ZERO3, 1.0f, DT, TRUE);
+            Fusion_update(&fSlewZero, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
         }
     }
 
@@ -914,7 +924,7 @@ void test_gnss_alt_slew_covariance_stays_psd_over_1e6_steps(void)
         {
             Fusion_setBaroAlt(600.0f + (rngN(&r) * 0.02f), TRUE);
         }
-        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
 
         if ((i % 100000) == 0)
         {
@@ -950,7 +960,7 @@ void test_gnss_alt_slew_small_offset_does_not_bind_once_converged(void)
     anchorGnssAndBaro(&fDefault, 600.0f, 2.0f, 40000);
     Fusion_setGnss(LAT0, LON0, 600.05f, 0.0f, 0.0f, 2.0f, 999000u, TRUE);
     Fusion_setBaroAlt(600.0f, TRUE);
-    Fusion_update(&fDefault, ZERO3, ZERO3, 1.0f, DT, TRUE);
+    Fusion_update(&fDefault, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
 
     /* Run B: fresh state, slew effectively infinite from the very first
      * fix -- nothing in this run can ever be clamped. */
@@ -959,7 +969,7 @@ void test_gnss_alt_slew_small_offset_does_not_bind_once_converged(void)
     anchorGnssAndBaro(&fNoLimit, 600.0f, 2.0f, 40000);
     Fusion_setGnss(LAT0, LON0, 600.05f, 0.0f, 0.0f, 2.0f, 999000u, TRUE);
     Fusion_setBaroAlt(600.0f, TRUE);
-    Fusion_update(&fNoLimit, ZERO3, ZERO3, 1.0f, DT, TRUE);
+    Fusion_update(&fNoLimit, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
 
     char msg[200];
     (void)snprintf(msg, sizeof msg,
@@ -994,7 +1004,7 @@ void test_gnss_trust_chatter_never_flips(void)
             itow += 100u;
         }
         if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
-        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
     }
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(0u, f.gnssTrusted,
         "chattering hAcc flipped gnssTrusted away from its initial FALSE");
@@ -1009,7 +1019,7 @@ void test_gnss_trust_chatter_never_flips(void)
             itow += 100u;
         }
         if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
-        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
     }
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.gnssTrusted, "did not enter trust after 40 clean fixes");
 
@@ -1022,7 +1032,7 @@ void test_gnss_trust_chatter_never_flips(void)
             itow += 100u;
         }
         if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
-        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
     }
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.gnssTrusted,
         "chattering hAcc dropped gnssTrusted away from its previous TRUE");
@@ -1045,7 +1055,7 @@ void test_gnss_trust_short_outage_keeps_horizontal_ok_and_predicting(void)
     for (i = 0; i < outageTicks; ++i)
     {
         if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
-        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);   /* no Fusion_setGnss at all */
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);   /* no Fusion_setGnss at all */
     }
 
     char msg[200];
@@ -1072,7 +1082,7 @@ void test_gnss_trust_long_outage_clears_horizontal_ok_and_freezes(void)
     for (i = 0; i < toFreezeTicks; ++i)
     {
         if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
-        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
     }
     const float32 posNFrozen = f.posN;
     const float32 posEFrozen = f.posE;
@@ -1082,7 +1092,7 @@ void test_gnss_trust_long_outage_clears_horizontal_ok_and_freezes(void)
     for (i = 0; i < toFiveSTicks; ++i)
     {
         if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
-        Fusion_update(&f, accel, ZERO3, 1.0f, DT, TRUE);   /* real acceleration, still no GNSS */
+        Fusion_update(&f, accel, MOVING_RATE, 1.0f, DT, TRUE);   /* real acceleration, still no GNSS */
     }
 
     char msg[240];
@@ -1121,7 +1131,7 @@ void test_gnss_trust_reacquires_after_exactly_30_fixes_origin_kept(void)
             itow += 100u;
         }
         if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
-        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
     }
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(0u, f.gnssTrusted, "did not lose trust after 10 bad fixes");
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.originSet, "origin cleared by losing trust");
@@ -1135,7 +1145,7 @@ void test_gnss_trust_reacquires_after_exactly_30_fixes_origin_kept(void)
             itow += 100u;
         }
         if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
-        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
     }
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(0u, f.gnssTrusted, "trusted before the 30th good fix");
 
@@ -1148,7 +1158,7 @@ void test_gnss_trust_reacquires_after_exactly_30_fixes_origin_kept(void)
             itow += 100u;
         }
         if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
-        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
     }
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.gnssTrusted, "not trusted after exactly 30 good fixes");
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.originSet, "origin cleared by re-acquisition");
@@ -1251,70 +1261,126 @@ void test_stationary_lock_setongound_false_releases_immediately(void)
         "still locked one tick after Fusion_setOnGround(FALSE), same IMU input as before");
 }
 
-void test_stationary_lock_flag_has_no_effect_on_the_estimate_yet(void)
+/* ==========================================================================
+ * SWE1-FW-015 (task 15) -- the lock's effect: ZUPT at the barometer rate,
+ * GNSS position/velocity/altitude skipped while locked. Supersedes task 14's
+ * former "no effect yet" test, which this task deliberately makes false.
+ * ======================================================================== */
+
+void test_zupt_pins_velocity_and_gnss_updates_stop_while_locked(void)
 {
-    /* SWE1-FW-014 task 14 is the flag ONLY -- no ZUPT, no GNSS skip
-     * (SWE1-FW-015/-016). Proven here by feeding the IDENTICAL accNed/baro/
-     * GNSS stimulus to two runs that differ ONLY in whether the detector
-     * ever sees a "moving" rate/accMagG (and therefore only in
-     * stationaryLocked), and checking every OTHER published field is
-     * bit-identical between them. */
+    /* SWE1-FW-014 (a): rest velocities <= 0.03 m/s, position drift <= 0.05 m
+     * once locked, whatever GNSS does -- GNSS wanders here on purpose (a
+     * jittered fix every 0.1 s) to prove the position is not moving BECAUSE
+     * it is not being consulted, not because the fix happened to agree. */
     static const sint32 LAT0 = 482000000, LON0 = 116000000;
-    FusionValues fLocked; memset(&fLocked, 0, sizeof fLocked);
-    FusionValues fMoving; memset(&fMoving, 0, sizeof fMoving);
-    const float32 movingRate[3] = { 10.0f * TEST_DEG2RAD, 0.0f, 0.0f };
-    Rng r; rngSeed(&r, 0xF014u);
+    FusionValues f; memset(&f, 0, sizeof f);
+    Rng r; rngSeed(&r, 0x2557u);
     uint32 itow = 1000u;
     int i;
 
+    /* anchor + lock: 20 s at rest, realistic 10 Hz GNSS / 100 Hz baro */
     for (i = 0; i < 4000; ++i)
     {
-        const float32 acc[3] = { rngN(&r) * 0.3f, rngN(&r) * 0.3f, rngN(&r) * 0.1f };
         if ((i % 20) == 0)
         {
-            Fusion_setGnss(LAT0, LON0, 600.0f + (rngN(&r) * 2.0f), 0.0f, 0.0f,
-                           2.0f, itow, TRUE);
+            Fusion_setGnss(LAT0, LON0, 600.0f, 0.0f, 0.0f, 2.0f, itow, TRUE);
             itow += 100u;
         }
-        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f + (rngN(&r) * 0.02f), TRUE); }
-        Fusion_update(&fLocked, acc, ZERO3, 1.0f, DT, TRUE);   /* would lock */
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
     }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.stationaryLocked, "never locked");
+    const uint32 gnssUpdatesAtLock = f.gnssUpdates;
+    const float32 posNAtLock = f.posN;
+    const float32 posEAtLock = f.posE;
 
-    setUp();
-    Rng r2; rngSeed(&r2, 0xF014u);   /* SAME seed: identical accNed/baro/gnss */
-    itow = 1000u;
-    for (i = 0; i < 4000; ++i)
+    /* 60 s locked, GNSS wandering +/- 3 m around the origin every fix */
+    for (i = 0; i < 12000; ++i)
     {
-        const float32 acc[3] = { rngN(&r2) * 0.3f, rngN(&r2) * 0.3f, rngN(&r2) * 0.1f };
         if ((i % 20) == 0)
         {
-            Fusion_setGnss(LAT0, LON0, 600.0f + (rngN(&r2) * 2.0f), 0.0f, 0.0f,
-                           2.0f, itow, TRUE);
+            /* ~3 m jitter (300 in 1e-7 deg at this latitude) -- proves the
+             * position is not moving BECAUSE it is not consulted, not
+             * because the fix happened to agree */
+            const sint32 latJit = LAT0 + (sint32)(rngN(&r) * 300.0f);
+            const sint32 lonJit = LON0 + (sint32)(rngN(&r) * 300.0f);
+            Fusion_setGnss(latJit, lonJit, 600.0f, 0.0f, 0.0f, 2.0f, itow, TRUE);
             itow += 100u;
         }
-        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f + (rngN(&r2) * 0.02f), TRUE); }
-        Fusion_update(&fMoving, acc, movingRate, 1.0f, DT, TRUE);   /* never locks */
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+
+        const float32 speedHoriz = sqrtf((f.velN * f.velN) + (f.velE * f.velE));
+        char msg[100];
+        (void)snprintf(msg, sizeof msg, "tick %d: |v|=%.5f m/s", i, (double)speedHoriz);
+        if ((i % 500) == 0)
+        {
+            TEST_ASSERT_TRUE_MESSAGE(speedHoriz <= 0.03f, msg);
+            TEST_ASSERT_TRUE_MESSAGE(fabsf(f.a_v_d) <= 0.03f, msg);
+        }
     }
 
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, fLocked.stationaryLocked, "control run never locked");
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0u, fMoving.stationaryLocked, "moving run locked anyway");
+    char msg[240];
+    (void)snprintf(msg, sizeof msg,
+        "60 s locked: gnssUpdates %u -> %u (must be equal), posN drift %.4f m, posE drift %.4f m",
+        (unsigned)gnssUpdatesAtLock, (unsigned)f.gnssUpdates,
+        (double)fabsf(f.posN - posNAtLock), (double)fabsf(f.posE - posEAtLock));
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(gnssUpdatesAtLock, f.gnssUpdates, msg);
+    TEST_ASSERT_TRUE_MESSAGE(fabsf(f.posN - posNAtLock) <= 0.05f, msg);
+    TEST_ASSERT_TRUE_MESSAGE(fabsf(f.posE - posEAtLock) <= 0.05f, msg);
+    assertFusionSane(&f, "60 s locked with wandering GNSS");
+}
+
+void test_zupt_improves_accel_bias_observability_and_open_loop_drift(void)
+{
+    /* SWE1-FW-014 (d): 120 s locked with an injected 0.02 m/s^2 north bias
+     * converges accBiasN to within 2e-3 m/s^2; 60 s of SUBSEQUENT open-loop
+     * prediction (no GNSS trusted, no further correction -- the residual
+     * bias is all that is left to integrate) drifts under 3 m. Reported
+     * against an UNLEARNED baseline (bias held at its initial 0, as an
+     * un-locked filter would leave it after only 120 s at rest with no
+     * horizontal excitation) run open-loop the same way. */
+    static const sint32 LAT0 = 482000000, LON0 = 116000000;
+    FusionValues f; memset(&f, 0, sizeof f);
+    const float32 trueBias = 0.02f;
+    const float32 accBiased[3] = { trueBias, 0.0f, 0.0f };   /* fed as accNed north */
+    uint32 itow = 1000u;
+    int i;
+
+    for (i = 0; i < 24000; ++i)   /* 120 s */
+    {
+        if ((i % 20) == 0)
+        {
+            Fusion_setGnss(LAT0, LON0, 600.0f, 0.0f, 0.0f, 2.0f, itow, TRUE);
+            itow += 100u;
+        }
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(&f, accBiased, ZERO3, 1.0f, DT, TRUE);
+    }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.stationaryLocked, "never locked");
+
+    char biasMsg[160];
+    (void)snprintf(biasMsg, sizeof biasMsg,
+        "accBiasN converged to %.6f m/s^2 against a true %.6f (residual %.6f)",
+        (double)f.accBiasN, (double)trueBias, (double)fabsf(f.accBiasN - trueBias));
+    TEST_ASSERT_TRUE_MESSAGE(fabsf(f.accBiasN - trueBias) <= 2.0e-3f, biasMsg);
+
+    /* 60 s open-loop: no GNSS, no baro (dead reckoning) -- position drifts
+     * only from the RESIDUAL bias error, since the predict step subtracts
+     * the (now well-known) accBias from every accelerometer sample. */
+    const float32 posNStart = f.posN;
+    for (i = 0; i < 12000; ++i)
+    {
+        Fusion_update(&f, accBiased, ZERO3, 1.0f, DT, TRUE);
+    }
+    const float32 drift = fabsf(f.posN - posNStart);
 
     char msg[200];
     (void)snprintf(msg, sizeof msg,
-        "a_d %.9g vs %.9g, posN %.9g vs %.9g, p00 %.9g vs %.9g -- differ only "
-        "in stationaryLocked, task 14 must not change anything else",
-        (double)fLocked.a_d, (double)fMoving.a_d, (double)fLocked.posN, (double)fMoving.posN,
-        (double)fLocked.p00, (double)fMoving.p00);
-    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(fLocked.a_d, fMoving.a_d, msg);
-    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(fLocked.a_v_d, fMoving.a_v_d, msg);
-    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(fLocked.baroBias, fMoving.baroBias, msg);
-    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(fLocked.p00, fMoving.p00, msg);
-    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(fLocked.posN, fMoving.posN, msg);
-    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(fLocked.posE, fMoving.posE, msg);
-    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(fLocked.velN, fMoving.velN, msg);
-    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(fLocked.velE, fMoving.velE, msg);
-    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(fLocked.pNN, fMoving.pNN, msg);
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(fLocked.gnssUpdates, fMoving.gnssUpdates, msg);
+        "60 s open-loop after a locked bias-learning phase: drift %.4f m (accBiasN residual %.6f)",
+        (double)drift, (double)fabsf(f.accBiasN - trueBias));
+    TEST_ASSERT_TRUE_MESSAGE(drift < 3.0f, msg);
 }
 
 int main(void)
@@ -1351,6 +1417,7 @@ int main(void)
     RUN_TEST(test_stationary_lock_survives_a_single_corrupt_tick);
     RUN_TEST(test_stationary_lock_releases_on_two_consecutive_bad_samples);
     RUN_TEST(test_stationary_lock_setongound_false_releases_immediately);
-    RUN_TEST(test_stationary_lock_flag_has_no_effect_on_the_estimate_yet);
+    RUN_TEST(test_zupt_pins_velocity_and_gnss_updates_stop_while_locked);
+    RUN_TEST(test_zupt_improves_accel_bias_observability_and_open_loop_drift);
     return UNITY_END();
 }
