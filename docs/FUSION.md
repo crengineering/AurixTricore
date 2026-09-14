@@ -1072,15 +1072,25 @@ covariance, and GNSS position/velocity/altitude are all skipped, so the
 `d`/`measBias` split and the horizontal position are untouched by GNSS while
 locked. Release needs 2 CONSECUTIVE samples past `relGyroDps`/`relAccG`
 (3.0 deg/s / 0.05 g) — one corrupt IMU tick (a measured failure mode,
-SWE1-FW-009) cannot release it. On release, the frozen-versus-GNSS difference
-becomes a bias (`Xcp_FusionCal 0x54-0x5C`: `sigmaZupt`, `tauGnssBiasS` = 60 s,
-`gnssBiasRateMax` = 0.05 m/s; `gnssBiasMaxM` = 10 m stays a compiled
-`#define`) subtracted from every later position fix and decayed over one GNSS
-error correlation time, so the liftoff setpoint is the frozen point and
-nothing jumps. Measured: indoor 02F0B754CCA975C6 locks 99.79 % of a 469 s
-run, `|v_horiz|` max 0.0004 m/s, posN/posE peak-to-peak 0.0027/0.0021 m —
-against the 21.9 m north peak-to-peak this recording showed before any of
-this strand existed.
+SWE1-FW-009) cannot release it. **There are two ways to release, and both go
+through the same mechanism.** An IMU-detected release and an airborne-
+interlock-driven one (`Fusion_setOnGround(FALSE)`) both land in
+`Fusion_update()`'s own before/after check on `s_stationaryLocked`, the one
+place `fusion_releaseGnssBias()` is ever called from — `Fusion_setOnGround()`
+itself only raises a pending-release flag, it does not clear the lock
+directly (flight-reviewer BLOCKER 1, 2026-09-14: it used to, which let an
+interlock-driven release at arming skip the bias entirely and step position
+by the whole frozen-vs-GNSS gap in one tick — measured 3.568 m in 1 s on a
+5 m accumulated offset, against 0.0197 m through the IMU path). On either
+release, the frozen-versus-GNSS difference becomes a bias (`Xcp_FusionCal
+0x54-0x5C`: `sigmaZupt`, `tauGnssBiasS` = 60 s, `gnssBiasRateMax` = 0.05 m/s;
+`gnssBiasMaxM` = 10 m stays a compiled `#define`) subtracted from every later
+position fix and decayed over one GNSS error correlation time, so the
+liftoff setpoint is the frozen point and nothing jumps, however the lock let
+go. Measured: indoor 02F0B754CCA975C6 locks 99.79 % of a 469 s run,
+`|v_horiz|` max 0.0004 m/s, posN/posE peak-to-peak 0.0027/0.0021 m — against
+the 21.9 m north peak-to-peak this recording showed before any of this
+strand existed.
 
 `Xcp_FusionCal` grew `0x40 -> 128` bytes for the lock/release fields; the
 struct itself only reaches `0x60` (96 bytes), so 32 bytes of headroom remain

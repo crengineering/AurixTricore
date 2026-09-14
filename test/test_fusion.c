@@ -1561,6 +1561,273 @@ void test_gnss_bias_decays_within_60s_and_rate_limited(void)
     }
 }
 
+/* ==========================================================================
+ * flight-reviewer fix pass, feat/nav-filter-strand @ 5ee0d07
+ * ======================================================================== */
+
+/** Same as lockThenReleaseWithOffsetNorth(), but releases via the AIRBORNE
+ *  INTERLOCK (Fusion_setOnGround(FALSE)) instead of an IMU-detected "moving"
+ *  input -- BLOCKER 1's own path. Restores onGround to TRUE before
+ *  returning would be wrong (the vehicle really is "not on the ground" at
+ *  this point in the scenario), so callers get the filter left airborne. */
+static void lockThenInterlockReleaseWithOffsetNorth(FusionValues *f, float32 offsetN,
+                                                    float32 *posNBefore)
+{
+    static const sint32 LAT0 = 482000000, LON0 = 116000000;
+    uint32 itow = 1000u;
+    int i;
+
+    /* A previous call may have left s_onGround FALSE (this helper's own
+     * point is to set it FALSE) -- reopen the interlock before trying to
+     * lock again, mirroring what a real re-landed vehicle would do
+     * (Fusion_setOnGround(TRUE) once back on the ground). Neither this nor
+     * lockThenReleaseWithOffsetNorth() calls Fusion_init() between
+     * iterations, by design (both are meant to be called repeatedly from a
+     * loop over offsets without paying for a fresh 20 s anchor's ramp-up
+     * each time) -- everything else (origin, channel state) is safely
+     * idempotent to repeat; onGround is the one exception, since it is a
+     * hard gate on ever re-locking at all. */
+    Fusion_setOnGround(TRUE);
+    memset(f, 0, sizeof *f);
+    for (i = 0; i < 4000; ++i)   /* 20 s: anchor + lock at the origin */
+    {
+        if ((i % 20) == 0)
+        {
+            Fusion_setGnss(LAT0, LON0, 600.0f, 0.0f, 0.0f, 2.0f, itow, TRUE);
+            itow += 100u;
+        }
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+    }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f->stationaryLocked, "never locked (helper)");
+
+    /* while still locked: latch a fix offsetN north -- cached, not applied */
+    {
+        const sint32 dLat = (sint32)((offsetN / 111132.0f) * 1.0e7f);
+        Fusion_setGnss(LAT0 + dLat, LON0, 600.0f, 0.0f, 0.0f, 2.0f, itow, TRUE);
+        itow += 100u;
+    }
+    Fusion_setBaroAlt(600.0f, TRUE);
+    Fusion_update(f, ZERO3, ZERO3, 1.0f, DT, TRUE);   /* consumed, still locked */
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f->stationaryLocked, "released too early (helper)");
+
+    *posNBefore = f->posN;
+
+    /* BLOCKER 1's release path: the interlock, not the IMU detector. Still
+     * feeding "at rest" IMU input throughout -- on the OLD code this is
+     * exactly the case that broke, because nothing about the IMU input
+     * changes at this instant, only Fusion_setOnGround() is called. */
+    Fusion_setOnGround(FALSE);
+    Fusion_update(f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0u, f->stationaryLocked,
+        "interlock did not release the lock (helper)");
+}
+
+void test_gnss_bias_interlock_release_never_steps_the_position(void)
+{
+    /* SWE1-FW-015 (a2), BLOCKER 1: an interlock-driven release must meet the
+     * SAME <= 0.02 m step bound as an IMU-detected one, asserted separately
+     * -- they are two different code paths into the same mechanism now
+     * (fusion_releaseGnssBias(), called from ONE place, Fusion_update()'s
+     * own before/after check on s_stationaryLocked).
+     *
+     * FAILS ON THE OLD CODE: Fusion_setOnGround(FALSE) used to clear
+     * s_stationaryLocked directly, so Fusion_update()'s "wasLocked" check
+     * never saw the transition (it had already happened) and
+     * fusion_releaseGnssBias() was never called -- no bias installed, so
+     * the very next trusted GNSS position update pulled posN toward the
+     * raw (uncorrected) fix in one step. Measured on the old code with a
+     * 5 m accumulated offset over a 65 s lock: 3.568 m in 1 s (4.858 m
+     * after 10 s), against 0.0197 m for the identical offset released
+     * through the IMU path. */
+    static const float32 offsets[] = { 0.5f, 3.0f, 5.0f, 8.0f, 10.0f, 15.0f };
+    size_t k;
+
+    for (k = 0; k < (sizeof offsets / sizeof offsets[0]); ++k)
+    {
+        FusionValues f;
+        float32 posNBefore;
+
+        lockThenInterlockReleaseWithOffsetNorth(&f, offsets[k], &posNBefore);
+
+        char msg[180];
+        (void)snprintf(msg, sizeof msg,
+            "interlock release, offset %.1f m: posN %.9g -> %.9g (delta %.9g)",
+            (double)offsets[k], (double)posNBefore, (double)f.posN,
+            (double)fabsf(f.posN - posNBefore));
+        TEST_ASSERT_TRUE_MESSAGE(fabsf(f.posN - posNBefore) <= 0.02f, msg);
+    }
+}
+
+void test_interlock_release_and_imu_release_step_identically(void)
+{
+    /* Same offset, same starting state, the only difference is WHICH path
+     * releases the lock -- the two must produce the same (tiny) step. */
+    static const float32 offsetN = 5.0f;
+    FusionValues fImu, fInterlock;
+    float32 posNBeforeImu, posNBeforeInterlock;
+
+    lockThenReleaseWithOffsetNorth(&fImu, offsetN, &posNBeforeImu);
+    lockThenInterlockReleaseWithOffsetNorth(&fInterlock, offsetN, &posNBeforeInterlock);
+
+    const float32 stepImu = fabsf(fImu.posN - posNBeforeImu);
+    const float32 stepInterlock = fabsf(fInterlock.posN - posNBeforeInterlock);
+
+    char msg[200];
+    (void)snprintf(msg, sizeof msg,
+        "IMU release step %.9g m vs interlock release step %.9g m (offset %.1f m)",
+        (double)stepImu, (double)stepInterlock, (double)offsetN);
+    TEST_ASSERT_TRUE_MESSAGE(stepImu <= 0.02f, msg);
+    TEST_ASSERT_TRUE_MESSAGE(stepInterlock <= 0.02f, msg);
+}
+
+void test_gnss_alt_dtfix_resets_through_a_long_lock_not_just_on_use(void)
+{
+    /* BLOCKER 2: s_dtSinceGnssAlt used to reset ONLY on a fix whose
+     * altitude update actually ran (trusted AND not locked). Every fix
+     * skipped for any other reason (untrusted, or locked) left it
+     * accumulating, so after a long lock the FIRST fix once released saw a
+     * huge dtFix and the clamp (maxStep = slew * dtFix) stopped bounding
+     * anything.
+     *
+     * FAILS ON THE OLD CODE: 250 s locked (GNSS fixes still arriving at
+     * 10 Hz throughout, cached but skipped) with an 8 m GNSS-altitude
+     * disagreement waiting -> released -> the first post-release altitude
+     * tick moves d by far more than gnssAltSlewMps * (one fix interval).
+     * Reviewer's own numbers on the equivalent scenario: 0.260 m in one
+     * 0.05 s tick against a 0.000200 m control. */
+    static const sint32 LAT0 = 482000000, LON0 = 116000000;
+    FusionValues f; memset(&f, 0, sizeof f);
+    const float32 slew = 0.001f;   /* FCAL_GNSS_ALT_SLEW_DEFAULT */
+    uint32 itow = 1000u;
+    int i;
+
+    /* anchor at the origin, then lock -- 250 s, GNSS fixes and baro both
+     * keep arriving the whole time, cached/skipped while locked. */
+    for (i = 0; i < 50000; ++i)   /* 250 s */
+    {
+        if ((i % 20) == 0)
+        {
+            Fusion_setGnss(LAT0, LON0, 600.0f, 0.0f, 0.0f, 1.0f, itow, TRUE);
+            itow += 100u;
+        }
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+    }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.stationaryLocked, "never locked");
+
+    /* Still locked: latch an 8 m GNSS-ALTITUDE disagreement (under the 10 m
+     * outlier-gate floor, so it will be accepted once acted on) -- cached,
+     * not applied. */
+    Fusion_setGnss(LAT0, LON0, 608.0f, 0.0f, 0.0f, 1.0f, itow, TRUE);
+    itow += 100u;
+    Fusion_setBaroAlt(600.0f, TRUE);
+    Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.stationaryLocked, "released too early");
+    const float32 dBeforeRelease = f.a_d;
+
+    /* release */
+    Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
+    Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0u, f.stationaryLocked, "did not release");
+
+    /* first post-release fix: dtFix must be about one fix interval (~0.1 s),
+     * not 250 s -- bound the step at 5x the arithmetic worst case for a
+     * fresh (post-reset) dtFix, generous headroom over the true ~0.1 s
+     * interval this scenario actually produces. */
+    const float32 dAfterFirstFix0 = f.a_d;
+    for (i = 0; i < 20; ++i)
+    {
+        if (i == 0)
+        {
+            Fusion_setGnss(LAT0, LON0, 608.0f, 0.0f, 0.0f, 1.0f, itow, TRUE);
+            itow += 100u;
+        }
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
+    }
+    const float32 firstFixStep = fabsf(f.a_d - dAfterFirstFix0);
+    const float32 bound = (5.0f * slew * (20.0f * DT)) + 1.0e-6f;   /* 5x headroom */
+
+    char msg[220];
+    (void)snprintf(msg, sizeof msg,
+        "first post-release altitude fix: d step %.9g m, bound %.9g m "
+        "(d before release %.9g)",
+        (double)firstFixStep, (double)bound, (double)dBeforeRelease);
+    TEST_ASSERT_TRUE_MESSAGE(firstFixStep <= bound, msg);
+
+    /* the binding SWE1-FW-010 clause itself: no more than 0.25 m over any
+     * 60 s window, checked across the whole release. */
+    float32 dMin = f.a_d;
+    float32 dMax = f.a_d;
+    for (i = 0; i < 12000; ++i)   /* 60 s */
+    {
+        if ((i % 20) == 0)
+        {
+            Fusion_setGnss(LAT0, LON0, 608.0f, 0.0f, 0.0f, 1.0f, itow, TRUE);
+            itow += 100u;
+        }
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
+        if (f.a_d < dMin) { dMin = f.a_d; }
+        if (f.a_d > dMax) { dMax = f.a_d; }
+    }
+
+    char msg2[160];
+    (void)snprintf(msg2, sizeof msg2,
+        "d p2p over the first 60 s after release: %.9g m (SWE1-FW-010 <= 0.25 m)",
+        (double)(dMax - dMin));
+    TEST_ASSERT_TRUE_MESSAGE((dMax - dMin) <= 0.25f, msg2);
+    assertFusionSane(&f, "dtFix reset through a long lock");
+}
+
+void test_gnss_alt_dtfix_clamped_during_a_total_outage(void)
+{
+    /* Belt-and-braces half of BLOCKER 2: with NO GNSS fix arriving at all
+     * (a genuine total outage, so fusion_correctGnss() never runs to reset
+     * anything), s_dtSinceGnssAlt must still be bounded by
+     * FUSION_DT_SINCE_GNSS_ALT_MAX_S (1.0 s) -- checked indirectly, since
+     * it is not published: after a long outage, the first fix back with an
+     * 8 m disagreement must move d by at most slew * 1.0 s, not slew times
+     * the whole outage. */
+    static const sint32 LAT0 = 482000000, LON0 = 116000000;
+    FusionValues f; memset(&f, 0, sizeof f);
+    const float32 slew = 0.001f;
+    uint32 itow = 1000u;
+    int i;
+
+    /* anchor briefly, then a 90 s total outage: no Fusion_setGnss at all */
+    for (i = 0; i < 200; ++i)
+    {
+        if ((i % 20) == 0)
+        {
+            Fusion_setGnss(LAT0, LON0, 600.0f, 0.0f, 0.0f, 1.0f, itow, TRUE);
+            itow += 100u;
+        }
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
+    }
+    for (i = 0; i < 18000; ++i)   /* 90 s, no GNSS at all */
+    {
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
+    }
+
+    const float32 dBefore = f.a_d;
+    Fusion_setGnss(LAT0, LON0, 608.0f, 0.0f, 0.0f, 1.0f, itow, TRUE);
+    itow += 100u;
+    Fusion_setBaroAlt(600.0f, TRUE);
+    Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
+    const float32 step = fabsf(f.a_d - dBefore);
+    const float32 bound = (slew * 1.0f * 1.01f) + 1.0e-6f;   /* clamp is 1.0 s */
+
+    char msg[200];
+    (void)snprintf(msg, sizeof msg,
+        "first fix after a 90 s total outage: d step %.9g m, bound %.9g m "
+        "(clamp 1.0 s)", (double)step, (double)bound);
+    TEST_ASSERT_TRUE_MESSAGE(step <= bound, msg);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1599,5 +1866,9 @@ int main(void)
     RUN_TEST(test_zupt_improves_accel_bias_observability_and_open_loop_drift);
     RUN_TEST(test_gnss_bias_release_never_steps_the_position);
     RUN_TEST(test_gnss_bias_decays_within_60s_and_rate_limited);
+    RUN_TEST(test_gnss_bias_interlock_release_never_steps_the_position);
+    RUN_TEST(test_interlock_release_and_imu_release_step_identically);
+    RUN_TEST(test_gnss_alt_dtfix_resets_through_a_long_lock_not_just_on_use);
+    RUN_TEST(test_gnss_alt_dtfix_clamped_during_a_total_outage);
     return UNITY_END();
 }

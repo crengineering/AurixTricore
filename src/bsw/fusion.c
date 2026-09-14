@@ -97,6 +97,15 @@
  * idea but applied by hand because 0 must survive here. */
 #define FCAL_GNSS_ALT_SLEW_DEFAULT (0.001f)
 
+/* BLOCKER 2 belt-and-braces (flight-reviewer @ 5ee0d07, architect item
+ * update): s_dtSinceGnssAlt resets to 0 on every fix whose altitude update
+ * is skipped (untrusted, locked, or REJECTED by the outlier gate) as well
+ * as on one that ran -- see the reset sites. This clamp only ever binds
+ * during a TOTAL outage (no GNSS fix arriving at all, so fusion_
+ * correctGnss() never runs to reset it), and 1.0 s is 10x the receiver's own
+ * 10 Hz fix interval, so normal operation never touches it. */
+#define FUSION_DT_SINCE_GNSS_ALT_MAX_S (1.0f)
+
 /* Floor on the reported horizontal accuracy [m]. The receiver is optimistic
  * about hAcc under a clear sky, and a too-small R makes the filter chase
  * multipath. */
@@ -141,8 +150,6 @@
  * (SWE1-FW-009, +1999.76 deg/s on a single tick) and must not release the
  * lock; two consecutive corrupt words have never been observed. */
 #define FUSION_LOCK_RELEASE_SAMPLES (2u)
-
-#define FUSION_RAD_TO_DEG       (57.29577951f)
 
 /* SWE1-FW-015: ZUPT fallback and gate. The gate floor is generous on
  * purpose -- the whole point of the update is to correct a velocity that
@@ -352,6 +359,36 @@ static boolean s_onGround;
 static boolean s_stationaryLocked;
 static float32 s_lockGoodS;
 static uint8   s_relBadRun;
+
+/* Review fix (flight-reviewer, feat/nav-filter-strand @ 5ee0d07, BLOCKER 1):
+ * Fusion_setOnGround(FALSE) must NOT clear s_stationaryLocked directly. The
+ * only caller of fusion_releaseGnssBias() is the before/after check in
+ * Fusion_update() ("wasLocked"); a release that happens BETWEEN two
+ * Fusion_update() calls, from Fusion_setOnGround() alone, is invisible to
+ * that check and installs no bias at all, so posN steps by the whole
+ * frozen-vs-GNSS gap at liftoff instead of decaying continuously --
+ * measured 3.568 m in 1 s (4.858 m after 10 s) against 0.0197 m for the
+ * identical offset released through the ordinary IMU path. Fusion_
+ * setOnGround(FALSE) now only raises this flag; Fusion_update() performs
+ * the actual release, through the SAME fusion_releaseGnssBias() call an
+ * IMU-detected release uses. */
+static boolean s_interlockRelease;
+
+/* FW-014 (c2) performance fix (architect item update, flight-reviewer @
+ * 5ee0d07 MAJOR): the five FusionCal_positive() reads the detector used to
+ * do on EVERY 1014 Hz tick are a live-tunable field a human writes over XCP
+ * at human speed, not per-tick -- cached here, refreshed once per
+ * barometer tick (~100 Hz, fusion_refreshLockThresholds()) instead. The
+ * gyro thresholds are pre-squared and pre-converted to rad^2/s^2 so the
+ * per-tick comparison (fusion_updateStationaryLock()) needs neither a
+ * sqrtf nor a per-tick deg->rad conversion -- comparing squared norms
+ * against a squared threshold is equivalent and monotonic for non-negative
+ * quantities. */
+static float32 s_lockGyroSqRad2;
+static float32 s_relGyroSqRad2;
+static float32 s_lockAccG;
+static float32 s_relAccG;
+static float32 s_lockWindowS;
 
 /* SWE1-FW-015: the GNSS position bias installed on release, one per
  * horizontal channel -- the frozen-versus-GNSS difference at the instant
@@ -873,6 +910,31 @@ static void fusion_chanInflate(Fusion_Chan *ch)
     }
 }
 
+/* FW-014 (c2): re-reads the five live thresholds and pre-computes what the
+ * per-tick detector needs from them -- called once per barometer tick
+ * (~100 Hz), not once per 1014 Hz predict tick. A write over XCP therefore
+ * takes effect within one barometer period, not instantly; that is not a
+ * behaviour anyone can tell apart from "instantly" for a human turning a
+ * knob, and it is the whole saving. Also called once from Fusion_init() so
+ * the cache is never read uninitialised before the first barometer sample
+ * arrives. */
+static void fusion_refreshLockThresholds(void)
+{
+    const float32 lockGyroDeg = FusionCal_positive(g_fusionCal.lockGyroDps, 0.0f,
+                                                    FUSION_LOCK_GYRO_DPS_DEFAULT);
+    const float32 relGyroDeg  = FusionCal_positive(g_fusionCal.relGyroDps, 0.0f,
+                                                    FUSION_REL_GYRO_DPS_DEFAULT);
+    const float32 lockGyroRad = lockGyroDeg * FUSION_DEG_TO_RAD;
+    const float32 relGyroRad  = relGyroDeg * FUSION_DEG_TO_RAD;
+
+    s_lockGyroSqRad2 = lockGyroRad * lockGyroRad;
+    s_relGyroSqRad2  = relGyroRad * relGyroRad;
+    s_lockAccG = FusionCal_positive(g_fusionCal.lockAccG, 0.0f, FUSION_LOCK_ACC_G_DEFAULT);
+    s_relAccG  = FusionCal_positive(g_fusionCal.relAccG, 0.0f, FUSION_REL_ACC_G_DEFAULT);
+    s_lockWindowS = FusionCal_positive(g_fusionCal.lockWindowS, 0.0f,
+                                       FUSION_LOCK_WINDOW_S_DEFAULT);
+}
+
 void Fusion_init(void)
 {
     /* Only the DOWN channel has a relative sensor (the barometer) sitting
@@ -904,16 +966,22 @@ void Fusion_init(void)
     s_untrustRun        = 0u;
     s_dtSinceTrustedFix = 0.0f;
 
-    /* s_onGround is NOT reset here: Fusion_init() is called at boot, before
-     * any ASW component could conceivably have called Fusion_setOnGround(),
-     * so this only ever runs once in practice -- but it must default TRUE
-     * regardless (see fusion.h), and a later Fusion_init() (e.g. a re-
-     * acquisition path some caller adds) must not silently re-arm the
-     * interlock closed while genuinely on the ground. */
+    /* s_onGround DOES reset here, to TRUE, every time -- by design (fusion.h:
+     * "Default TRUE at boot"), not by omission (an earlier version of this
+     * comment said the opposite of the line below it; fixed, flight-reviewer
+     * NOTE, feat/nav-filter-strand @ 5ee0d07). Fusion_init() only ever runs
+     * at boot in this build (no caller re-acquires today), so this is a
+     * one-shot default in practice, but the value has to be right on its own
+     * terms regardless of when it runs: TRUE errs toward PERMITTING the
+     * lock, and the lock still needs the IMU to agree before it actually
+     * engages, so a stray reset here can make the estimator ready to lock
+     * one tick early, never falsely locked. */
     s_onGround         = TRUE;
     s_stationaryLocked = FALSE;
     s_lockGoodS        = 0.0f;
     s_relBadRun        = 0u;
+    s_interlockRelease = FALSE;
+    fusion_refreshLockThresholds();
 
     s_gnssBiasN = 0.0f;
     s_gnssBiasE = 0.0f;
@@ -1460,6 +1528,23 @@ static void fusion_correctGnss(void)
     }
     else
     {
+        /* BLOCKER 2 fix (flight-reviewer @ 5ee0d07): s_dtSinceGnssAlt used to
+         * reset ONLY inside the branch above, i.e. only on a fix whose
+         * altitude update actually ran. Every fix skipped here (untrusted,
+         * or locked) left it accumulating unchecked -- after a long lock or
+         * untrusted stretch, the FIRST fix once trust/unlock resumes then
+         * computed maxStep = slew * (a huge dtFix), and the clamp bounds a
+         * RATE, so a huge dtFix reopens the very step it exists to prevent.
+         * Measured: 200 s locked, then released -> 0.260 m in one 0.05 s
+         * tick (control, dtFix reset every fix: 0.000200 m) -- FW-010's own
+         * 0.25 m/60 s clause broken in a single sample, in the vertical
+         * channel, at liftoff. This receiver had a fix EVERY time this
+         * branch runs (fusion_correctGnss() only runs on a new GNSS latch at
+         * all); "dtFix" means "since the last time GNSS altitude was
+         * offered", not "since the last time it was ACTED on", so it resets
+         * here too. */
+        s_dtSinceGnssAlt = 0.0f;
+
         /* Untrusted, OR trusted but stationary-locked (SWE1-FW-014/-015):
          * either way the position, velocity and altitude updates simply did
          * not run this tick. While locked the ZUPT (fusion_correctZupt(),
@@ -1476,28 +1561,28 @@ static void fusion_correctGnss(void)
  * is deliberately sample-based (FUSION_LOCK_RELEASE_SAMPLES CONSECUTIVE
  * violations), not time-based -- see the macro's own comment. Task 14 ships
  * this as an OBSERVATION only: nothing downstream reacts to
- * s_stationaryLocked yet (SWE1-FW-015/-016). */
+ * s_stationaryLocked yet (SWE1-FW-015/-016).
+ *
+ * Added cost on this 1014 Hz path (FW-014 c2, measured on the host, not the
+ * bench -- g_dbgNavStepMaxTicks < 300 us stays the real, hardware clause):
+ * two squares, one add, two compares for the gyro test; one fabsf, two
+ * compares for the accel test; a handful of scalar compares and one
+ * conditional add for the counters. No FusionCal_positive() calls, no
+ * sqrtf, no trig -- those all moved to fusion_refreshLockThresholds(),
+ * ~100x less often. */
 static void fusion_updateStationaryLock(const float32 rateBody[3], float32 accMagG, float32 dt)
 {
-    const float32 lockGyro = FusionCal_positive(g_fusionCal.lockGyroDps, 0.0f,
-                                                FUSION_LOCK_GYRO_DPS_DEFAULT);
-    const float32 lockAcc  = FusionCal_positive(g_fusionCal.lockAccG, 0.0f,
-                                                FUSION_LOCK_ACC_G_DEFAULT);
-    const float32 relGyro  = FusionCal_positive(g_fusionCal.relGyroDps, 0.0f,
-                                                FUSION_REL_GYRO_DPS_DEFAULT);
-    const float32 relAcc   = FusionCal_positive(g_fusionCal.relAccG, 0.0f,
-                                                FUSION_REL_ACC_G_DEFAULT);
-    const float32 window   = FusionCal_positive(g_fusionCal.lockWindowS, 0.0f,
-                                                FUSION_LOCK_WINDOW_S_DEFAULT);
-    /* |omega| = hypot(rate0, rate1, rate2), Euclidean -- the design note's
-     * own thresholds (docs/NAV_STRAND_2026-09.md section 10.1) are measured
-     * against this form, not a Manhattan sum. */
-    const float32 omega = sqrtf((rateBody[0] * rateBody[0])
+    /* omega^2 [rad^2/s^2], compared directly against pre-squared,
+     * pre-converted thresholds -- equivalent to |omega| <= threshold for
+     * non-negative quantities, without the sqrtf or the per-tick deg->rad
+     * conversion (docs/NAV_STRAND_2026-09.md section 10.1's own thresholds
+     * are Euclidean, not Manhattan, and this preserves that exactly). */
+    const float32 omegaSqRad2 = (rateBody[0] * rateBody[0])
                               + (rateBody[1] * rateBody[1])
-                              + (rateBody[2] * rateBody[2])) * FUSION_RAD_TO_DEG;
+                              + (rateBody[2] * rateBody[2]);
     const float32 accDev = fabsf(accMagG - 1.0f);
-    const boolean clean = ((omega <= lockGyro) && (accDev <= lockAcc)) ? TRUE : FALSE;
-    const boolean violate = ((omega > relGyro) || (accDev > relAcc)) ? TRUE : FALSE;
+    const boolean clean = ((omegaSqRad2 <= s_lockGyroSqRad2) && (accDev <= s_lockAccG)) ? TRUE : FALSE;
+    const boolean violate = ((omegaSqRad2 > s_relGyroSqRad2) || (accDev > s_relAccG)) ? TRUE : FALSE;
 
     s_lockGoodS = (clean != FALSE) ? (s_lockGoodS + dt) : 0.0f;
 
@@ -1531,7 +1616,7 @@ static void fusion_updateStationaryLock(const float32 rateBody[3], float32 accMa
     }
     else
     {
-        if ((s_onGround != FALSE) && (s_lockGoodS >= window))
+        if ((s_onGround != FALSE) && (s_lockGoodS >= s_lockWindowS))
         {
             s_stationaryLocked = TRUE;
         }
@@ -1663,8 +1748,17 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3],
         /* SWE1-FW-010's dtFix: real elapsed time since the last GNSS-altitude
          * opportunity, whatever the tick rate -- reset inside
          * fusion_correctGnss() itself, never here. SWE1-FW-011's own timer
-         * (clause 3/4) is the same idea, reset there too. */
-        s_dtSinceGnssAlt    += dt;
+         * (clause 3/4) is the same idea, reset there too. Clamped (not just
+         * accumulated) as the belt-and-braces half of the BLOCKER 2 fix: a
+         * genuine total outage never resets it any other way. */
+        if (s_dtSinceGnssAlt < (FUSION_DT_SINCE_GNSS_ALT_MAX_S - dt))
+        {
+            s_dtSinceGnssAlt += dt;
+        }
+        else
+        {
+            s_dtSinceGnssAlt = FUSION_DT_SINCE_GNSS_ALT_MAX_S;
+        }
         s_dtSinceTrustedFix += dt;
 
         /* SWE1-FW-014: run the detector on every usable tick, same gate as
@@ -1675,7 +1769,23 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3],
         {
             const boolean wasLocked = s_stationaryLocked;
 
-            if ((fusion_usable(rateBody[0], FUSION_INPUT_MAX) != FALSE)
+            if (s_interlockRelease != FALSE)
+            {
+                /* BLOCKER 1 fix: the airborne interlock fired since the
+                 * last tick. Release NOW, overriding whatever the IMU
+                 * detector itself would otherwise decide this tick -- the
+                 * interlock is a hard override, not another vote. The
+                 * detector's own accumulators are cleared exactly as a
+                 * normal release clears them (see the "released" branch of
+                 * fusion_updateStationaryLock()), so re-locking afterwards
+                 * needs a full lockWindowS of clean IMU input again, same
+                 * as any other release. */
+                s_stationaryLocked = FALSE;
+                s_lockGoodS         = 0.0f;
+                s_relBadRun         = 0u;
+                s_interlockRelease  = FALSE;
+            }
+            else if ((fusion_usable(rateBody[0], FUSION_INPUT_MAX) != FALSE)
                 && (fusion_usable(rateBody[1], FUSION_INPUT_MAX) != FALSE)
                 && (fusion_usable(rateBody[2], FUSION_INPUT_MAX) != FALSE)
                 && (fusion_usable(accMagG, FUSION_INPUT_MAX) != FALSE))
@@ -1694,9 +1804,12 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3],
 
             if ((wasLocked != FALSE) && (s_stationaryLocked == FALSE))
             {
-                /* SWE1-FW-015: release, this tick. Installing the bias does
-                 * NOT touch x[FS_POS]/x[FS_VEL] -- the state is continuous
-                 * by construction, nothing jumps here. */
+                /* SWE1-FW-015: release, this tick -- an IMU-detected release
+                 * and an interlock-driven one (above) both land here, the
+                 * one path fusion_releaseGnssBias() is ever called from.
+                 * Installing the bias does NOT touch x[FS_POS]/x[FS_VEL] --
+                 * the state is continuous by construction, nothing jumps
+                 * here. */
                 fusion_releaseGnssBias();
             }
             else
@@ -1726,6 +1839,12 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3],
 
                 fusion_correctBaro();
                 fusion_boundMeasBias(&s_chD);
+
+                /* FW-014 (c2): the lock thresholds are refreshed at the
+                 * barometer's own rate too -- same reasoning as the ZUPT
+                 * decimation right below, a live-tunable field needs no
+                 * finer a clock than a human's own writes to it. */
+                fusion_refreshLockThresholds();
 
                 /* SWE1-FW-015: ZUPT rides the barometer's own rate -- there
                  * is no independent ~100 Hz clock here, and piggybacking on
@@ -1935,20 +2054,35 @@ void Fusion_setGnss(sint32 latDeg1e7, sint32 lonDeg1e7, float32 altM,
     }
 }
 
-/* SWE1-FW-014's airborne interlock -- see fusion.h for the full contract. */
+/* SWE1-FW-014's airborne interlock -- see fusion.h for the full contract.
+ *
+ * Review fix (BLOCKER 1, flight-reviewer @ 5ee0d07): this used to clear
+ * s_stationaryLocked directly, right here. That release then happened
+ * BETWEEN two Fusion_update() calls, invisible to the only place that
+ * calls fusion_releaseGnssBias() (Fusion_update()'s own before/after check
+ * on s_stationaryLocked) -- so an interlock-driven release at arming
+ * installed no bias at all, and posN stepped by the entire frozen-vs-GNSS
+ * gap in one tick instead of decaying continuously over tauGnssBiasS.
+ * Measured: a 5 m accumulated offset over a 65 s lock stepped 3.568 m in
+ * 1 s (4.858 m after 10 s) through this path, against 0.0197 m for the
+ * identical offset released through the ordinary IMU detector -- exactly
+ * the liftoff step SWE1-FW-015 exists to prevent. This function now only
+ * RAISES the request; Fusion_update() performs the actual release, through
+ * the SAME code path (see s_interlockRelease's own comment). */
 void Fusion_setOnGround(boolean onGround)
 {
     s_onGround = onGround;
 
     if (onGround == FALSE)
     {
-        /* Release immediately, not on the next violating sample: the hazard
-         * (a lock pinning velocity under a flying, position-controlled
-         * vehicle) must never survive even one extra tick once the
-         * application says "airborne". */
-        s_stationaryLocked = FALSE;
-        s_lockGoodS        = 0.0f;
-        s_relBadRun        = 0u;
+        /* Requested immediately, not on the next violating sample: the
+         * hazard (a lock pinning velocity under a flying, position-
+         * controlled vehicle) must never survive even one extra Fusion_
+         * update() tick once the application says "airborne" -- but the
+         * RELEASE ITSELF (clearing s_stationaryLocked, installing the GNSS
+         * bias) happens there, not here, so both release paths go through
+         * one mechanism. */
+        s_interlockRelease = TRUE;
     }
     else
     {
