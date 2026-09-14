@@ -118,25 +118,41 @@
  *   0x60  float32 onGroundOverride  0 = follow the ASW (default; today that
  *                               means Fusion_setOnGround() is never called
  *                               again after NavTask_init()'s boot-time
- *                               TRUE). 1 = force Fusion_setOnGround(TRUE).
- *                               2 = force Fusion_setOnGround(FALSE) -- the
- *                               ONLY way to exercise the airborne-interlock
- *                               release path from the bench today, since no
- *                               ASW arms this vehicle yet. ZERO IS A DEFINED
- *                               VALUE ("do nothing"): read DIRECTLY, never
- *                               through FusionCal_positive(), same rule as
- *                               gnssAltSlewMps above. Edge-triggered in
- *                               fusion.c (fusion_refreshLockThresholds()):
+ *                               TRUE). 1 = force Fusion_setOnGround(TRUE) --
+ *                               PERMITS THE LOCK, including in flight, since
+ *                               nothing here knows whether the vehicle is
+ *                               actually on the ground: a master that writes
+ *                               1 while airborne can let the estimator lock
+ *                               and pin velocity mid-flight. 2 = force
+ *                               Fusion_setOnGround(FALSE) -- the ONLY way to
+ *                               exercise the airborne-interlock release path
+ *                               from the bench today, since no ASW arms this
+ *                               vehicle yet. WRITING 0 AFTER A 1 OR A 2 IS
+ *                               NOT AN UNDO: 0 means "stop overriding, do
+ *                               not call the setter" (see fusion.c), so
+ *                               whatever a prior 1 or 2 last forced stays
+ *                               forced -- after a 2, the interlock stays
+ *                               OPEN until an explicit 1 or a power cycle
+ *                               (FusionCal_init() re-applies the compiled
+ *                               default, TRUE, at boot only, same as every
+ *                               other field in this RAM-only block). ZERO IS
+ *                               A DEFINED VALUE ("do nothing"): read
+ *                               DIRECTLY, never through FusionCal_positive(),
+ *                               same rule as gnssAltSlewMps above.
+ *                               Edge-triggered in fusion.c
+ *                               (fusion_refreshLockThresholds()):
  *                               Fusion_setOnGround() fires once when this
  *                               value CHANGES, not every baro tick it is
  *                               held nonzero -- calling the setter every
  *                               tick with onGround==TRUE would re-zero
  *                               s_lockGoodS every tick and the lock could
  *                               never accumulate lockWindowS. This is a
- *                               test hook: it drives no pin and arms
- *                               nothing, the same RAM-only, power-cycle-
- *                               resets-it guarantee as every other field in
- *                               this block.
+ *                               BENCH-ONLY TEST HOOK: it drives no pin and
+ *                               arms nothing today, but value 1 is a real
+ *                               way to permit the lock in flight once
+ *                               something CAN fly -- delete this field, or
+ *                               guard it (e.g. reject writes once an arming
+ *                               owner exists), when that owner is added.
  *
  * The struct itself ends at 0x64 (100 bytes) -- XCP_FUSIONCAL_SIZE is 128,
  * so 28 bytes (seven more float32 fields) of headroom remain inside this

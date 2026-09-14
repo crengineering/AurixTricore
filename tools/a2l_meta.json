@@ -1343,7 +1343,7 @@
       "unit": "-",
       "lo": "0",
       "hi": "2",
-      "desc": "TEST HOOK, no ASW, no pin (SWE1-FW-014/-015 task 19): 0 = follow the ASW (default, today a no-op past boot). 1 = force Fusion_setOnGround(TRUE). 2 = force Fusion_setOnGround(FALSE) -- the only bench-reachable exercise of the airborne-interlock release path. Edge-triggered on a CHANGE, read at the barometer rate; ZERO IS A DEFINED VALUE -- read directly, never through FusionCal_positive()"
+      "desc": "TEST HOOK, no ASW, no pin (SWE1-FW-014/-015 task 19): 0 = follow the ASW (default, today a no-op past boot). 1 = force Fusion_setOnGround(TRUE) -- PERMITS THE LOCK, including in flight once something can fly; delete or guard this field once an arming owner exists. 2 = force Fusion_setOnGround(FALSE) -- the only bench-reachable exercise of the airborne-interlock release path. WRITING 0 AFTERWARDS IS NOT AN UNDO: 0 means 'stop overriding, do not call the setter', so after a 2 the interlock stays open until an explicit 1 or a power cycle. Edge-triggered on a CHANGE, read at the barometer rate; ZERO IS A DEFINED VALUE -- read directly, never through FusionCal_positive()"
     }
   }
 }
