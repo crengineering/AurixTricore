@@ -318,4 +318,19 @@ if(Python3_FOUND)
                      $<TARGET_FILE:gen_fusion_trace>
                      ${CMAKE_CURRENT_SOURCE_DIR}/data)
     set_tests_properties(fusion_replay PROPERTIES TIMEOUT 600)
+
+    #[[
+    nav_replay (SWE1-FW-013 task 1, clauses b/c/d): fidelity of the
+    tools/nav_replay.py MF4 front end, checked on a committed 400-fix
+    excerpt of the 2026-09-14 indoor recording (evidence/INDEX.md row
+    02F0B754CCA975C6) rather than the raw MF4, which stays outside git.
+    See ref/nav_replay_fidelity.py's own header for what it checks and why
+    (the observable barometer sum, not NavPosDown/NavBaroBias directly).
+    ]]
+    add_test(NAME nav_replay
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/ref/nav_replay_fidelity.py
+                     $<TARGET_FILE:gen_fusion_trace>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/data)
+    set_tests_properties(nav_replay PROPERTIES TIMEOUT 600)
 endif()
