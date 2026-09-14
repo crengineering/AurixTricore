@@ -1337,6 +1337,13 @@
       "lo": "0.0001",
       "hi": "100",
       "desc": "TUNING - SWE1-FW-015: the GNSS position bias may not decay faster than this. 0.05 default"
+    },
+    "onGroundOverride": {
+      "name": "FusOnGroundOverride",
+      "unit": "-",
+      "lo": "0",
+      "hi": "2",
+      "desc": "TEST HOOK, no ASW, no pin (SWE1-FW-014/-015 task 19): 0 = follow the ASW (default, today a no-op past boot). 1 = force Fusion_setOnGround(TRUE). 2 = force Fusion_setOnGround(FALSE) -- the only bench-reachable exercise of the airborne-interlock release path. Edge-triggered on a CHANGE, read at the barometer rate; ZERO IS A DEFINED VALUE -- read directly, never through FusionCal_positive()"
     }
   }
 }

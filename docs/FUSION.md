@@ -1096,6 +1096,36 @@ go. Measured: indoor 02F0B754CCA975C6 locks 99.79 % of a 469 s run,
 the 21.9 m north peak-to-peak this recording showed before any of this
 strand existed.
 
-`Xcp_FusionCal` grew `0x40 -> 128` bytes for the lock/release fields; the
-struct itself only reaches `0x60` (96 bytes), so 32 bytes of headroom remain
-before the next field needs `docs/CODEMAP.md`'s "next free slot" rule.
+**The bias is installed AFTER the GNSS latch read, not before it** (task 18,
+architect, 2026-09-14). `fusion_releaseGnssBias()` always reads whichever fix
+is currently cached (`s_gnssLat`/`s_gnssLon`), so its call site inside
+`Fusion_update()` decides whether a fix landing on the exact release tick is
+the STALE fix from before the release, or the FRESH one that just latched —
+the ordering used to install from whatever was cached *before* that tick's
+own GNSS-latch block ran, so a same-tick fix was fused against a bias
+computed from the previous one, an ordinary few centimetres of GNSS jitter
+misread as a release-mechanism step (measured 0.0243 m on outdoor t1,
+`--force-release-at 60`, row 600, `NavGnssUpdates` incrementing on that exact
+row). Moved to fire after the latch read: a same-tick fix now sees a
+corrected innovation of exactly zero unconditionally (measured: 0.00014 m on
+the same t1 scenario), not only when the release and the next fix happen to
+land on different ticks.
+
+**Bench-only test hook for the interlock exit (task 19, architect,
+2026-09-14).** No ASW arms this vehicle yet, so `Fusion_setOnGround(FALSE)`
+— the liftoff path, and the one exit no bench run could otherwise reach —
+had no caller at all outside the host tests. `Xcp_FusionCal 0x60
+onGroundOverride` (float32, 0 default): 0 = follow the ASW (a no-op past
+boot, as before this field existed), 1 = force `Fusion_setOnGround(TRUE)`,
+2 = force `Fusion_setOnGround(FALSE)`. Read at the barometer's own rate
+(`fusion_refreshLockThresholds()`) and **edge-triggered on a change**, not
+applied every tick it is held nonzero — calling `Fusion_setOnGround(TRUE)`
+unconditionally every tick would re-zero `s_lockGoodS` every tick and the
+lock could never accumulate `lockWindowS`. This drives no pin and arms
+nothing — the same RAM-only, power-cycle-resets-it guarantee as every other
+field in this block.
+
+`Xcp_FusionCal` grew `0x40 -> 128` bytes for the lock/release fields, then
+task 19 added `onGroundOverride` at `0x60`; the struct itself now reaches
+`0x64` (100 bytes), so 28 bytes of headroom remain before the next field
+needs `docs/CODEMAP.md`'s "next free slot" rule.

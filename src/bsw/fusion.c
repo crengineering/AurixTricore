@@ -398,6 +398,16 @@ static float32 s_lockWindowS;
 static float32 s_gnssBiasTauS;
 static float32 s_gnssBiasRateMaxMps;
 
+/* SWE1-FW-014/-015 task 19: bench-only test hook, no ASW, no pin -- the last
+ * onGroundOverride VALUE ACTED ON (0/1/2, see FusionCal.h), so
+ * fusion_refreshLockThresholds() can call Fusion_setOnGround() once on a
+ * CHANGE rather than every baro tick the field is held nonzero. Calling it
+ * unconditionally every tick with onGround==TRUE would re-zero s_lockGoodS
+ * every tick (see Fusion_setOnGround()'s own else-branch) and the lock
+ * could never accumulate lockWindowS -- edge-triggering is not an
+ * optimisation here, it is what makes the override usable at all. */
+static sint32 s_onGroundOverrideApplied;
+
 /* SWE1-FW-015: the GNSS position bias installed on release, one per
  * horizontal channel -- the frozen-versus-GNSS difference at the instant
  * the lock releases, decayed over tauGnssBiasS rather than corrected in one
@@ -946,6 +956,53 @@ static void fusion_refreshLockThresholds(void)
                                                FUSION_TAU_GNSS_BIAS_S_DEFAULT);
     s_gnssBiasRateMaxMps = FusionCal_positive(g_fusionCal.gnssBiasRateMax, 0.0f,
                                                FUSION_GNSS_BIAS_RATE_MAX_DEFAULT);
+
+    /* Task 19: bench-only test hook -- read directly, never through
+     * FusionCal_positive(), same rule as gnssAltSlewMps (ZERO IS A DEFINED
+     * VALUE: "do nothing, follow the ASW"). Rounded to the nearest of the
+     * three defined states rather than compared for exact equality, since
+     * an XCP master writes a float and 1.0f/2.0f are not guaranteed to
+     * round-trip bit-exact through every master's own formatting. */
+    {
+        const float32 raw = g_fusionCal.onGroundOverride;
+        sint32 want;
+
+        if (raw >= 1.5f)
+        {
+            want = 2;
+        }
+        else if (raw >= 0.5f)
+        {
+            want = 1;
+        }
+        else
+        {
+            want = 0;
+        }
+
+        if (want != s_onGroundOverrideApplied)
+        {
+            if (want == 1)
+            {
+                Fusion_setOnGround(TRUE);
+            }
+            else if (want == 2)
+            {
+                Fusion_setOnGround(FALSE);
+            }
+            else
+            {
+                /* back to 0: stop overriding. Does NOT call the setter --
+                 * that would fight whatever the ASW (or nothing, today)
+                 * last set; "follow the ASW" means leave it alone. */
+            }
+            s_onGroundOverrideApplied = want;
+        }
+        else
+        {
+            /* unchanged since the last baro tick: nothing to apply */
+        }
+    }
 }
 
 void Fusion_init(void)
@@ -994,6 +1051,11 @@ void Fusion_init(void)
     s_lockGoodS        = 0.0f;
     s_relBadRun        = 0u;
     s_interlockRelease = FALSE;
+    /* Task 19: matches the compiled onGroundOverride default (0, FusionCal.c)
+     * so the first fusion_refreshLockThresholds() call below does not see a
+     * spurious "change" and fire Fusion_setOnGround() before anything has
+     * actually written the field. */
+    s_onGroundOverrideApplied = 0;
     fusion_refreshLockThresholds();
 
     s_gnssBiasN = 0.0f;

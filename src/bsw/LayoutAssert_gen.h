@@ -222,6 +222,7 @@ typedef char layout_assert_Xcp_FusionCal_lockWindowS_offset[(offsetof(Xcp_Fusion
 typedef char layout_assert_Xcp_FusionCal_sigmaZupt_offset[(offsetof(Xcp_FusionCal, sigmaZupt) == 0x54u) ? 1 : -1];
 typedef char layout_assert_Xcp_FusionCal_tauGnssBiasS_offset[(offsetof(Xcp_FusionCal, tauGnssBiasS) == 0x58u) ? 1 : -1];
 typedef char layout_assert_Xcp_FusionCal_gnssBiasRateMax_offset[(offsetof(Xcp_FusionCal, gnssBiasRateMax) == 0x5Cu) ? 1 : -1];
-typedef char layout_assert_Xcp_FusionCal_sizeof[(sizeof(Xcp_FusionCal) == 0x60u) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_onGroundOverride_offset[(offsetof(Xcp_FusionCal, onGroundOverride) == 0x60u) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_sizeof[(sizeof(Xcp_FusionCal) == 0x64u) ? 1 : -1];
 
 #endif /* AURIXTRICORE_LAYOUT_ASSERT_GEN_H */

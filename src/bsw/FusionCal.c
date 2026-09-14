@@ -102,6 +102,11 @@ volatile Xcp_FusionCal g_fusionCal;
 #define FCAL_TAU_GNSS_BIAS_S      (60.0f)
 #define FCAL_GNSS_BIAS_RATE_MAX   (0.05f)
 
+/* Task 19: bench-only test hook, see FusionCal.h. 0.0 = follow the ASW --
+ * the only default that makes the pre-ASW build behave exactly as before
+ * this field existed. */
+#define FCAL_ON_GROUND_OVERRIDE   (0.0f)
+
 void FusionCal_init(void)
 {
     g_fusionCal.twoKpAcc      = FCAL_TWO_KP_ACC;
@@ -134,6 +139,8 @@ void FusionCal_init(void)
     g_fusionCal.sigmaZupt        = FCAL_SIGMA_ZUPT;
     g_fusionCal.tauGnssBiasS     = FCAL_TAU_GNSS_BIAS_S;
     g_fusionCal.gnssBiasRateMax  = FCAL_GNSS_BIAS_RATE_MAX;
+
+    g_fusionCal.onGroundOverride = FCAL_ON_GROUND_OVERRIDE;
 
     /* Magic last: a master polling for it sees a fully populated block or none
      * of it, never a half-written one. */

@@ -114,11 +114,34 @@
  *                               at [m/s]. 0.05 default. gnssBiasMaxM (the
  *                               clamp) stays a compiled #define -- see
  *                               fusion.c
+ *   --- SWE1-FW-014/-015 task 19: bench-only test hook, no ASW, no pin ---
+ *   0x60  float32 onGroundOverride  0 = follow the ASW (default; today that
+ *                               means Fusion_setOnGround() is never called
+ *                               again after NavTask_init()'s boot-time
+ *                               TRUE). 1 = force Fusion_setOnGround(TRUE).
+ *                               2 = force Fusion_setOnGround(FALSE) -- the
+ *                               ONLY way to exercise the airborne-interlock
+ *                               release path from the bench today, since no
+ *                               ASW arms this vehicle yet. ZERO IS A DEFINED
+ *                               VALUE ("do nothing"): read DIRECTLY, never
+ *                               through FusionCal_positive(), same rule as
+ *                               gnssAltSlewMps above. Edge-triggered in
+ *                               fusion.c (fusion_refreshLockThresholds()):
+ *                               Fusion_setOnGround() fires once when this
+ *                               value CHANGES, not every baro tick it is
+ *                               held nonzero -- calling the setter every
+ *                               tick with onGround==TRUE would re-zero
+ *                               s_lockGoodS every tick and the lock could
+ *                               never accumulate lockWindowS. This is a
+ *                               test hook: it drives no pin and arms
+ *                               nothing, the same RAM-only, power-cycle-
+ *                               resets-it guarantee as every other field in
+ *                               this block.
  *
- * The struct itself ends at 0x60 (96 bytes) -- XCP_FUSIONCAL_SIZE is 128,
- * so 32 bytes (eight more float32 fields) of headroom remain inside this
+ * The struct itself ends at 0x64 (100 bytes) -- XCP_FUSIONCAL_SIZE is 128,
+ * so 28 bytes (seven more float32 fields) of headroom remain inside this
  * block's own 256-byte slot before docs/CODEMAP.md's "take the next free
- * slot" rule would apply to a ninth field. Not literally full, despite the
+ * slot" rule would apply to the next field. Not literally full, despite the
  * design note's working assumption while the field count was still being
  * decided (docs/NAV_STRAND_2026-09.md section 10.5) -- corrected here,
  * 2026-09-14, against the compiled struct rather than carried forward.
@@ -156,6 +179,8 @@ typedef struct
     float32 sigmaZupt;
     float32 tauGnssBiasS;
     float32 gnssBiasRateMax;
+
+    float32 onGroundOverride;
 } Xcp_FusionCal;
 
 /* Compile-time invariant Xcp.c's write-whitelist depends on (flight-reviewer

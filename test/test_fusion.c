@@ -1963,6 +1963,50 @@ void test_release_bias_uses_the_fix_that_lands_on_the_release_tick(void)
     TEST_ASSERT_TRUE_MESSAGE(step <= 0.02f, msg);
 }
 
+/* ==========================================================================
+ * SWE1-FW-014/-015 task 19 (architect, 2026-09-14): a bench-only, XCP-
+ * reachable trigger for Fusion_setOnGround(), since no ASW arms this
+ * vehicle yet and the interlock-release exit was otherwise unreachable
+ * from the bench. No pin, no actuation -- a live-tunable FusionCal field.
+ * ======================================================================== */
+
+void test_ground_override_two_releases_the_lock_via_the_interlock_path(void)
+{
+    static const sint32 LAT0 = 482000000, LON0 = 116000000;
+    FusionValues f; memset(&f, 0, sizeof f);
+    uint32 itow = 1000u;
+    int i;
+
+    for (i = 0; i < 4000; ++i)   /* 20 s: anchor + lock at the origin */
+    {
+        if ((i % 20) == 0)
+        {
+            Fusion_setGnss(LAT0, LON0, 600.0f, 0.0f, 0.0f, 2.0f, itow, TRUE);
+            itow += 100u;
+        }
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+    }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.stationaryLocked, "never locked");
+
+    /* Still perfect rest -- an IMU-only detector would never release this.
+     * onGroundOverride=2 ("force airborne") is read at the barometer's own
+     * rate (fusion_refreshLockThresholds()), so one new baro sample is
+     * enough to pick it up; the actual release lands on the FOLLOWING
+     * Fusion_update() call, same "next valid tick" rule as
+     * Fusion_setOnGround(FALSE) itself (this IS that call, one step
+     * removed). */
+    g_fusionCal.onGroundOverride = 2.0f;
+    Fusion_setBaroAlt(600.0f, TRUE);
+    Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.stationaryLocked,
+        "released on the same tick the override was read -- should be the NEXT tick");
+
+    Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0u, f.stationaryLocked,
+        "onGroundOverride=2 did not release the lock via the interlock path");
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -2007,5 +2051,6 @@ int main(void)
     RUN_TEST(test_gnss_alt_dtfix_clamped_during_a_total_outage);
     RUN_TEST(test_gnss_bias_decay_bit_identical_after_the_hoist);
     RUN_TEST(test_release_bias_uses_the_fix_that_lands_on_the_release_tick);
+    RUN_TEST(test_ground_override_two_releases_the_lock_via_the_interlock_path);
     return UNITY_END();
 }
