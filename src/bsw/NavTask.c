@@ -235,6 +235,14 @@ void NavTask_init(void)
     FusionCal_init();        /* estimator tuning defaults, BEFORE the filters */
     Ahrs_init();              /* start the gyro-bias calibration; hold still  */
     Fusion_init();            /* zero every channel state and covariance      */
+
+    /* SWE1-FW-014's airborne interlock: explicit at boot, matching
+     * Fusion_init()'s own default, until an arming owner (ASW, on arming /
+     * confirmed touchdown) calls Fusion_setOnGround(FALSE)/(TRUE) instead.
+     * No such owner exists yet -- see fusion.h -- so this is a no-op today
+     * and stays safe by construction only because nothing arms this
+     * vehicle's motors either. */
+    Fusion_setOnGround(TRUE);
     s_imuLivenessAccum = 0.0f;
 
     /* SYS1-001 task 0 instrumentation -- see NavTask.h. */

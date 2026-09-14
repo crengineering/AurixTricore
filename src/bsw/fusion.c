@@ -1675,10 +1675,10 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3],
         {
             const boolean wasLocked = s_stationaryLocked;
 
-            if (fusion_usable(rateBody[0], FUSION_INPUT_MAX) != FALSE
-                && fusion_usable(rateBody[1], FUSION_INPUT_MAX) != FALSE
-                && fusion_usable(rateBody[2], FUSION_INPUT_MAX) != FALSE
-                && fusion_usable(accMagG, FUSION_INPUT_MAX) != FALSE)
+            if ((fusion_usable(rateBody[0], FUSION_INPUT_MAX) != FALSE)
+                && (fusion_usable(rateBody[1], FUSION_INPUT_MAX) != FALSE)
+                && (fusion_usable(rateBody[2], FUSION_INPUT_MAX) != FALSE)
+                && (fusion_usable(accMagG, FUSION_INPUT_MAX) != FALSE))
             {
                 fusion_updateStationaryLock(rateBody, accMagG, dt);
             }
