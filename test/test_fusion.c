@@ -1383,6 +1383,184 @@ void test_zupt_improves_accel_bias_observability_and_open_loop_drift(void)
     TEST_ASSERT_TRUE_MESSAGE(drift < 3.0f, msg);
 }
 
+/* ==========================================================================
+ * SWE1-FW-015 (task 16) -- the GNSS position bias installed on release
+ * decays continuously; nothing jumps at the release tick itself.
+ * chN only: chE runs the exact same code (fusion_releaseGnssBias(),
+ * fusion_decayBiasAxis()) on the exact same formulas, so one channel is
+ * enough to validate the mechanism -- the north/east SPLIT is already
+ * covered by every other GNSS test in this file.
+ * ======================================================================== */
+
+/** Anchor + lock at the origin, then -- while STILL locked -- cache a GNSS
+ *  fix \p offsetN metres north of it (never applied: locked skips the
+ *  update), then release (2 consecutive "moving" ticks). \p posNBefore is
+ *  posN on the tick immediately before release, for clause (a)'s "no jump"
+ *  check. Leaves \p f released, with the bias installed. */
+static void lockThenReleaseWithOffsetNorth(FusionValues *f, float32 offsetN,
+                                           float32 *posNBefore)
+{
+    static const sint32 LAT0 = 482000000, LON0 = 116000000;
+    uint32 itow = 1000u;
+    int i;
+
+    memset(f, 0, sizeof *f);
+    for (i = 0; i < 4000; ++i)   /* 20 s: anchor + lock at the origin */
+    {
+        if ((i % 20) == 0)
+        {
+            Fusion_setGnss(LAT0, LON0, 600.0f, 0.0f, 0.0f, 2.0f, itow, TRUE);
+            itow += 100u;
+        }
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+    }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f->stationaryLocked, "never locked (helper)");
+
+    /* while still locked: latch a fix offsetN north -- cached, not applied */
+    {
+        const sint32 dLat = (sint32)((offsetN / 111132.0f) * 1.0e7f);
+        Fusion_setGnss(LAT0 + dLat, LON0, 600.0f, 0.0f, 0.0f, 2.0f, itow, TRUE);
+        itow += 100u;
+    }
+    Fusion_setBaroAlt(600.0f, TRUE);
+    Fusion_update(f, ZERO3, ZERO3, 1.0f, DT, TRUE);   /* consumed, still locked */
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f->stationaryLocked, "released too early (helper)");
+
+    *posNBefore = f->posN;
+
+    /* release: two consecutive "moving" ticks (FUSION_LOCK_RELEASE_SAMPLES) */
+    Fusion_update(f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
+    Fusion_update(f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0u, f->stationaryLocked, "did not release (helper)");
+}
+
+void test_gnss_bias_release_never_steps_the_position(void)
+{
+    /* SWE1-FW-015 (a): at the release tick, the change in NavPosNorth from
+     * the preceding tick is at most 0.02 m -- for an installed offset of
+     * ANY size up to gnssBiasMaxM (10 m, FUSION_GNSS_BIAS_MAX_M). Installing
+     * the bias never touches x[FS_POS] at all, so this should hold with
+     * enormous margin regardless of the offset. */
+    static const float32 offsets[] = { 0.5f, 3.0f, 8.0f, 10.0f, 15.0f /* clamped to 10 */ };
+    size_t k;
+
+    for (k = 0; k < (sizeof offsets / sizeof offsets[0]); ++k)
+    {
+        FusionValues f;
+        float32 posNBefore;
+
+        lockThenReleaseWithOffsetNorth(&f, offsets[k], &posNBefore);
+
+        char msg[160];
+        (void)snprintf(msg, sizeof msg,
+            "offset %.1f m: posN %.9g -> %.9g at release (delta %.9g)",
+            (double)offsets[k], (double)posNBefore, (double)f.posN,
+            (double)fabsf(f.posN - posNBefore));
+        TEST_ASSERT_TRUE_MESSAGE(fabsf(f.posN - posNBefore) <= 0.02f, msg);
+    }
+}
+
+void test_gnss_bias_decays_within_60s_and_rate_limited(void)
+{
+    /* SWE1-FW-015 (b): with a 3.0 m offset held still, |bias| falls below
+     * 1/e (1.10 m) within 60 +/- 3 s, and the implied position rate never
+     * exceeds 0.05 m/s; with a 10 m offset the rate limit binds and the
+     * rate still never exceeds 0.05 m/s. bias(t) is not published, so it is
+     * recovered as z0 - posN(t) with gnssPosRScale driven to ~0 AFTER
+     * release, which makes the Kalman gain ~1 and posN(t) snap to
+     * z0 - bias(t) on every fix -- the same "R -> 0 snaps the state to the
+     * measurement" technique test_gnss_noise_to_zero_snaps_position_and_
+     * variance already uses elsewhere in this file. */
+    static const sint32 LAT0 = 482000000, LON0 = 116000000;
+    static const float32 offsets[] = { 3.0f, 10.0f };
+    size_t k;
+
+    for (k = 0; k < (sizeof offsets / sizeof offsets[0]); ++k)
+    {
+        const float32 offsetN = offsets[k];
+        FusionValues f;
+        float32 posNBefore;
+        uint32 itow = 400000u;
+        float32 prevBias;
+        float32 t = 0.0f;
+        boolean sawBelowInvE = FALSE;
+        float32 tBelowInvE = -1.0f;
+        int i;
+
+        lockThenReleaseWithOffsetNorth(&f, offsetN, &posNBefore);
+        g_fusionCal.gnssPosRScale = 1.0e-8f;   /* K ~ 1: posN snaps to z0 - bias */
+        prevBias = offsetN;   /* bias at the release tick, by construction */
+
+        for (i = 0; i < 12600; ++i)   /* 63 s */
+        {
+            if ((i % 20) == 0)
+            {
+                Fusion_setGnss(LAT0, LON0, 600.0f, 0.0f, 0.0f, 2.0f, itow, TRUE);
+                itow += 100u;
+            }
+            if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+            Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
+            t += DT;
+
+            const float32 bias = 0.0f - f.posN;   /* z0 (=0, LAT0/LON0) - posN */
+
+            /* Rate checked over a 1 s window, not per tick or per fix: K is
+             * only APPROXIMATELY 1 (P00 is finite, however small R is), so
+             * bias-recovered-from-posN carries a few mm of roughly CONSTANT
+             * offset from the true internal bias. Over one tick (5 ms) that
+             * constant offset does not cancel and swamps the ~0.05 m/s * 5 ms
+             * = 0.25 mm of real decay several times over; over 1 s the real
+             * signal (up to 0.05 m) is an order of magnitude past the
+             * approximation noise, which is what actually needs checking. */
+            if ((i > 0) && ((i % 200) == 0))
+            {
+                const float32 rate = fabsf(bias - prevBias) / 1.0f;
+                char msg[160];
+                (void)snprintf(msg, sizeof msg,
+                    "offset %.1f m, t=%.2f s: bias~%.6f m (was %.6f m 1 s ago), rate %.6f m/s",
+                    (double)offsetN, (double)t, (double)bias, (double)prevBias, (double)rate);
+                /* +0.02 m/s: headroom for the K ~ 1 (not exactly 1)
+                 * recovery technique's own noise, measured up to about
+                 * 0.011 m/s here -- not a tolerance on the mechanism under
+                 * test, which is otherwise exact (fusion_decayBiasAxis()'s
+                 * clamp is a plain min/max on a closed-form dBias). */
+                TEST_ASSERT_TRUE_MESSAGE(rate <= (0.05f + 0.02f), msg);
+                prevBias = bias;
+            }
+            else
+            {
+                /* not a 1 s boundary: no rate check this tick */
+            }
+
+            if ((fabsf(bias) < (offsetN / 2.71828f)) && (sawBelowInvE == FALSE))
+            {
+                sawBelowInvE = TRUE;
+                tBelowInvE = t;
+            }
+        }
+
+        /* The 1/e-within-60s clause is stated for the 3.0 m case only
+         * (SWE1-FW-015 b): with a 10 m offset the rate limit binds for the
+         * first (10-3)/0.05 = 140 s -- far past this test's 63 s window --
+         * and the requirement's own text asks only for the rate bound
+         * there, already checked above on every 1 s sample. */
+        if (offsetN <= 3.0f)
+        {
+            char msg[160];
+            (void)snprintf(msg, sizeof msg,
+                "offset %.1f m: 1/e (%.4f m) crossed at t=%.2f s (want 57-63 s)",
+                (double)offsetN, (double)(offsetN / 2.71828f), (double)tBelowInvE);
+            TEST_ASSERT_TRUE_MESSAGE(sawBelowInvE, msg);
+            TEST_ASSERT_TRUE_MESSAGE((tBelowInvE >= 57.0f) && (tBelowInvE <= 63.0f), msg);
+        }
+        else
+        {
+            /* 10 m case: rate-only, already asserted in the loop above */
+        }
+    }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1419,5 +1597,7 @@ int main(void)
     RUN_TEST(test_stationary_lock_setongound_false_releases_immediately);
     RUN_TEST(test_zupt_pins_velocity_and_gnss_updates_stop_while_locked);
     RUN_TEST(test_zupt_improves_accel_bias_observability_and_open_loop_drift);
+    RUN_TEST(test_gnss_bias_release_never_steps_the_position);
+    RUN_TEST(test_gnss_bias_decays_within_60s_and_rate_limited);
     return UNITY_END();
 }

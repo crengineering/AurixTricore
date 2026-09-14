@@ -154,6 +154,15 @@
 #define FUSION_SIGMA_ZUPT_DEFAULT (0.01f)
 #define FUSION_ZUPT_GATE_MIN_MPS  (1.0f)
 
+/* SWE1-FW-015: release-decay fallbacks (same numbers as FusionCal.c's
+ * compiled defaults). gnssBiasMaxM stays a compiled constant, not a
+ * FusionCal field -- docs/NAV_STRAND_2026-09.md section 10.5: "gnssBiasMaxM
+ * may stay a #define", the one field of the eight this strand adds that is
+ * not live-tunable. */
+#define FUSION_TAU_GNSS_BIAS_S_DEFAULT    (60.0f)
+#define FUSION_GNSS_BIAS_RATE_MAX_DEFAULT (0.05f)
+#define FUSION_GNSS_BIAS_MAX_M            (10.0f)
+
 /* --- outlier gates -------------------------------------------------------- */
 
 /* Reject a sample further than this many sigma from what the filter expected.
@@ -343,6 +352,15 @@ static boolean s_onGround;
 static boolean s_stationaryLocked;
 static float32 s_lockGoodS;
 static uint8   s_relBadRun;
+
+/* SWE1-FW-015: the GNSS position bias installed on release, one per
+ * horizontal channel -- the frozen-versus-GNSS difference at the instant
+ * the lock releases, decayed over tauGnssBiasS rather than corrected in one
+ * step. The release TRANSITION (locked -> not locked) is detected in
+ * Fusion_update() itself: that is the only place with both the channels'
+ * current x[FS_POS] and the cached GNSS fix in scope at once. */
+static float32 s_gnssBiasN;
+static float32 s_gnssBiasE;
 
 /* GNSS duplicate-of-the-last-fix guard. Read and written ONLY by
  * Fusion_setGnss() (CPU0), never by the consumer, so -- unlike the fields
@@ -897,6 +915,9 @@ void Fusion_init(void)
     s_lockGoodS        = 0.0f;
     s_relBadRun        = 0u;
 
+    s_gnssBiasN = 0.0f;
+    s_gnssBiasE = 0.0f;
+
     /* g_baroLatch/g_gnssLatch (FusionLatch.h): the PRODUCER's state, zeroed
      * here even though Fusion_init() itself runs on CPU1 (via NavTask_init,
      * T12). Safe by construction, not by synchronisation: SensorTask_baro/
@@ -1325,10 +1346,18 @@ static void fusion_correctGnss(void)
 
     if ((s_gnssTrusted != FALSE) && (s_stationaryLocked == FALSE))
     {
-        okN = fusion_chanUpdateSlewed(&s_chN, hPos, zN, rPos,
+        /* SWE1-FW-015: the release bias is subtracted here, and ONLY here --
+         * the position update, never velocity or altitude (the design's own
+         * source list scopes it to fusion.c's position update alone). Zero
+         * immediately after Fusion_init() and whenever no release has
+         * happened yet, so this is a no-op until the first release. */
+        const float32 zNCorr = zN - s_gnssBiasN;
+        const float32 zECorr = zE - s_gnssBiasE;
+
+        okN = fusion_chanUpdateSlewed(&s_chN, hPos, zNCorr, rPos,
                                       FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
                                       gateMinSq, FUSION_NO_SLEW, &yN);
-        okE = fusion_chanUpdateSlewed(&s_chE, hPos, zE, rPos,
+        okE = fusion_chanUpdateSlewed(&s_chE, hPos, zECorr, rPos,
                                       FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
                                       gateMinSq, FUSION_NO_SLEW, &yE);
 
@@ -1350,8 +1379,8 @@ static void fusion_correctGnss(void)
                 /* Same rule as the vertical channel: the covariance is going back
                  * to its prior, so the mean must too -- all of it. These were
                  * leaving accBias untouched. */
-                s_chN.x[FS_POS]   = zN;
-                s_chE.x[FS_POS]   = zE;
+                s_chN.x[FS_POS]   = zNCorr;
+                s_chE.x[FS_POS]   = zECorr;
                 s_chN.x[FS_VEL]   = 0.0f;
                 s_chE.x[FS_VEL]   = 0.0f;
                 s_chN.x[FS_ACCB]  = 0.0f;
@@ -1513,6 +1542,94 @@ static void fusion_updateStationaryLock(const float32 rateBody[3], float32 accMa
     }
 }
 
+/* SWE1-FW-015: install the release bias, using whichever GNSS fix is
+ * currently cached (s_gnssLat/s_gnssLon -- up to one GNSS period stale,
+ * which is the best information available at an IMU-rate release event,
+ * decoupled from the 10 Hz fix arrival) against the position the channels
+ * have held through the lock. The state is continuous by construction: this
+ * only ever writes s_gnssBiasN/E, never x[FS_POS], so nothing here can make
+ * the position jump. Silently skipped before the origin is ever set --
+ * there is no GNSS position to release toward yet. */
+static void fusion_releaseGnssBias(void)
+{
+    if (s_originOk != FALSE)
+    {
+        float32 zN;
+        float32 zE;
+        float32 biasN;
+        float32 biasE;
+
+        /* Same tangent-plane conversion as fusion_correctGnss() -- see its
+         * own comment for why the subtraction happens in the receiver's
+         * native integers before either side becomes a float. */
+        const sint32 dLat = s_gnssLat - s_originLat;
+        const sint32 dLon = s_gnssLon - s_originLon;
+
+        zN = (float32)dLat * FUSION_1E7_TO_DEG * FUSION_M_PER_DEG_LAT;
+        zE = (float32)dLon * FUSION_1E7_TO_DEG * s_mPerDegLon;
+
+        biasN = zN - s_chN.x[FS_POS];
+        biasE = zE - s_chE.x[FS_POS];
+
+        if (biasN > FUSION_GNSS_BIAS_MAX_M)      { biasN = FUSION_GNSS_BIAS_MAX_M; }
+        else if (biasN < -FUSION_GNSS_BIAS_MAX_M) { biasN = -FUSION_GNSS_BIAS_MAX_M; }
+        else                                       { /* within bound */ }
+
+        if (biasE > FUSION_GNSS_BIAS_MAX_M)      { biasE = FUSION_GNSS_BIAS_MAX_M; }
+        else if (biasE < -FUSION_GNSS_BIAS_MAX_M) { biasE = -FUSION_GNSS_BIAS_MAX_M; }
+        else                                       { /* within bound */ }
+
+        s_gnssBiasN = biasN;
+        s_gnssBiasE = biasE;
+    }
+    else
+    {
+        /* origin never set: no GNSS position to release toward */
+    }
+}
+
+/* One bias axis's decay for one tick: reverts toward zero over
+ * tauGnssBiasS, rate-limited to gnssBiasRateMax so an installed offset
+ * cannot re-enter the position update faster than the receiver's own error
+ * decorrelates. */
+static float32 fusion_decayBiasAxis(float32 bias, float32 dt, float32 tau, float32 rateLimit)
+{
+    float32 dBias = (-bias * dt) / tau;
+
+    if (dBias > rateLimit)
+    {
+        dBias = rateLimit;
+    }
+    else if (dBias < -rateLimit)
+    {
+        dBias = -rateLimit;
+    }
+    else
+    {
+        /* within the rate limit already */
+    }
+
+    return bias + dBias;
+}
+
+/* SWE1-FW-015: decay both bias axes by one tick's worth. Runs every tick,
+ * locked or not -- an installed bias keeps decaying through whatever the
+ * vehicle does next, which is the whole point of not correcting it in one
+ * step. A bias that was never installed (0.0f) decays to itself exactly:
+ * dBias = -0*dt/tau = 0, clamped to 0, bias stays 0.0f -- this function is a
+ * true no-op before the first release. */
+static void fusion_decayGnssBias(float32 dt)
+{
+    const float32 tau = FusionCal_positive(g_fusionCal.tauGnssBiasS, 0.0f,
+                                           FUSION_TAU_GNSS_BIAS_S_DEFAULT);
+    const float32 rateMax = FusionCal_positive(g_fusionCal.gnssBiasRateMax, 0.0f,
+                                               FUSION_GNSS_BIAS_RATE_MAX_DEFAULT);
+    const float32 rateLimit = rateMax * dt;
+
+    s_gnssBiasN = fusion_decayBiasAxis(s_gnssBiasN, dt, tau, rateLimit);
+    s_gnssBiasE = fusion_decayBiasAxis(s_gnssBiasE, dt, tau, rateLimit);
+}
+
 void Fusion_update(FusionValues *fusion, const float32 accNed[3],
                    const float32 rateBody[3], float32 accMagG,
                    float32 dt, boolean valid)
@@ -1555,22 +1672,44 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3],
          * `violate` false (every comparison against NaN is false), which
          * fails safe: it neither accumulates toward a lock nor releases one
          * that already exists. */
-        if (fusion_usable(rateBody[0], FUSION_INPUT_MAX) != FALSE
-            && fusion_usable(rateBody[1], FUSION_INPUT_MAX) != FALSE
-            && fusion_usable(rateBody[2], FUSION_INPUT_MAX) != FALSE
-            && fusion_usable(accMagG, FUSION_INPUT_MAX) != FALSE)
         {
-            fusion_updateStationaryLock(rateBody, accMagG, dt);
+            const boolean wasLocked = s_stationaryLocked;
+
+            if (fusion_usable(rateBody[0], FUSION_INPUT_MAX) != FALSE
+                && fusion_usable(rateBody[1], FUSION_INPUT_MAX) != FALSE
+                && fusion_usable(rateBody[2], FUSION_INPUT_MAX) != FALSE
+                && fusion_usable(accMagG, FUSION_INPUT_MAX) != FALSE)
+            {
+                fusion_updateStationaryLock(rateBody, accMagG, dt);
+            }
+            else
+            {
+                /* absurd input: treated as "not clean", same as a NaN would
+                 * be, via the fusion_usable() guard rather than letting it
+                 * reach the arithmetic at all -- consistent with how every
+                 * other input here is stopped at the door (see
+                 * fusion_usable()'s own comment). */
+                s_lockGoodS = 0.0f;
+            }
+
+            if ((wasLocked != FALSE) && (s_stationaryLocked == FALSE))
+            {
+                /* SWE1-FW-015: release, this tick. Installing the bias does
+                 * NOT touch x[FS_POS]/x[FS_VEL] -- the state is continuous
+                 * by construction, nothing jumps here. */
+                fusion_releaseGnssBias();
+            }
+            else
+            {
+                /* not a release this tick */
+            }
         }
-        else
-        {
-            /* absurd input: treated as "not clean", same as a NaN would be,
-             * via the fusion_usable() guard rather than letting it reach
-             * the arithmetic at all -- consistent with how every other
-             * input here is stopped at the door (see fusion_usable()'s own
-             * comment). */
-            s_lockGoodS = 0.0f;
-        }
+
+        /* SWE1-FW-015: the bias decays every tick, locked or not -- once
+         * installed it has to keep decaying through whatever the vehicle
+         * does next, which is the whole point of NOT correcting it in one
+         * step. */
+        fusion_decayGnssBias(dt);
 
         {
             BaroLatch_t baroSnap;
