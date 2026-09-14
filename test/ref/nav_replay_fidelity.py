@@ -3,7 +3,7 @@
 Usage:  python nav_replay_fidelity.py <gen_fusion_trace exe> <data dir>
 
 Runs `gen_fusion_trace` on a small COMMITTED command-stream excerpt
-(`data/nav_replay_excerpt.cmd`, 400 fixes / 40 s from the front of the
+(`data/nav_replay_excerpt.txt`, 400 fixes / 40 s from the front of the
 2026-09-14 indoor recording, `QuadSE/evidence/INDEX.md` row
 02F0B754CCA975C6), and checks it against the excerpt's LOGGED ground truth
 (`data/nav_replay_excerpt_expected.csv`) -- the same recording the raw MF4
@@ -68,7 +68,7 @@ def main() -> int:
 
     exe = Path(sys.argv[1])
     data = Path(sys.argv[2])
-    commands = (data / "nav_replay_excerpt.cmd").read_text(encoding="utf-8")
+    commands = (data / "nav_replay_excerpt.txt").read_text(encoding="utf-8")
 
     with (data / "nav_replay_excerpt_expected.csv").open(newline="", encoding="utf-8") as fh:
         expected = list(csv.DictReader(fh))
