@@ -885,32 +885,16 @@ def compute_metrics(rows: list[dict], rec: Recording, cal: dict) -> dict:
 
 
 def compute_release_metrics(rows: list[dict], rec: Recording,
-                             t_release: float,
-                             reference_rows: Optional[list[dict]] = None) -> dict:
+                             t_release: float) -> dict:
     """SWE1-FW-015 (d)/(d2), measured on the BIAS STATE, not distance to the
     raw fix (the original distance-based formulation is withdrawn -- see the
     item file). Independent of compute_metrics()'s own numbers; called only
     with --force-release-at.
 
     (d)'s four binding clauses:
-      1. DIFFERENTIAL (architect, 2026-09-14, after the first execution found
-         a coincidental natural GNSS fix landing on the same tick as a forced
-         release): the step at the release tick MINUS the step the SAME tick
-         shows in a LOCK-DISABLED reference replay of the identical
-         recording (CAL_LOCK_DISABLED, lockWindowS=1e6 -- s_stationaryLocked
-         can never engage, so every fix fuses on its natural 10 Hz schedule
-         right through the release row; a PLAIN no-release replay is NOT
-         this reference, since it stays locked at that row and fuses
-         nothing there, coordinator correction 2026-09-14). Any step the
-         reference run also shows at that row is an ordinary GNSS/Kalman
-         correction, not the release; the difference must be <= 0.02 m.
-         Needs `reference_rows` (run internally by main() when
-         --force-release-at is given, or supplied via --reference); without
-         it, falls back to the old ABSOLUTE step (kept for the informational
-         natural-release call, which has no single well-defined "no-release"
-         counterfactual to run). The neighbouring-tick step distribution
-         (10 rows either side) is reported alongside either way, as context
-         for how large an ordinary step is in this stretch of the recording;
+      1. no sample-to-sample step in posN/posE above 0.02 m, from the
+         release tick onward (same bound as (a), asserted through this exit
+         specifically);
       2. |gnssBias| never increases after the release tick;
       3. |gnssBias| <= 0.368 * delta0 * 1.10 at 60 s after release (one tau)
          and <= 0.10 * delta0 at 180 s (three tau);
@@ -967,44 +951,13 @@ def compute_release_metrics(rows: list[dict], rec: Recording,
     # which would also catch ordinary GNSS-driven corrections that have
     # nothing to do with the release mechanism and are governed by their own
     # requirements (SWE1-FW-010/-011/-012), not this one.
-    def step_at(p_n: np.ndarray, p_e: np.ndarray, idx: int) -> float:
-        if idx <= 0:
-            return 0.0
-        return max(float(abs(p_n[idx] - p_n[idx - 1])),
-                    float(abs(p_e[idx] - p_e[idx - 1])))
-
-    step_release = step_at(posN, posE, i_rel)
-
-    step_reference: Optional[float] = None
-    clause1_diff: Optional[float] = None
-    if reference_rows is not None:
-        ref_posN = np.array([float(r["posN"]) for r in reference_rows])
-        ref_posE = np.array([float(r["posE"]) for r in reference_rows])
-        step_reference = step_at(ref_posN, ref_posE, i_rel)
-        clause1_diff = step_release - step_reference
-        clause1_pass = bool(clause1_diff <= 0.02)
-        max_step = step_release   # kept for backward-compat callers/fields
+    if i_rel > 0:
+        step_n = float(abs(posN[i_rel] - posN[i_rel - 1]))
+        step_e = float(abs(posE[i_rel] - posE[i_rel - 1]))
     else:
-        # No reference run available (e.g. the informational natural-release
-        # call, which has no single well-defined "no-release" counterfactual)
-        # -- fall back to the absolute step, as before.
-        clause1_pass = bool(step_release <= 0.02)
-        max_step = step_release
-
-    # Neighbouring-tick step distribution, 10 rows either side of the release
-    # -- context for how large an ORDINARY step is in this stretch of the
-    # recording. From the REFERENCE run when one is available (coordinator,
-    # 2026-09-14): that is the run that actually fuses fixes on its natural
-    # schedule through this stretch, so its own step distribution is the
-    # right "ordinary" baseline to compare step_release against -- the run
-    # under test is locked (fuses nothing) right up to the release tick, so
-    # its own neighbourhood either side of row i_rel is not comparable.
-    nb_posN, nb_posE = (ref_posN, ref_posE) if reference_rows is not None else (posN, posE)
-    lo = max(0, i_rel - 10)
-    hi = min(len(nb_posN), i_rel + 11)
-    nb_steps = np.concatenate([np.abs(np.diff(nb_posN[lo:hi])), np.abs(np.diff(nb_posE[lo:hi]))])
-    neighbour_max = float(nb_steps.max()) if len(nb_steps) else 0.0
-    neighbour_median = float(np.median(nb_steps)) if len(nb_steps) else 0.0
+        step_n = 0.0
+        step_e = 0.0
+    max_step = max(step_n, step_e)
 
     dt_arr = np.diff(post_t)
     with np.errstate(invalid="ignore", divide="ignore"):
@@ -1017,12 +970,7 @@ def compute_release_metrics(rows: list[dict], rec: Recording,
         "i_release": i_rel,
         "delta0_m": delta0,
         "clause1_max_step_m": max_step,
-        "clause1_step_release_m": step_release,
-        "clause1_step_reference_m": step_reference,
-        "clause1_diff_m": clause1_diff,
-        "clause1_neighbour_max_m": neighbour_max,
-        "clause1_neighbour_median_m": neighbour_median,
-        "clause1_pass": clause1_pass,
+        "clause1_pass": bool(max_step <= 0.02),
         "clause2_never_increases": never_increases,
         "clause2_max_increase_m": max_increase,
         "clause3_bias_at_60s_m": bias_60,
@@ -1140,18 +1088,9 @@ def print_release_report(r: dict) -> None:
     print(f"release requested t={r['t_release_requested']:.1f} s, "
           f"actual t={r['t_release_actual']:.3f} s (row {r['i_release']})")
     print(f"delta0 (|gnssBias| at release) = {r['delta0_m']:.4f} m")
-    if r["clause1_step_reference_m"] is not None:
-        print(f"(1) step at release: {r['clause1_step_release_m']:.5f} m   "
-              f"reference (no-release, same row): {r['clause1_step_reference_m']:.5f} m   "
-              f"diff: {r['clause1_diff_m']:.5f} m  <= 0.02 m: "
-              f"{'PASS' if r['clause1_pass'] else 'FAIL'}")
-    else:
-        print(f"(1) step at release (no reference run available): "
-              f"{r['clause1_max_step_m']:.5f} m  <= 0.02 m: "
-              f"{'PASS' if r['clause1_pass'] else 'FAIL'}")
-    print(f"    neighbouring-tick step distribution (+/-10 rows): "
-          f"max {r['clause1_neighbour_max_m']:.5f} m, "
-          f"median {r['clause1_neighbour_median_m']:.5f} m")
+    print(f"(1) max sample-to-sample posN/posE step from release onward: "
+          f"{r['clause1_max_step_m']:.5f} m  <= 0.02 m: "
+          f"{'PASS' if r['clause1_pass'] else 'FAIL'}")
     print(f"(2) |gnssBias| never increases after release: "
           f"{'PASS' if r['clause2_never_increases'] else 'FAIL'} "
           f"(max increase {r['clause2_max_increase_m']:.6f} m)")
@@ -1203,13 +1142,6 @@ def main() -> int:
                           "(e.g. outdoor t1, at rest throughout). Needs the "
                           "recording's own lock inputs (AttRate0/1/2 + "
                           "AttAccMagnitude)")
-    ap.add_argument("--reference", type=Path, default=None,
-                     help="SWE1-FW-015 (d)(1)'s differential step check: a "
-                          "previously-dumped --dump-csv from the SAME "
-                          "recording with NO --force-release-at, reused "
-                          "instead of re-running gen_fusion_trace a second "
-                          "time internally (the default when "
-                          "--force-release-at is given without this)")
     ap.add_argument("--exe", type=Path, default=None,
                      help="path to gen_fusion_trace (default: auto-detect "
                           "under test/build*)")
@@ -1325,32 +1257,7 @@ def main() -> int:
     metrics = compute_metrics(rows, rec, cal)
 
     if args.force_release_at is not None:
-        # SWE1-FW-015 (d)(1), architect 2026-09-14: differential -- the step
-        # at the release tick minus the step the SAME tick shows in a
-        # reference replay of the identical recording that fuses the SAME
-        # fix but never releases. A PLAIN no-release replay is not that
-        # reference: it stays locked at the release row (the IMU never
-        # disagreed), so fusion_correctGnss() never runs there either
-        # (gnssUpdates stays 0) -- confirmed on t1, reference step ~0.00001 m,
-        # nothing to compare against (coordinator correction, 2026-09-14).
-        # The reference is instead the LOCK-DISABLED replay of the same
-        # recording (CAL_LOCK_DISABLED, lockWindowS=1e6 -- s_stationaryLocked
-        # can never engage, so every fix fuses on its natural schedule,
-        # exactly the "same fix, no release" counterfactual clause (1) needs).
-        # Run internally by default (deterministic, same command stream minus
-        # the forced ONGROUND 0, so row indices align 1:1); --reference
-        # overrides with a previously-dumped CSV instead of re-running
-        # gen_fusion_trace a second time.
-        if args.reference:
-            with args.reference.open(newline="", encoding="utf-8") as fh:
-                reference_rows = list(csv.DictReader(fh))
-        else:
-            ref_cal = dict(cal)
-            ref_cal.update(CAL_LOCK_DISABLED)
-            ref_commands = build_command_stream(rec, ref_cal, force_release_at=None)
-            reference_rows = run_gen_fusion_trace(exe, ref_commands)
-        metrics["fw015d_release"] = compute_release_metrics(
-            rows, rec, args.force_release_at, reference_rows=reference_rows)
+        metrics["fw015d_release"] = compute_release_metrics(rows, rec, args.force_release_at)
 
     if args.dump_metrics:
         args.dump_metrics.write_text(json.dumps(metrics, indent=2, sort_keys=True),
