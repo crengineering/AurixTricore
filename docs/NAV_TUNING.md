@@ -61,6 +61,17 @@ observations resolve differently:
 
 ## 2. What the velocity error actually costs — the cleanest single number
 
+> **Amendment, 2026-09-14 (docs/NAV_STRAND_2026-09.md, task 10).** The 2.916 m
+> / 3.18x figure below was measured **before T6**, the PSD reparametrisation
+> now in the firmware (section 1 above) — and T6 is exactly the mechanism this
+> section blames (velocity correction time constant 6.05 s -> about 0.76 s). It
+> must be **re-measured by replay, not carried forward**: replayed post-T6 with
+> `tools/nav_replay.py`, t1's 2-D ratio (north+east combined, the criterion
+> SWE1-FW-012 now uses) is 1.65x at the old `gnssPosRScale = 8` and 1.27x at
+> the `gnssPosRScale = 1.0` recommendation — see `docs/NAV_STRAND_2026-09.md`
+> section 3.2 and `SWE1-FW-012`. The per-channel numbers immediately below are
+> stale; the mechanism they describe is not.
+
 In the **static** run the filter makes east position **3.2x worse than the raw
 receiver**:
 

@@ -9,7 +9,7 @@
  *   barometer      never drifts fast, but WANDERS: 0.19 m/min measured while
  *                  the board sat still on the desk, and 0.020 m of scatter
  *   magnetometer   absolute heading, but only where the iron is not
- *   GNSS           absolute position, but 1 Hz, metres of noise, and gone
+ *   GNSS           absolute position, but 10 Hz, metres of noise, and gone
  *                  the moment there is a roof overhead
  *   gyro           smooth attitude, but drifts without the other two
  *

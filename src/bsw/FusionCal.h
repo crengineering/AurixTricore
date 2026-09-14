@@ -114,6 +114,14 @@
  *                               at [m/s]. 0.05 default. gnssBiasMaxM (the
  *                               clamp) stays a compiled #define -- see
  *                               fusion.c
+ *
+ * The struct itself ends at 0x60 (96 bytes) -- XCP_FUSIONCAL_SIZE is 128,
+ * so 32 bytes (eight more float32 fields) of headroom remain inside this
+ * block's own 256-byte slot before docs/CODEMAP.md's "take the next free
+ * slot" rule would apply to a ninth field. Not literally full, despite the
+ * design note's working assumption while the field count was still being
+ * decided (docs/NAV_STRAND_2026-09.md section 10.5) -- corrected here,
+ * 2026-09-14, against the compiled struct rather than carried forward.
  */
 typedef struct
 {

@@ -787,8 +787,9 @@ boolean GnssM9N_read(GnssM9N_Sample *sample){
     sample->numSats   = g_nav.numSats;
 
     /* Scale once, here, so every consumer sees the same units. Copied on
-     * EVERY call, not only when a frame arrived -- NAV-PVT lands at 1 Hz
-     * while this runs at 100 ms, so g_nav is the last-known value. */
+     * EVERY call, not only when a frame arrived -- NAV-PVT lands at 10 Hz
+     * (CFG_RATE_MEAS = 100 ms), the same rate this is polled at but on an
+     * independent clock, so g_nav is the last-known value. */
     /* cfgOk: every configuration command we sent came back acknowledged.
      * FALSE before the send too -- an unconfigured receiver is not "OK". */
     sample->cfgOk      = ((gsv_cfg_sent != FALSE) &&

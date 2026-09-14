@@ -763,6 +763,11 @@ per second as ten independent draws, so P collapses below the true error.
 The position itself is fine. What is not trustworthy is `varN` **as a quality
 signal**, so nothing downstream should gate a decision on it yet.
 
+> `NavVarNorth` is short-term/relative uncertainty. It excludes the
+> common-mode GNSS error, measured at 1.85 m sigma with a 32 s correlation
+> time, and is not an absolute-position uncertainty. (`docs/NAV_TUNING.md`
+> section 4.4; the sentence promised there, added 2026-09-14.)
+
 Decimating to 1 Hz is the obvious fix and is the wrong one, for a reason worth
 recording: GNSS POSITION error is dominated by slowly-varying bias
 (ionosphere, multipath) so the extra samples carry little, but GNSS VELOCITY is
@@ -1011,3 +1016,65 @@ deceptively good.
   orientation-independent. Indoors that check is not worth making: building
   steel shifts the field. Do it outdoors against a known bearing, and expect the
   3.9° declination in `Xcp_Nvm` to be part of what is being tested.
+
+---
+
+## 11. The NAV filter strand, 2026-09 — slew clamp, trust gate, stationary lock
+
+`docs/NAV_STRAND_2026-09.md` is the design record (SWE1-FW-010/-011/-014/-015);
+this is the short version for whoever is reading this file to understand what
+the estimator does today, not why.
+
+**GNSS-altitude slew clamp (SWE1-FW-010).** The GNSS-altitude update
+(`fusion_correctGnss()`, the `d`/`measBias` split) may move `d` by at most
+`gnssAltSlewMps * dtFix` per fix — `gnssAltSlewMps` default 0.001 m/s
+(`Xcp_FusionCal` `0x38`, `FusGnssAltSlewMps`), **0 is a defined value meaning
+"the update is off"**, read directly, never through `FusionCal_positive()`. A
+clamp that binds scales the Kalman gain, which is no longer optimal, so the
+covariance update switches from the usual `P -= K(HP)` shortcut to the full
+Joseph form (`fusion_chanJosephUpdate()`) — the shortcut is only valid for the
+unscaled gain. Measured indoors (02F0B754CCA975C6, cold replay): unclamped
+12.635 m peak-to-peak / 4.551 m max-per-60 s; at the 0.001 m/s default,
+0.417 m / 0.289 m alone — the binding `<= 0.25 m` max-per-60-s clause on its
+own narrowly misses on this recording (0.289 m), but combined with the trust
+gate below (which refuses this recording's GNSS outright) the real number is
+0.227 m and passes; see `docs/NAV_STRAND_2026-09.md` and the SWE1-FW-010 item
+for the full replay evidence.
+
+**Trust gate (SWE1-FW-011).** `fusion_correctGnss()` keeps its own trust
+decision, `gnssHAccMax` (`0x3C`, default 4.0 m — separates every recorded
+outdoor fix from every recorded indoor one), debounced on 30 consecutive good
+fixes to enter and 10 consecutive bad ones to leave (never on level, so a
+chattering `hAcc` cannot flip it). Untrusted skips position, velocity AND
+altitude together; the origin, once latched, is kept. `horizontalOk`
+(`Xcp_Fusion`, unchanged offset) is **no longer a latch** — it is
+`originSet AND gnssTrusted AND a trusted fix fused within 2.0 s`, recomputed
+every tick so a total GNSS outage clears it purely from time passing, not only
+when a new (untrusted) fix happens to arrive. Past that 2.0 s the horizontal
+channels hold position and velocity while `P` keeps growing from process
+noise, which is what lets the gate reopen on its own. `gnssTrusted` publishes
+at `Xcp_Fusion 0xBD` (`NavGnssTrusted`).
+
+**Stationary lock (SWE1-FW-014) and its release (SWE1-FW-015).** While
+`|omega| <= lockGyroDps` (2.0 deg/s) and `abs(|a|-1g) <= lockAccG` (0.03 g)
+hold together for `lockWindowS` (1.0 s) **and** the ASW has called
+`Fusion_setOnGround(TRUE)` — the airborne interlock, default TRUE, no ASW
+owner calls it yet — the filter locks: a zero-velocity update (all three
+channels, at the barometer's own rate) pins velocity without discarding its
+covariance, and GNSS position/velocity/altitude are all skipped, so the
+`d`/`measBias` split and the horizontal position are untouched by GNSS while
+locked. Release needs 2 CONSECUTIVE samples past `relGyroDps`/`relAccG`
+(3.0 deg/s / 0.05 g) — one corrupt IMU tick (a measured failure mode,
+SWE1-FW-009) cannot release it. On release, the frozen-versus-GNSS difference
+becomes a bias (`Xcp_FusionCal 0x54-0x5C`: `sigmaZupt`, `tauGnssBiasS` = 60 s,
+`gnssBiasRateMax` = 0.05 m/s; `gnssBiasMaxM` = 10 m stays a compiled
+`#define`) subtracted from every later position fix and decayed over one GNSS
+error correlation time, so the liftoff setpoint is the frozen point and
+nothing jumps. Measured: indoor 02F0B754CCA975C6 locks 99.79 % of a 469 s
+run, `|v_horiz|` max 0.0004 m/s, posN/posE peak-to-peak 0.0027/0.0021 m —
+against the 21.9 m north peak-to-peak this recording showed before any of
+this strand existed.
+
+`Xcp_FusionCal` grew `0x40 -> 128` bytes for the lock/release fields; the
+struct itself only reaches `0x60` (96 bytes), so 32 bytes of headroom remain
+before the next field needs `docs/CODEMAP.md`'s "next free slot" rule.
