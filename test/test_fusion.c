@@ -1690,21 +1690,24 @@ void test_gnss_alt_dtfix_resets_through_a_long_lock_not_just_on_use(void)
      * huge dtFix and the clamp (maxStep = slew * dtFix) stopped bounding
      * anything.
      *
-     * FAILS ON THE OLD CODE: 250 s locked (GNSS fixes still arriving at
+     * FAILS ON THE OLD CODE: 600 s locked (GNSS fixes still arriving at
      * 10 Hz throughout, cached but skipped) with an 8 m GNSS-altitude
      * disagreement waiting -> released -> the first post-release altitude
      * tick moves d by far more than gnssAltSlewMps * (one fix interval).
      * Reviewer's own numbers on the equivalent scenario: 0.260 m in one
-     * 0.05 s tick against a 0.000200 m control. */
+     * 0.05 s tick against a 0.000200 m control. 600 s to match SWE1-FW-015
+     * (a3)'s own "600 s lock followed by one fix" wording exactly (review
+     * round 2 NOTE, 2026-09-14: was 250 s, item and test now quote the same
+     * number). */
     static const sint32 LAT0 = 482000000, LON0 = 116000000;
     FusionValues f; memset(&f, 0, sizeof f);
     const float32 slew = 0.001f;   /* FCAL_GNSS_ALT_SLEW_DEFAULT */
     uint32 itow = 1000u;
     int i;
 
-    /* anchor at the origin, then lock -- 250 s, GNSS fixes and baro both
+    /* anchor at the origin, then lock -- 600 s, GNSS fixes and baro both
      * keep arriving the whole time, cached/skipped while locked. */
-    for (i = 0; i < 50000; ++i)   /* 250 s */
+    for (i = 0; i < 120000; ++i)   /* 600 s */
     {
         if ((i % 20) == 0)
         {
@@ -1732,7 +1735,7 @@ void test_gnss_alt_dtfix_resets_through_a_long_lock_not_just_on_use(void)
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(0u, f.stationaryLocked, "did not release");
 
     /* first post-release fix: dtFix must be about one fix interval (~0.1 s),
-     * not 250 s -- bound the step at 5x the arithmetic worst case for a
+     * not 600 s -- bound the step at 5x the arithmetic worst case for a
      * fresh (post-reset) dtFix, generous headroom over the true ~0.1 s
      * interval this scenario actually produces. */
     const float32 dAfterFirstFix0 = f.a_d;
@@ -1828,6 +1831,55 @@ void test_gnss_alt_dtfix_clamped_during_a_total_outage(void)
     TEST_ASSERT_TRUE_MESSAGE(step <= bound, msg);
 }
 
+/* ==========================================================================
+ * flight-reviewer review round 2, feat/nav-filter-strand @ 6fa5cfc
+ * ======================================================================== */
+
+void test_gnss_bias_decay_bit_identical_after_the_hoist(void)
+{
+    /* MAJOR: fusion_decayGnssBias() used to re-read tauGnssBiasS and
+     * gnssBiasRateMax from g_fusionCal (two FusionCal_positive() calls, two
+     * float divides) on every 1014 Hz tick, whether or not a bias was ever
+     * installed. Hoisted into fusion_refreshLockThresholds() (the ~100 Hz
+     * barometer tick) plus an early-out while both biases are exactly zero.
+     * f.gnssBiasN/E is now published (SWE1-FW-015 (d)'s own plumbing), so
+     * this test recomputes the SAME closed-form decay independently, tick
+     * for tick, with the SAME float32 operation order fusion_decayBiasAxis()
+     * uses (dBias = (-bias*dt)/tau, clamped, bias += dBias) -- if the hoist
+     * changed nothing but WHEN tau/rateMax are read (both fields are the
+     * compiled defaults for the whole test, so "when" cannot matter here),
+     * the two sequences round identically, tick after tick. */
+    static const float32 tau = 60.0f;         /* FUSION_TAU_GNSS_BIAS_S_DEFAULT */
+    static const float32 rateMax = 0.05f;     /* FUSION_GNSS_BIAS_RATE_MAX_DEFAULT */
+    FusionValues f;
+    float32 posNBefore;
+    float32 refBias;
+    int i;
+
+    lockThenReleaseWithOffsetNorth(&f, 4.0f, &posNBefore);
+    refBias = f.gnssBiasN;   /* the bias the release tick itself installed */
+    TEST_ASSERT_EQUAL_FLOAT(refBias, f.gnssBiasN);
+
+    for (i = 0; i < 4000; ++i)   /* 20 s, no GNSS/baro noise -- pure decay */
+    {
+        float32 dBias = (-refBias * DT) / tau;
+        const float32 rateLimit = rateMax * DT;
+
+        if (dBias > rateLimit) { dBias = rateLimit; }
+        else if (dBias < -rateLimit) { dBias = -rateLimit; }
+        else { /* within the rate limit already */ }
+        refBias += dBias;
+
+        Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
+
+        char msg[160];
+        (void)snprintf(msg, sizeof msg,
+            "tick %d: f.gnssBiasN %.9g vs independently-computed %.9g",
+            i, (double)f.gnssBiasN, (double)refBias);
+        TEST_ASSERT_EQUAL_FLOAT_MESSAGE(refBias, f.gnssBiasN, msg);
+    }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1870,5 +1922,6 @@ int main(void)
     RUN_TEST(test_interlock_release_and_imu_release_step_identically);
     RUN_TEST(test_gnss_alt_dtfix_resets_through_a_long_lock_not_just_on_use);
     RUN_TEST(test_gnss_alt_dtfix_clamped_during_a_total_outage);
+    RUN_TEST(test_gnss_bias_decay_bit_identical_after_the_hoist);
     return UNITY_END();
 }

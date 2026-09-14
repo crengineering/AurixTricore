@@ -75,6 +75,13 @@ typedef struct
     float32 innovVelN;  /**< last GNSS velocity innovation, north [m/s]      */
     float32 innovVelE;  /**< last GNSS velocity innovation, east  [m/s]      */
     float32 pNN;        /**< variance of posN [m^2]                          */
+    float32 gnssBiasN;  /**< SWE1-FW-015 release bias, north [m]. Zero before
+                         *   the first release; NOT fed back into x[FS_POS],
+                         *   only subtracted ahead of the GNSS update -- see
+                         *   fusion_releaseGnssBias()/fusion_decayGnssBias().
+                         *   Published for FW-015 (d)'s host replay clause,
+                         *   not wired into Xcp_Fusion (no A2L/GUI impact) */
+    float32 gnssBiasE;  /**< same, east [m]                                  */
 
     /* --- tangent-plane origin ----------------------------------------- */
     float32 originLatDeg;
@@ -155,10 +162,16 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3],
  *  \b no ASW component does so yet (no owner assigned as of this task), so
  *  today's build always runs with the interlock open, which is safe by
  *  construction only because nothing yet arms this vehicle's motors either.
- *  Setting FALSE while locked releases the lock immediately, not on the next
- *  violating sample: the hazard this guards against (a lock pinning the
- *  velocity under a flying, position-controlled vehicle) must never survive
- *  even one extra tick after the application says "airborne". BSW/ASW split
+ *  Setting FALSE while locked releases the lock on the next VALID
+ *  Fusion_update() tick, not on the next violating detector sample: the
+ *  hazard this guards against (a lock pinning the velocity under a flying,
+ *  position-controlled vehicle) must never survive even one extra tick of
+ *  usable input after the application says "airborne" (flight-reviewer
+ *  review round 2, 2026-09-14: the release runs inside Fusion_update()'s
+ *  input-valid gate, the same path BLOCKER 1's fix put the IMU-detected
+ *  release on -- during an IMU fault NavStationaryLocked keeps publishing 1
+ *  until a valid tick arrives, which is not a hazard, since nothing acts on
+ *  the lock, ZUPT included, on an invalid tick either). BSW/ASW split
  *  intact -- this file never includes an ASW header; the ASW calls this
  *  setter instead. */
 void Fusion_setOnGround(boolean onGround);

@@ -390,6 +390,14 @@ static float32 s_lockAccG;
 static float32 s_relAccG;
 static float32 s_lockWindowS;
 
+/* SWE1-FW-015 (flight-reviewer, review round 2, 2026-09-14 MAJOR): the same
+ * fix as above, for fusion_decayGnssBias() -- tauGnssBiasS and
+ * gnssBiasRateMax were two more FusionCal_positive() reads plus two float
+ * divides run on every 1014 Hz tick regardless of whether a bias was ever
+ * installed. Cached here, refreshed alongside the lock thresholds above. */
+static float32 s_gnssBiasTauS;
+static float32 s_gnssBiasRateMaxMps;
+
 /* SWE1-FW-015: the GNSS position bias installed on release, one per
  * horizontal channel -- the frozen-versus-GNSS difference at the instant
  * the lock releases, decayed over tauGnssBiasS rather than corrected in one
@@ -933,6 +941,11 @@ static void fusion_refreshLockThresholds(void)
     s_relAccG  = FusionCal_positive(g_fusionCal.relAccG, 0.0f, FUSION_REL_ACC_G_DEFAULT);
     s_lockWindowS = FusionCal_positive(g_fusionCal.lockWindowS, 0.0f,
                                        FUSION_LOCK_WINDOW_S_DEFAULT);
+
+    s_gnssBiasTauS       = FusionCal_positive(g_fusionCal.tauGnssBiasS, 0.0f,
+                                               FUSION_TAU_GNSS_BIAS_S_DEFAULT);
+    s_gnssBiasRateMaxMps = FusionCal_positive(g_fusionCal.gnssBiasRateMax, 0.0f,
+                                               FUSION_GNSS_BIAS_RATE_MAX_DEFAULT);
 }
 
 void Fusion_init(void)
@@ -1043,6 +1056,8 @@ void Fusion_init(void)
     s_navState.innovVelN    = 0.0f;
     s_navState.innovVelE    = 0.0f;
     s_navState.pNN          = FUSION_P_POS_INIT;
+    s_navState.gnssBiasN    = 0.0f;
+    s_navState.gnssBiasE    = 0.0f;
     s_navState.originLatDeg = 0.0f;
     s_navState.originLonDeg = 0.0f;
     s_navState.originAltM   = 0.0f;
@@ -1701,18 +1716,28 @@ static float32 fusion_decayBiasAxis(float32 bias, float32 dt, float32 tau, float
  * locked or not -- an installed bias keeps decaying through whatever the
  * vehicle does next, which is the whole point of not correcting it in one
  * step. A bias that was never installed (0.0f) decays to itself exactly:
- * dBias = -0*dt/tau = 0, clamped to 0, bias stays 0.0f -- this function is a
- * true no-op before the first release. */
+ * dBias = -0*dt/tau = 0, clamped to 0, bias stays 0.0f -- this function was
+ * ALREADY a true no-op before the first release; the early-out below (review
+ * round 2 MAJOR, 2026-09-14) just stops paying for that no-op on every
+ * 1014 Hz tick of a flight that never releases a lock: tau/rateMax are now
+ * read once per barometer tick in fusion_refreshLockThresholds(), not here,
+ * and the two float divides inside fusion_decayBiasAxis() are skipped
+ * entirely while both biases are exactly zero. Bit-identical result to the
+ * un-hoisted version in every case, since 0.0f in gives 0.0f out either
+ * way. */
 static void fusion_decayGnssBias(float32 dt)
 {
-    const float32 tau = FusionCal_positive(g_fusionCal.tauGnssBiasS, 0.0f,
-                                           FUSION_TAU_GNSS_BIAS_S_DEFAULT);
-    const float32 rateMax = FusionCal_positive(g_fusionCal.gnssBiasRateMax, 0.0f,
-                                               FUSION_GNSS_BIAS_RATE_MAX_DEFAULT);
-    const float32 rateLimit = rateMax * dt;
+    if ((s_gnssBiasN != 0.0f) || (s_gnssBiasE != 0.0f))
+    {
+        const float32 rateLimit = s_gnssBiasRateMaxMps * dt;
 
-    s_gnssBiasN = fusion_decayBiasAxis(s_gnssBiasN, dt, tau, rateLimit);
-    s_gnssBiasE = fusion_decayBiasAxis(s_gnssBiasE, dt, tau, rateLimit);
+        s_gnssBiasN = fusion_decayBiasAxis(s_gnssBiasN, dt, s_gnssBiasTauS, rateLimit);
+        s_gnssBiasE = fusion_decayBiasAxis(s_gnssBiasE, dt, s_gnssBiasTauS, rateLimit);
+    }
+    else
+    {
+        /* both biases already zero: nothing to decay */
+    }
 }
 
 void Fusion_update(FusionValues *fusion, const float32 accNed[3],
@@ -1916,6 +1941,8 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3],
     s_navState.accBiasN = s_chN.x[FS_ACCB];
     s_navState.accBiasE = s_chE.x[FS_ACCB];
     s_navState.pNN      = s_chN.p[FS_POS][FS_POS];
+    s_navState.gnssBiasN = s_gnssBiasN;
+    s_navState.gnssBiasE = s_gnssBiasE;
 
     s_navState.verticalOk = (s_chD.anchored != FALSE) ? 1u : 0u;
     s_navState.covResets  = s_covResets;
