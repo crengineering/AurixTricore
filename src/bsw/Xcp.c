@@ -105,13 +105,20 @@ static boolean xcpWriteAllowed(uint32 addr, uint32 len)
         allowed = TRUE;
     }
     else if ((addr >= (fusionCalAddr + 4u))
-             && ((addr + len) <= (fusionCalAddr + (uint32)sizeof(g_fusionCal))))
+             && ((addr + len) <= (fusionCalAddr + (uint32)sizeof(Xcp_FusionCal))))
     {
         /* Estimator tuning. RAM only, so the worst a bad write can do is spoil
          * the estimate until the next power cycle. The magic word at offset 0
          * stays firmware-owned, hence the +4.
          *
-         * Bounded on sizeof(g_fusionCal), NOT XCP_FUSIONCAL_SIZE (flight-
+         * sizeof(Xcp_FusionCal), the TYPE, not sizeof(g_fusionCal): the object
+         * is volatile, and TASKING's ctc flags sizeof of a volatile operand
+         * with W515 ("side effects of 'sizeof' operand are ignored") even
+         * though sizeof never evaluates its operand -- the two are the same
+         * value by construction, so naming the type sidesteps the warning
+         * without changing what is bounded.
+         *
+         * Bounded on sizeof(Xcp_FusionCal), NOT XCP_FUSIONCAL_SIZE (flight-
          * reviewer MAJOR, 2026-09-14): XCP_FUSIONCAL_SIZE (128) is the
          * portion of the 256-byte slot claimed so far, headroom included
          * for fields not added yet (FusionCal.h: the struct itself is only
