@@ -439,11 +439,29 @@ Nothing periodic changes. `Fusion_update()` keeps running at IMU rate
 | `fusion_correctBaro` | ~100 Hz | CPU1 | none — not touched | n/a |
 | `fusion_correctGnss` | 10 Hz | CPU1 | one divide, one compare, one multiply per channel update (slew); two `uint8` counters and one branch (trust); the Joseph form costs one extra 4x4 multiply-add on the three GNSS updates | the scheduler is cooperative — an overrun steals from whatever follows it on CPU1. The added work is bounded, straight-line apart from the trust test, and lands on 1 tick in 100 |
 | freeze branch | 1014 Hz | CPU1 | one compare against a tick count | n/a |
+| `fusion_updateStationaryLock()` | **1014 Hz** | CPU1 | **5 `FusionCal_positive()` calls + 1 `sqrtf` + two counters**, every tick. This is the one addition of the whole strand that is NOT on a slow path — the detector has to see every sample, because a 1 s window of "every sample under threshold" is what it asserts | the scheduler is cooperative; an overrun steals from everything after it on CPU1. Straight-line, no loop, no branch that depends on data length |
+| `fusion_decayGnssBias()` | **1014 Hz** | CPU1 | **2 `FusionCal_positive()` calls + 2 divides**, every tick | as above |
 | `Fusion_setGnss` | 10 Hz | CPU0 | none — signature unchanged, `vAcc` is not plumbed | n/a |
 
-Estimated added dispatch: single-digit microseconds on the 10 Hz tick, zero on
-the other 99. `g_dbgNavStepMaxTicks` is the acceptance instrument and must stay
-under 300 µs; it is read back on the bench after the flash.
+**Estimated added dispatch** *(corrected 2026-09-14 after review round 1 — the
+earlier line said "zero on 99 ticks in 100", which was true of SWE1-FW-010/-011
+and is no longer true of the strand)*: single-digit microseconds on the 10 Hz
+tick as before, **plus of order 2-4 µs on every 1014 Hz tick** from the two new
+per-tick functions — single-digit percent of the 300 µs budget
+(SYS2-TIM-002, measured user 170-180 µs). The divides and the `sqrtf` are the
+cost; `FusionCal_positive()` is a compare and a select.
+
+Two things follow, and both are requirements rather than observations.
+**First, the estimate is not the acceptance.** `g_dbgNavStepMaxTicks` read back
+over XCP is, and it must stay under 300 µs over a run of at least 300 s
+containing at least one lock and one release — SWE1-FW-014 clause (c2), which
+is a **bench (PIL)** clause for the obvious reason that a host build has no STM
+and cannot measure a TriCore dispatch. **Second, if the read-back does move**,
+the cheap fix is available before any redesign: the detector needs the
+per-sample test but not the per-sample *parameter* read, so the five
+`FusionCal_positive()` calls can be hoisted to the rate at which a cal write
+can plausibly matter, and `sqrtf` can be removed by comparing squared norms
+against a squared threshold. Neither changes behaviour.
 
 ## 6. Risks
 
@@ -460,10 +478,21 @@ under 300 µs; it is read back on the bench after the flash.
   one indoor and five outdoor recordings from two locations. It can refuse a
   legitimate fix under trees or at cold start. Mitigated by making it live, by
   the 1 s leave-debounce and by the deferred outdoor clause — not eliminated.
-- **`horizontalOk` going 0 is a visible behaviour change** in the GUI position
-  panel (SYS1-016) and in anything else reading it. It is the correct value; it
-  will look like a regression on the bench until it is understood. aurix-gui
-  needs the sentence, not a change.
+- **`NavHorizontalOk` has CHANGED MEANING, and that is a contract change even
+  though no byte moved.** It was a latch — "the tangent-plane origin has been
+  set at least once", set at `fusion.c:560` and never cleared. It is now
+  "the origin is set AND the GNSS is trusted AND a fix was fused within 2.0 s"
+  (SWE1-FW-011). Same offset, same type, different question answered. Checked
+  against the consumer: the GUI's anchoring display ANDs it with `GnssNavOk`
+  (SWE1-GUI-007), so indoors it will now correctly show **dead reckoning**
+  instead of claiming an anchored position that is 15 m out — **no GUI change
+  is needed and none should be made**. The item text of SYS2-GUI-003 mentions
+  the flag, so a one-line status note there is right; the system architect is
+  adding it. Anything else reading `NavHorizontalOk` as "have I ever had a fix"
+  would now be wrong, and there is nothing else today.
+- **On the bench this will look like a regression until it is understood.**
+  Indoors the position panel will say dead reckoning and the position will not
+  move. That is the correct answer to a 14.90 m receiver bias.
 - **A scaled Kalman gain is sub-optimal by construction.** With the standard
   `(I-KH)P` form a scaled gain can drive `P` non-PSD; the Joseph form is not
   optional here. The numerical health check (`fusion.c:455-470`) is the net,
@@ -728,6 +757,28 @@ discontinues the origin, every logged position, the GUI trail and the frozen
 reference, and the GNSS error after the re-origin is the same realisation);
 freeze velocity only (rejected — the position then keeps random-walking, which
 is the defect).
+
+**How the release is verified, and a criterion that was withdrawn**
+*(2026-09-14, after SWE1-FW-015 (d) was executed for the first time)*. The
+acceptance is on **the bias state**, not on the distance between the fused
+position and the raw fix: `|gnssBias|` must never increase after release, must
+be at `0.368 * |gnssBias|(release)` within 10 % at one time constant and under
+10 % of it at three, and the position rate the decay implies must never exceed
+`gnssBiasRateMax`. The original formulation — "converge to within 0.5 m of the
+raw fix within 180 s" — is withdrawn, not relaxed, and the reason is worth
+keeping because it is a general trap: **it measured the mechanism through an
+instrument whose own noise is four times the threshold.** On t1 the raw fix has
+a 2-D scatter of 2.07 m and, inside the observation window itself, walks about
+6.5 m out and back; the executed run read 0.087 m at +10 s and then 0.77-4.21 m
+as the *receiver* moved. No tuning of `tauGnssBiasS` could have passed it, and
+retuning against it would have been fitting the time constant to one
+realisation of the weather. The run could not even host the observation:
+released at 150 s in a 300.9 s recording, the +150 s and +180 s rows of the
+convergence trace are the same final sample. The mechanism was fine — the fused
+state landed on the fix and tracked it in direction rather than sticking. A
+criterion has to be resolvable by the measurement that checks it, and the
+fused-versus-raw distance belongs to SWE1-FW-012's scatter ratio (1.27x raw on
+t1), where it is already gated once.
 
 ### 10.4 In-flight IMU-consistency gate: assessed, NOT recommended
 
