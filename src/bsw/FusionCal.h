@@ -158,6 +158,21 @@ typedef struct
     float32 gnssBiasRateMax;
 } Xcp_FusionCal;
 
+/* Compile-time invariant Xcp.c's write-whitelist depends on (flight-reviewer
+ * MAJOR, 2026-09-14): the claimed slot must be at least as large as the
+ * struct, so XCP_FUSIONCAL_SIZE can never silently fall below sizeof(Xcp_
+ * FusionCal) -- the whitelist itself bounds on sizeof(g_fusionCal) directly
+ * (Xcp.c), not on this macro, precisely so a future field can never write
+ * past the real struct; this assert is the OTHER direction, that the macro
+ * (used for nothing safety-critical any more, only as slot-claim
+ * documentation) has not drifted below what it claims to describe. Not
+ * generated: gen_a2l.py's LayoutAssert_gen.h asserts field offsets and the
+ * struct's own sizeof, never a relationship to this slot macro. TASKING
+ * does not accept _Static_assert under this project's build flags
+ * (tools/gen_a2l.py's own comment) -- same negative-array-size idiom. */
+typedef char fusioncal_slot_covers_struct[
+    (XCP_FUSIONCAL_SIZE >= sizeof(Xcp_FusionCal)) ? 1 : -1];
+
 extern volatile Xcp_FusionCal g_fusionCal;
 
 /** Load the compiled defaults. Call once at start-up, before Fusion_init(). */

@@ -105,11 +105,23 @@ static boolean xcpWriteAllowed(uint32 addr, uint32 len)
         allowed = TRUE;
     }
     else if ((addr >= (fusionCalAddr + 4u))
-             && ((addr + len) <= (fusionCalAddr + XCP_FUSIONCAL_SIZE)))
+             && ((addr + len) <= (fusionCalAddr + (uint32)sizeof(g_fusionCal))))
     {
         /* Estimator tuning. RAM only, so the worst a bad write can do is spoil
          * the estimate until the next power cycle. The magic word at offset 0
-         * stays firmware-owned, hence the +4. */
+         * stays firmware-owned, hence the +4.
+         *
+         * Bounded on sizeof(g_fusionCal), NOT XCP_FUSIONCAL_SIZE (flight-
+         * reviewer MAJOR, 2026-09-14): XCP_FUSIONCAL_SIZE (128) is the
+         * portion of the 256-byte slot claimed so far, headroom included
+         * for fields not added yet (FusionCal.h: the struct itself is only
+         * 0x60 = 96 bytes). Bounding the WHITELIST on the claimed-but-not-
+         * yet-populated size let a write into bytes 0x60-0x7F land past the
+         * real struct, into whatever the linker put next in
+         * .bss.xcp_fusioncal -- sizeof() tracks the actual struct
+         * automatically as fields are added, which XCP_FUSIONCAL_SIZE
+         * cannot (it has to be widened by hand, and did not have to agree
+         * with the struct even then). */
         allowed = TRUE;
     }
     else if ((addr >= (gpioAddr + XCP_GPIO_STATE_OFFSET))
