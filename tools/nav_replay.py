@@ -296,7 +296,8 @@ class Recording:
         return d
 
 
-def build_command_stream(rec: Recording, cal: dict, on_ground: bool = True) -> str:
+def build_command_stream(rec: Recording, cal: dict, on_ground: bool = True,
+                         force_release_at: Optional[float] = None) -> str:
     out = io.StringIO()
     out.write("INIT\n")
     for name, value in cal.items():
@@ -308,12 +309,29 @@ def build_command_stream(rec: Recording, cal: dict, on_ground: bool = True) -> s
         # no recording on file where it should be anything else).
         out.write(f"ONGROUND {1 if on_ground else 0}\n")
 
+    # SWE1-FW-015 clause (d): a synthetic release on a recording where the
+    # IMU itself never releases (t1, at rest throughout). ONGROUND 0 at
+    # force_release_at and left there for the rest of the run -- simulating
+    # an actual liftoff (stays "airborne"), not a momentary toggle: a
+    # toggle-and-immediately-reopen on a genuinely-at-rest recording just
+    # re-locks within one lockWindowS (the IMU never stopped agreeing), which
+    # gives the bias no time to transfer to GNSS truth and does not exercise
+    # what clause (d) is asking about. Fusion_setOnGround(FALSE) only RAISES
+    # the pending-release flag (BLOCKER 1 fix); the very next Fusion_update()
+    # (the STEP right after) performs the release, through the same
+    # fusion_releaseGnssBias() path an IMU-detected release uses.
+    released = force_release_at is None
+
     dt = rec.dt()
     gnss_present = rec.sig["GnssPresent"]
     gnss_navok = rec.sig["GnssNavOk"]
     baro_present = rec.sig["BaroPresent"]
 
     for i in range(len(rec.t)):
+        if (not released) and (rec.t[i] >= force_release_at):
+            out.write("ONGROUND 0\n")   # stays 0 for the rest of the run
+            released = True
+
         if baro_present[i] != 0.0:
             alt = rec.sig["BaroAltitude"][i]
             if usable(alt, 1.0e6):
@@ -925,6 +943,16 @@ def main() -> int:
                           "the plain report")
     ap.add_argument("--start", type=float, default=None, help="window start [s]")
     ap.add_argument("--end", type=float, default=None, help="window end [s]")
+    ap.add_argument("--force-release-at", type=float, default=None,
+                     help="SWE1-FW-015 clause (d): force a synthetic "
+                          "stationary-lock release at this timestamp [s] "
+                          "via the airborne interlock (ONGROUND 0, held for "
+                          "the rest of the run -- simulates an actual "
+                          "liftoff, not a momentary toggle), for a "
+                          "recording where the IMU itself never releases "
+                          "(e.g. outdoor t1, at rest throughout). Needs the "
+                          "recording's own lock inputs (AttRate0/1/2 + "
+                          "AttAccMagnitude)")
     ap.add_argument("--exe", type=Path, default=None,
                      help="path to gen_fusion_trace (default: auto-detect "
                           "under test/build*)")
@@ -1021,7 +1049,10 @@ def main() -> int:
                   "(cmake --build test/build) or pass --exe")
 
     rec = Recording(args.mf4, args.start, args.end)
-    commands = build_command_stream(rec, cal)
+    if (args.force_release_at is not None) and (not rec.hasLockInputs):
+        sys.exit(f"{args.mf4.name}: --force-release-at needs AttRate0/1/2 + "
+                  "AttAccMagnitude, which this recording does not have")
+    commands = build_command_stream(rec, cal, force_release_at=args.force_release_at)
 
     if args.dump_commands:
         args.dump_commands.write_text(commands, encoding="utf-8")
