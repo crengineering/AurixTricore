@@ -73,7 +73,22 @@
  *                               shared by all three channels. Already
  *                               rate-invariant, unlike sigmaAccD/sigmaAccH
  *                               above, so this is only a live-tuning wire-up
- *   0x38  float32 reserved[2]
+ *   --- SWE1-FW-010/-011 (taken from reserved[2], no offset change) ---
+ *   0x38  float32 gnssAltSlewMps  max rate [m/s] the GNSS-altitude update
+ *                               may move d (fusion.c fusion_correctGnss()).
+ *                               0.001 default. ZERO IS A DEFINED VALUE:
+ *                               "the GNSS-altitude update is off". Read
+ *                               DIRECTLY, never through FusionCal_positive(),
+ *                               which would substitute the default for 0
+ *   0x3C  float32 gnssHAccMax    GNSS is trusted only while the reported
+ *                               hAcc is at or below this [m]. 4.0 default,
+ *                               separates every recorded outdoor fix from
+ *                               every recorded indoor one (docs/NAV_STRAND_
+ *                               2026-09.md section 3.3)
+ *
+ * Block is now FULL at 64 bytes -- SWE1-FW-014 grows XCP_FUSIONCAL_SIZE to
+ * 128 and appends its eight fields from 0x40 (still inside this block's own
+ * 256-byte slot; see fusion.h and docs/CODEMAP.md).
  */
 typedef struct
 {
@@ -96,7 +111,8 @@ typedef struct
     float32 gateMinM;
 
     float32 sigmaAccRw;
-    float32 reserved[2];
+    float32 gnssAltSlewMps;
+    float32 gnssHAccMax;
 } Xcp_FusionCal;
 
 extern volatile Xcp_FusionCal g_fusionCal;

@@ -90,6 +90,13 @@
  * GNSS noise be absorbed as bias. */
 #define FUSION_SIGMA_GNSS_VEL   (0.3f)
 
+/* SWE1-FW-010 fallback for an unusable g_fusionCal.gnssAltSlewMps (NaN,
+ * negative, or past FUSIONCAL_MAX) -- 0 is a legitimate WRITTEN value
+ * ("update off") and must never be replaced, so this is used only when the
+ * field itself cannot be trusted at all, exactly the FusionCal_positive()
+ * idea but applied by hand because 0 must survive here. */
+#define FCAL_GNSS_ALT_SLEW_DEFAULT (0.001f)
+
 /* Floor on the reported horizontal accuracy [m]. The receiver is optimistic
  * about hAcc under a clear sky, and a too-small R makes the filter chase
  * multipath. */
@@ -251,6 +258,13 @@ static float32 s_gnssSpeed;
 static float32 s_gnssHeading;
 static float32 s_gnssHAcc;
 static uint32  s_gnssLastGen;
+
+/* SWE1-FW-010: wall-clock time [s] since fusion_correctGnss() last ran the
+ * GNSS-altitude update -- the design note's "dtFix", accumulated every
+ * Fusion_update() tick and reset to 0 the instant that update runs again.
+ * Not part of any latch: read and written only on CPU1, inside
+ * Fusion_update()/fusion_correctGnss(). */
+static float32 s_dtSinceGnssAlt;
 
 /* GNSS duplicate-of-the-last-fix guard. Read and written ONLY by
  * Fusion_setGnss() (CPU0), never by the consumer, so -- unlike the fields
@@ -482,15 +496,90 @@ static void fusion_chanPredict(Fusion_Chan *ch, float32 a, float32 dt)
     }
 }
 
+/* maxStep sentinel for fusion_chanUpdateSlewed(): "no rate limit", i.e. take
+ * the full Kalman step every time -- MISRA prefers this to passing an
+ * infinity around. Every call site except the GNSS-altitude one (SWE1-FW-010)
+ * passes this. */
+#define FUSION_NO_SLEW  (-1.0f)
+
+/* Joseph-form covariance update for an ARBITRARY (not necessarily optimal)
+ * gain k: P' = (I - k h')P(I - k h')' + k R k'. The simplified P -= K(HP)
+ * shortcut fusion_chanUpdateSlewed() uses for k = P h'/S is only valid for
+ * THAT optimal gain; SWE1-FW-010's rate clamp scales the gain down to bound
+ * the applied step, and a scaled gain is no longer optimal, so the shortcut
+ * can drive P non-PSD (design note docs/NAV_STRAND_2026-09.md section 3.1).
+ * Not a hot-path cost: only the 10 Hz GNSS-altitude call site ever reaches
+ * this, everything else passes FUSION_NO_SLEW and never scales its gain. */
+static void fusion_chanJosephUpdate(Fusion_Chan *ch, const float32 h[FS_N],
+                                    const float32 k[FS_N], float32 r)
+{
+    float32 m[FS_N][FS_N];      /* M = I - k h' */
+    float32 mp[FS_N][FS_N];     /* M * P */
+    uint8   i;
+    uint8   j;
+    uint8   l;
+
+    for (i = 0u; i < FS_N; i++)
+    {
+        for (j = 0u; j < FS_N; j++)
+        {
+            m[i][j] = ((i == j) ? 1.0f : 0.0f) - (k[i] * h[j]);
+        }
+    }
+
+    for (i = 0u; i < FS_N; i++)
+    {
+        for (j = 0u; j < FS_N; j++)
+        {
+            float32 acc = 0.0f;
+
+            for (l = 0u; l < FS_N; l++)
+            {
+                acc += m[i][l] * ch->p[l][j];
+            }
+
+            mp[i][j] = acc;
+        }
+    }
+
+    /* P' = (M P) * M'. M's TRANSPOSE column j is M's own ROW j, so the second
+     * contraction runs over M[j][l], not M[l][j] -- same care fusion_chanPredict
+     * takes with F' above, for the same reason. */
+    for (i = 0u; i < FS_N; i++)
+    {
+        for (j = 0u; j < FS_N; j++)
+        {
+            float32 acc = 0.0f;
+
+            for (l = 0u; l < FS_N; l++)
+            {
+                acc += mp[i][l] * m[j][l];
+            }
+
+            ch->p[i][j] = acc + ((k[i] * r) * k[j]);
+        }
+    }
+}
+
 /* One scalar measurement update. h selects which linear combination of the
  * state the sensor sees, so the same routine serves an absolute position fix
  * (h = [1,0,0,0]), a relative one carrying a bias (h = [1,0,0,1]) and a
  * velocity fix (h = [0,1,0,0]).
  *
+ * \param maxStep  SWE1-FW-010: the largest |applied step| the POSITION state
+ *                 may take from this update, or FUSION_NO_SLEW for "no
+ *                 limit". When it does not bind (including every unslewed
+ *                 caller, where it can never bind), the result is BIT-
+ *                 IDENTICAL to the un-clamped update this replaces: the gain
+ *                 is untouched and the covariance uses the same P -= K(HP)
+ *                 form as before. Only a BINDING clamp switches to the
+ *                 Joseph form on a scaled gain -- see fusion_chanJosephUpdate.
+ *
  * \return TRUE if the sample passed the gate and was fused. */
-static boolean fusion_chanUpdate(Fusion_Chan *ch, const float32 h[FS_N],
-                                 float32 z, float32 r, float32 gateSq,
-                                 float32 gateMinSq, float32 *innovOut)
+static boolean fusion_chanUpdateSlewed(Fusion_Chan *ch, const float32 h[FS_N],
+                                       float32 z, float32 r, float32 gateSq,
+                                       float32 gateMinSq, float32 maxStep,
+                                       float32 *innovOut)
 {
     float32 ph[FS_N];
     float32 hx = 0.0f;
@@ -538,23 +627,82 @@ static boolean fusion_chanUpdate(Fusion_Chan *ch, const float32 h[FS_N],
     else if (s > 0.0f)
     {
         const float32 recipS = 1.0f / s;
+        float32 k[FS_N];
+        float32 scale = 1.0f;
 
         ch->rejectRun = 0u;
 
         for (i = 0u; i < FS_N; i++)
         {
-            ch->x[i] += (ph[i] * recipS) * y;
+            k[i] = ph[i] * recipS;         /* the OPTIMAL gain, unscaled */
         }
 
-        /* P -= K * (H*P). Written as an outer product of ph with itself over
-         * s, which is symmetric by construction — so the covariance cannot
-         * drift out of symmetry however long this runs. */
-        for (i = 0u; i < FS_N; i++)
+        if (maxStep > 0.0f)
         {
-            for (j = 0u; j < FS_N; j++)
+            const float32 dxPos    = k[FS_POS] * y;
+            const float32 absDxPos = fabsf(dxPos);
+
+            if (absDxPos > maxStep)
             {
-                ch->p[i][j] -= (ph[i] * ph[j]) * recipS;
+                /* absDxPos > maxStep > 0.0: the division is safe. */
+                scale = maxStep / absDxPos;
             }
+            else
+            {
+                /* already inside the bound: full step, same as unslewed */
+            }
+        }
+        else if (maxStep == 0.0f)
+        {
+            /* SWE1-FW-010's "0 means off", and it must be UNCONDITIONAL: a
+             * fix whose innovation is momentarily zero (e.g. the very first
+             * one, which the origin-anchoring code always makes exactly
+             * zero by construction) must not be allowed to slip through the
+             * "the step already fits" branch above and take the optimal
+             * (non-Joseph) shortcut -- that shortcut still shrinks P for a
+             * measurement this call was told to contribute NOTHING, which
+             * breaks clause (g)'s "the whole of P is bit-identical to a run
+             * where the update never ran at all". Comparing magnitudes
+             * cannot express "off"; only a direct check on maxStep itself
+             * can, so this is its own branch rather than falling out of the
+             * general absDxPos > maxStep test. */
+            scale = 0.0f;
+        }
+        else
+        {
+            /* FUSION_NO_SLEW (maxStep < 0.0f): no limit was asked for at
+             * all, scale stays 1.0 -- every unslewed call site lands here. */
+        }
+
+        if (scale >= 1.0f)
+        {
+            /* Unscaled (optimal) gain: bit-identical to the update this
+             * replaces. P -= K * (H*P), an outer product of ph with itself
+             * over s, symmetric by construction. */
+            for (i = 0u; i < FS_N; i++)
+            {
+                ch->x[i] += k[i] * y;
+            }
+
+            for (i = 0u; i < FS_N; i++)
+            {
+                for (j = 0u; j < FS_N; j++)
+                {
+                    ch->p[i][j] -= (ph[i] * ph[j]) * recipS;
+                }
+            }
+        }
+        else
+        {
+            float32 kScaled[FS_N];
+
+            for (i = 0u; i < FS_N; i++)
+            {
+                kScaled[i] = scale * k[i];
+                ch->x[i]  += kScaled[i] * y;
+            }
+
+            fusion_chanJosephUpdate(ch, h, kScaled, r);
         }
 
         ch->anchored = TRUE;
@@ -635,6 +783,7 @@ void Fusion_init(void)
     s_gnssHeading = 0.0f;
     s_gnssHAcc    = 0.0f;
     s_gnssLastGen = 0u;
+    s_dtSinceGnssAlt = 0.0f;
 
     /* g_baroLatch/g_gnssLatch (FusionLatch.h): the PRODUCER's state, zeroed
      * here even though Fusion_init() itself runs on CPU1 (via NavTask_init,
@@ -824,7 +973,8 @@ static void fusion_correctBaro(void)
                                           FUSION_GATE_SIGMA_SQ);
     float32 y = 0.0f;
 
-    if (fusion_chanUpdate(&s_chD, h, z, sb * sb, gs, gm * gm, &y) != FALSE)
+    if (fusion_chanUpdateSlewed(&s_chD, h, z, sb * sb, gs, gm * gm,
+                               FUSION_NO_SLEW, &y) != FALSE)
     {
         s_navState.innov = y;
     }
@@ -954,10 +1104,12 @@ static void fusion_correctGnss(void)
         zE = (float32)dLon * FUSION_1E7_TO_DEG * s_mPerDegLon;
     }
 
-    okN = fusion_chanUpdate(&s_chN, hPos, zN, rPos, FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
-                            gateMinSq, &yN);
-    okE = fusion_chanUpdate(&s_chE, hPos, zE, rPos, FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
-                            gateMinSq, &yE);
+    okN = fusion_chanUpdateSlewed(&s_chN, hPos, zN, rPos,
+                                  FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
+                                  gateMinSq, FUSION_NO_SLEW, &yN);
+    okE = fusion_chanUpdateSlewed(&s_chE, hPos, zE, rPos,
+                                  FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
+                                  gateMinSq, FUSION_NO_SLEW, &yE);
 
     s_navState.innovN = yN;
     s_navState.innovE = yE;
@@ -1016,10 +1168,10 @@ static void fusion_correctGnss(void)
         /* Published rather than discarded: without these the velocity NIS
          * (var(y)/(P+R)) cannot be computed, and the velocity channel is
          * exactly the one the PSD reparametrisation above retunes. */
-        (void)fusion_chanUpdate(&s_chN, hVel, vN, rVel, FUSION_GATE_SIGMA_SQ,
-                                gateMinVelSq, &yvN);
-        (void)fusion_chanUpdate(&s_chE, hVel, vE, rVel, FUSION_GATE_SIGMA_SQ,
-                                gateMinVelSq, &yvE);
+        (void)fusion_chanUpdateSlewed(&s_chN, hVel, vN, rVel, FUSION_GATE_SIGMA_SQ,
+                                     gateMinVelSq, FUSION_NO_SLEW, &yvN);
+        (void)fusion_chanUpdateSlewed(&s_chE, hVel, vE, rVel, FUSION_GATE_SIGMA_SQ,
+                                     gateMinVelSq, FUSION_NO_SLEW, &yvE);
 
         s_navState.innovVelN = yvN;
         s_navState.innovVelE = yvE;
@@ -1033,13 +1185,27 @@ static void fusion_correctGnss(void)
      * deliberately a weak measurement — it is here to pin the slow drift, not
      * to compete with the barometer for short-term altitude. */
     {
-        const float32 zD    = -(s_gnssAlt - s_originAlt) + s_originAltOffset;
-        const float32 sigma = hAcc * 2.0f;
+        const float32 zD      = -(s_gnssAlt - s_originAlt) + s_originAltOffset;
+        const float32 sigma   = hAcc * 2.0f;
+        /* SWE1-FW-010: read DIRECTLY, not through FusionCal_positive(), which
+         * would substitute the compiled default for 0 -- and 0 is a defined
+         * value here ("the GNSS-altitude update is off"). Bounded only
+         * against NaN and the absurd, per the requirement. */
+        const float32 slew    = g_fusionCal.gnssAltSlewMps;
+        const float32 maxStep = ((slew >= 0.0f) && (slew < FUSIONCAL_MAX))
+                              ? (slew * s_dtSinceGnssAlt)
+                              : (FCAL_GNSS_ALT_SLEW_DEFAULT * s_dtSinceGnssAlt);
         float32 yd = 0.0f;
 
-        (void)fusion_chanUpdate(&s_chD, hPos, zD, sigma * sigma,
-                                FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
-                                gateMinSq, &yd);
+        (void)fusion_chanUpdateSlewed(&s_chD, hPos, zD, sigma * sigma,
+                                     FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
+                                     gateMinSq, maxStep, &yd);
+
+        /* dtFix (the interval this bounds a RATE over) starts accumulating
+         * again from this fix, whether or not the update above was accepted
+         * by the outlier gate -- it measures "since we last had a GNSS
+         * altitude to offer", not "since the last accepted one". */
+        s_dtSinceGnssAlt = 0.0f;
     }
 
     s_navState.horizontalOk = (s_chN.anchored != FALSE) ? 1u : 0u;
@@ -1063,6 +1229,11 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, bo
         fusion_chanPredict(&s_chD, aD, dt);
         fusion_chanPredict(&s_chN, aN, dt);
         fusion_chanPredict(&s_chE, aE, dt);
+
+        /* SWE1-FW-010's dtFix: real elapsed time since the last GNSS-altitude
+         * opportunity, whatever the tick rate -- reset inside
+         * fusion_correctGnss() itself, never here. */
+        s_dtSinceGnssAlt += dt;
 
         {
             BaroLatch_t baroSnap;

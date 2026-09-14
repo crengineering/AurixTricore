@@ -1257,6 +1257,20 @@
       "unit": "m/s^2/sqrt(s)",
       "lo": "0.000001",
       "hi": "1"
+    },
+    "gnssAltSlewMps": {
+      "name": "FusGnssAltSlewMps",
+      "desc": "TUNING - vertical (SWE1-FW-010): max rate the GNSS-altitude update may move d [m/s]. 0.001 default = 0.06 m/min, a third of the barometers own measured wander. ZERO IS A DEFINED VALUE: it switches the GNSS-altitude update off entirely -- read directly, never through FusionCal_positive()",
+      "unit": "m/s",
+      "lo": "0",
+      "hi": "1000"
+    },
+    "gnssHAccMax": {
+      "name": "FusGnssHAccMax",
+      "desc": "TUNING - horizontal/indoor guard (SWE1-FW-011): GNSS is trusted only while the reported hAcc is at or below this [m]. 4.0 default separates every recorded outdoor fix from every recorded indoor one",
+      "unit": "m",
+      "lo": "0.1",
+      "hi": "1000"
     }
   }
 }

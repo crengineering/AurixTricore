@@ -212,7 +212,8 @@ typedef char layout_assert_Xcp_FusionCal_gnssPosRScale_offset[(offsetof(Xcp_Fusi
 typedef char layout_assert_Xcp_FusionCal_gateSigmaSq_offset[(offsetof(Xcp_FusionCal, gateSigmaSq) == 0x2Cu) ? 1 : -1];
 typedef char layout_assert_Xcp_FusionCal_gateMinM_offset[(offsetof(Xcp_FusionCal, gateMinM) == 0x30u) ? 1 : -1];
 typedef char layout_assert_Xcp_FusionCal_sigmaAccRw_offset[(offsetof(Xcp_FusionCal, sigmaAccRw) == 0x34u) ? 1 : -1];
-typedef char layout_assert_Xcp_FusionCal_reserved_offset[(offsetof(Xcp_FusionCal, reserved) == 0x38u) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_gnssAltSlewMps_offset[(offsetof(Xcp_FusionCal, gnssAltSlewMps) == 0x38u) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_gnssHAccMax_offset[(offsetof(Xcp_FusionCal, gnssHAccMax) == 0x3Cu) ? 1 : -1];
 typedef char layout_assert_Xcp_FusionCal_sizeof[(sizeof(Xcp_FusionCal) == 0x40u) ? 1 : -1];
 
 #endif /* AURIXTRICORE_LAYOUT_ASSERT_GEN_H */

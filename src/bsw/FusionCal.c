@@ -61,10 +61,20 @@ volatile Xcp_FusionCal g_fusionCal;
 #define FCAL_GATE_SIGMA_SQ     (25.0f)
 #define FCAL_GATE_MIN_M        (2.0f)
 
+/* SWE1-FW-010: max rate the GNSS-altitude update may move d [m/s]. 0.06 m/min
+ * -- a third of the barometer's own measured 0.19 m/min wander -- while still
+ * tracking the barometer bias's steady-state sigma (0.433 m) within one mean-
+ * reversion time constant. ZERO IS A DEFINED VALUE ("update off"); see
+ * FusionCal.h and fusion.c fusion_correctGnss(). */
+#define FCAL_GNSS_ALT_SLEW_MPS (0.001f)
+
+/* SWE1-FW-011: GNSS is trusted only at or below this reported hAcc [m].
+ * Separates every recorded outdoor fix (<= 3.347 m) from every recorded
+ * indoor one (>= 4.612 m) -- docs/NAV_STRAND_2026-09.md section 3.3. */
+#define FCAL_GNSS_HACC_MAX     (4.0f)
+
 void FusionCal_init(void)
 {
-    uint8 i;
-
     g_fusionCal.twoKpAcc      = FCAL_TWO_KP_ACC;
     g_fusionCal.twoKpMag      = FCAL_TWO_KP_MAG;
     g_fusionCal.twoKi         = FCAL_TWO_KI;
@@ -83,10 +93,8 @@ void FusionCal_init(void)
 
     g_fusionCal.sigmaAccRw    = FCAL_SIGMA_ACC_RW;
 
-    for (i = 0u; i < 2u; i++)
-    {
-        g_fusionCal.reserved[i] = 0.0f;
-    }
+    g_fusionCal.gnssAltSlewMps = FCAL_GNSS_ALT_SLEW_MPS;
+    g_fusionCal.gnssHAccMax    = FCAL_GNSS_HACC_MAX;
 
     /* Magic last: a master polling for it sees a fully populated block or none
      * of it, never a half-written one. */

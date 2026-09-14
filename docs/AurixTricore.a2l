@@ -1460,5 +1460,15 @@ ASAP2_VERSION 1 61
       PHYS_UNIT "m/s^2/sqrt(s)"
     /end CHARACTERISTIC
 
+    /begin CHARACTERISTIC FusGnssAltSlewMps "TUNING - vertical (SWE1-FW-010): max rate the GNSS-altitude update may move d [m/s]. 0.001 default = 0.06 m/min, a third of the barometers own measured wander. ZERO IS A DEFINED VALUE: it switches the GNSS-altitude update off entirely -- read directly, never through FusionCal_positive()"
+      VALUE 0x70030638 RL_FLOAT32 1000 NO_COMPU_METHOD 0 1000
+      PHYS_UNIT "m/s"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC FusGnssHAccMax "TUNING - horizontal/indoor guard (SWE1-FW-011): GNSS is trusted only while the reported hAcc is at or below this [m]. 4.0 default separates every recorded outdoor fix from every recorded indoor one"
+      VALUE 0x7003063C RL_FLOAT32 1000 NO_COMPU_METHOD 0.1 1000
+      PHYS_UNIT "m"
+    /end CHARACTERISTIC
+
   /end MODULE
 /end PROJECT

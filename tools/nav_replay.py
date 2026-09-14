@@ -113,6 +113,7 @@ CAL_FIELDS = {
     "sigmaAccD", "sigmaBaro", "sigmaBaroRw", "tauBaroBias",
     "sigmaAccH", "sigmaGnssVel", "gnssPosRScale",
     "gateSigmaSq", "gateMinM", "sigmaAccRw",
+    "gnssAltSlewMps", "gnssHAccMax",
 }
 
 # Compiled defaults (FusionCal.c) -- used to reconstruct R when a --cal
@@ -121,10 +122,26 @@ CAL_FIELDS = {
 CAL_DEFAULTS = {
     "gnssPosRScale": 8.0,
     "sigmaGnssVel": 0.3,
+    "sigmaBaro": 0.0197,
 }
 
 FUSION_GNSS_HACC_MIN = 1.0    # fusion.c:96
 WINDOW_60S = 60.0
+
+# SWE1-FW-014 compiled defaults (docs/NAV_STRAND_2026-09.md section 10.1) --
+# duplicated here (not imported) because task 13 makes NO src/ change and
+# must run against recordings from before the detector exists in fusion.c;
+# task 14 wires the SAME numbers into Xcp_FusionCal from 0x40, so a mismatch
+# between this dict and FusionCal.c is a thing to notice, not silently drift
+# on -- test/ref/lock_timeline_report.py's docstring says so too.
+DETECTOR_DEFAULTS = {
+    "lockGyroDps": 2.0,
+    "lockAccG": 0.03,
+    "relGyroDps": 3.0,
+    "relAccG": 0.05,
+    "lockWindowS": 1.0,
+}
+WINDOW_1S = 1.0
 
 CSV_COLUMNS = [
     "step", "d", "vd", "accBiasD", "baroBias", "innov", "p00", "aD",
@@ -347,6 +364,223 @@ def sliding_p2p(x: np.ndarray, t: np.ndarray, window_s: float) -> float:
     return worst
 
 
+def sliding_max(x: np.ndarray, t: np.ndarray, window_s: float) -> np.ndarray:
+    """max(x) over the trailing window_s ending at each sample -- the
+    per-sample series sliding_p2p's deque already visits, kept instead of
+    collapsed to one worst-of-run number so the SWE1-FW-014 threshold table
+    (the worst 1 s window on file) can be read off directly."""
+    from collections import deque
+    n = len(x)
+    out = np.empty(n)
+    dq: deque[int] = deque()
+    lo = 0
+    for hi in range(n):
+        while dq and x[dq[-1]] <= x[hi]:
+            dq.pop()
+        dq.append(hi)
+        while t[hi] - t[lo] > window_s:
+            if dq[0] == lo:
+                dq.popleft()
+            lo += 1
+        out[hi] = x[dq[0]]
+    return out
+
+
+class DetectorRecording:
+    """Just the two SWE1-FW-014 detector inputs, from whichever schema the
+    recording happens to use -- deliberately independent of the Recording
+    class above (which needs the full Nav/GNSS/Baro channel set task 13 does
+    not touch and several of these recordings do not even have logged).
+
+    omega  = hypot(rate0, rate1, rate2)   [deg/s]
+    accDev = abs(accMagnitude - 1.0)      [g]
+    """
+
+    def __init__(self, path: Path, start: Optional[float], end: Optional[float]):
+        if path.suffix.lower() == ".csv":
+            t, omega, acc_dev = self._load_csv(path)
+        else:
+            t, omega, acc_dev = self._load_mf4(path)
+
+        t, omega, acc_dev = self._dedup(t, omega, acc_dev)
+
+        lo = -np.inf if start is None else start
+        hi = np.inf if end is None else end
+        keep = (t >= lo) & (t <= hi)
+        if not keep.any():
+            raise SystemExit(f"--start/--end window [{start}, {end}] selects no samples")
+        self.t = t[keep]
+        self.omega = omega[keep]
+        self.accDev = acc_dev[keep]
+
+    @staticmethod
+    def _load_mf4(path: Path):
+        needed = ["AttRate0", "AttRate1", "AttRate2", "AttAccMagnitude"]
+        with MDF(path) as mdf:
+            available = set(mdf.channels_db.keys())
+            missing = [n for n in needed if n not in available]
+            if missing:
+                raise SystemExit(
+                    f"{path.name}: not replayable for the detector -- missing "
+                    f"channel(s) {missing}. Not faked -- report this recording "
+                    "as not replayable for SWE1-FW-014.")
+            sigs = {n: mdf.get(n) for n in needed}
+        t = sigs["AttRate0"].timestamps.astype(np.float64)
+        r0 = sigs["AttRate0"].samples.astype(np.float64)
+        r1 = sigs["AttRate1"].samples.astype(np.float64)
+        r2 = sigs["AttRate2"].samples.astype(np.float64)
+        acc = sigs["AttAccMagnitude"].samples.astype(np.float64)
+        omega = np.sqrt(r0 * r0 + r1 * r1 + r2 * r2)
+        acc_dev = np.abs(acc - 1.0)
+        return t, omega, acc_dev
+
+    @staticmethod
+    def _load_csv(path: Path):
+        with path.open(newline="", encoding="utf-8") as fh:
+            reader = csv.DictReader(fh)
+            fields = reader.fieldnames or []
+            time_col = "t_host" if "t_host" in fields else (
+                "t_rel" if "t_rel" in fields else None)
+            need = {"rate0_dps", "rate1_dps", "rate2_dps", "accMagG"}
+            if time_col is None or not need.issubset(fields):
+                raise SystemExit(
+                    f"{path.name}: not replayable for the detector -- needs a "
+                    f"time column (t_host/t_rel) plus {sorted(need)}. Not "
+                    "faked -- report this recording as not replayable for "
+                    "SWE1-FW-014.")
+            t, r0, r1, r2, acc = [], [], [], [], []
+            for row in reader:
+                t.append(float(row[time_col]))
+                r0.append(float(row["rate0_dps"]))
+                r1.append(float(row["rate1_dps"]))
+                r2.append(float(row["rate2_dps"]))
+                acc.append(float(row["accMagG"]))
+        t = np.array(t, dtype=np.float64)
+        r0, r1, r2 = (np.array(a, dtype=np.float64) for a in (r0, r1, r2))
+        acc = np.array(acc, dtype=np.float64)
+        omega = np.sqrt(r0 * r0 + r1 * r1 + r2 * r2)
+        acc_dev = np.abs(acc - 1.0)
+        return t, omega, acc_dev
+
+    @staticmethod
+    def _dedup(t: np.ndarray, omega: np.ndarray, acc_dev: np.ndarray):
+        """Collapse a sample that is bit-identical to the one right before it.
+
+        Measured on 2026-09-12_strandB_level_r3.csv: its bench poller logs at
+        ~20 Hz against a ~10 Hz AHRS update, so EXACTLY half of every row is
+        the previous AHRS output polled again, not a second independent tick
+        -- confirmed by 1250/2500 consecutive-identical rows and a poll dt of
+        ~0.05 s against a value that only changes every other row. Without
+        this, that single corrupt sample (the 'two pitch outliers' of
+        SWE1-FW-014's evidence, one AHRS tick logged twice) reads as two
+        independent bad samples and trips the 2-consecutive-sample release
+        test the design deliberately built to survive exactly one corrupt
+        tick (SWE1-FW-009). This is the same latch idea as fusion.c's own
+        gnssDupes/baroLastGen: a repeated value is not new evidence, whatever
+        rate it was polled at."""
+        if len(t) < 2:
+            return t, omega, acc_dev
+        keep = np.empty(len(t), dtype=bool)
+        keep[0] = True
+        keep[1:] = (omega[1:] != omega[:-1]) | (acc_dev[1:] != acc_dev[:-1])
+        return t[keep], omega[keep], acc_dev[keep]
+
+
+def lock_release_timeline(t: np.ndarray, omega: np.ndarray, acc_dev: np.ndarray,
+                          cal: dict) -> dict:
+    """The would-be SWE1-FW-014/-015 lock state at every sample, using the
+    SAME two counters fusion.c's task-14 implementation uses (a bounded,
+    rate-invariant elapsed-good-time accumulator for engaging the lock, a
+    2-consecutive-sample counter for releasing it) rather than a sliding
+    window buffer -- the window-buffer form is used only for the REPORTED
+    1 s-window maxima below, never for the lock decision itself, exactly the
+    split the design note draws between 'the detector' and 'the threshold
+    table'.
+
+    Interlock (Fusion_setOnGround): not modelled here -- every recording in
+    this table is a bench/outdoor-vehicle-stationary or hand-motion capture
+    with the vehicle never armed, i.e. onGround = TRUE throughout, which is
+    also fusion.c's boot default. A recording where that is not true would
+    need the flag as a channel, which none of the eight logs.
+    """
+    lock_gyro = cal.get("lockGyroDps", DETECTOR_DEFAULTS["lockGyroDps"])
+    lock_acc = cal.get("lockAccG", DETECTOR_DEFAULTS["lockAccG"])
+    rel_gyro = cal.get("relGyroDps", DETECTOR_DEFAULTS["relGyroDps"])
+    rel_acc = cal.get("relAccG", DETECTOR_DEFAULTS["relAccG"])
+    window_s = cal.get("lockWindowS", DETECTOR_DEFAULTS["lockWindowS"])
+
+    n = len(t)
+    locked = np.zeros(n, dtype=bool)
+    dt = np.empty(n)
+    dt[0] = 0.0
+    dt[1:] = np.diff(t)
+
+    good_s = 0.0        # time accumulated with BOTH lock thresholds satisfied
+    bad_run = 0         # consecutive samples with EITHER release threshold exceeded
+    is_locked = False
+
+    for i in range(n):
+        clean = (omega[i] <= lock_gyro) and (acc_dev[i] <= lock_acc)
+        good_s = (good_s + dt[i]) if clean else 0.0
+
+        violate = (omega[i] > rel_gyro) or (acc_dev[i] > rel_acc)
+        bad_run = (bad_run + 1) if violate else 0
+
+        if is_locked:
+            if bad_run >= 2:
+                is_locked = False
+                good_s = 0.0
+        else:
+            if good_s >= window_s:
+                is_locked = True
+
+        locked[i] = is_locked
+
+    transitions = []
+    for i in range(1, n):
+        if locked[i] != locked[i - 1]:
+            transitions.append({"t": float(t[i]), "to": "locked" if locked[i] else "released"})
+
+    return {
+        "locked": locked,
+        "pct_locked": float(100.0 * locked.sum() / n) if n else 0.0,
+        "transitions": transitions,
+        "engaged_at_s": float(transitions[0]["t"] - t[0]) if transitions
+                        and transitions[0]["to"] == "locked" else (
+                            0.0 if n and locked[0] else None),
+    }
+
+
+def detector_metrics(rec: DetectorRecording, cal: dict) -> dict:
+    omega_1s = sliding_max(rec.omega, rec.t, WINDOW_1S)
+    acc_1s = sliding_max(rec.accDev, rec.t, WINDOW_1S)
+    timeline = lock_release_timeline(rec.t, rec.omega, rec.accDev, cal)
+    return {
+        "n": len(rec.t),
+        "duration_s": float(rec.t[-1] - rec.t[0]) if len(rec.t) > 1 else 0.0,
+        "omega_1s_window_max_dps": float(omega_1s.max()) if len(omega_1s) else float("nan"),
+        "accDev_1s_window_max_g": float(acc_1s.max()) if len(acc_1s) else float("nan"),
+        "pct_locked": timeline["pct_locked"],
+        "engaged_at_s": timeline["engaged_at_s"],
+        "n_transitions": len(timeline["transitions"]),
+        "transitions": timeline["transitions"],
+    }
+
+
+def print_detector_report(path: Path, cal: dict, metrics: dict) -> None:
+    print(f"# nav_replay --detector: {path}")
+    print(f"# cal overrides: {cal if cal else '(none, compiled defaults)'}")
+    print(f"n={metrics['n']}  duration={metrics['duration_s']:.1f} s")
+    print(f"omega 1s-window max   {metrics['omega_1s_window_max_dps']:.4f} deg/s")
+    print(f"|a|-1g 1s-window max  {metrics['accDev_1s_window_max_g']:.4f} g")
+    print(f"would-be lock: {metrics['pct_locked']:.2f} % of samples, "
+          f"{metrics['n_transitions']} transition(s)")
+    if metrics["engaged_at_s"] is not None:
+        print(f"first engaged at t+{metrics['engaged_at_s']:.2f} s")
+    for tr in metrics["transitions"]:
+        print(f"  t={tr['t']:.2f} s -> {tr['to']}")
+
+
 def tangent_plane(lat_deg: np.ndarray, lon_deg: np.ndarray, ok: np.ndarray):
     """Same conversion as fusion.c fusion_correctGnss(): metres from the
     first usable fix on a flat tangent plane. Used only to compute the RAW
@@ -417,6 +651,14 @@ def compute_metrics(rows: list[dict], rec: Recording, cal: dict) -> dict:
 
     metrics["posD_p2p"] = float(posD.max() - posD.min())
     metrics["posD_max_per_60s"] = sliding_p2p(posD, t, WINDOW_60S)
+
+    # SWE1-FW-010 (c): the barometer path must not regress under the slew
+    # clamp -- NIS_baro = var(innovation)/sigmaBaro^2 stays 0.5-2.0 (reported,
+    # not a hard gate at the tool level -- the requirement states the band),
+    # and std(NavVelDown) <= 0.05 m/s.
+    sigma_baro = cal.get("sigmaBaro", CAL_DEFAULTS["sigmaBaro"])
+    metrics["NIS_baro"] = float(np.var(col["innov"]) / (sigma_baro ** 2))
+    metrics["velD_std"] = float(np.std(col["vd"], ddof=1))
     metrics["baroBias_p2p"] = float(baroBias.max() - baroBias.min())
     metrics["baroBias_max_per_60s"] = sliding_p2p(baroBias, t, WINDOW_60S)
 
@@ -509,6 +751,7 @@ def print_report(mf4_path: Path, cal: dict, metrics: dict) -> None:
     print(f"NavBaroBias  p2p {metrics['baroBias_p2p']:.3f} m   "
           f"max/60s {metrics['baroBias_max_per_60s']:.3f} m   "
           f"RMS vs logged {metrics['baroBias_rms_vs_logged']:.4f} m")
+    print(f"NIS_baro {metrics['NIS_baro']:.3f}   std(NavVelDown) {metrics['velD_std']:.4f} m/s")
     print()
     if metrics["NIS_north"] is not None:
         print(f"NIS north {metrics['NIS_north']:.3f}   NIS east {metrics['NIS_east']:.3f}"
@@ -577,10 +820,47 @@ def main() -> int:
                      help="write the computed metrics as JSON here")
     ap.add_argument("--quiet", action="store_true",
                      help="suppress the human-readable report (for scripted use)")
+    ap.add_argument("--detector", action="store_true",
+                     help="SWE1-FW-014 task 13: print the stationary-detector "
+                          "1 s-window maxima and the would-be lock/release "
+                          "timeline instead of the fusion.c replay. No src/ "
+                          "change and no gen_fusion_trace involved -- reads "
+                          "AttRate0/1/2 + AttAccMagnitude (or the CSV "
+                          "equivalent) directly, so it also runs on "
+                          "recordings the full replay cannot (no Nav*/GNSS/ "
+                          "baro channels logged)")
+    ap.add_argument("--cal-detector", action="append", default=[],
+                     metavar="name=value",
+                     help="override one SWE1-FW-014 threshold before a "
+                          "--detector run (lockGyroDps, lockAccG, "
+                          "relGyroDps, relAccG, lockWindowS); repeatable")
     args = ap.parse_args()
 
     if not args.mf4.is_file():
         sys.exit(f"no such file: {args.mf4}")
+
+    if args.detector:
+        det_cal: dict = {}
+        for item in args.cal_detector:
+            if "=" not in item:
+                sys.exit(f"--cal-detector expects name=value, got '{item}'")
+            name, value = item.split("=", 1)
+            if name not in DETECTOR_DEFAULTS:
+                sys.exit(f"unknown --cal-detector field '{name}'; known: "
+                          f"{sorted(DETECTOR_DEFAULTS)}")
+            det_cal[name] = float(value)
+
+        rec = DetectorRecording(args.mf4, args.start, args.end)
+        metrics = detector_metrics(rec, det_cal)
+
+        if args.dump_metrics:
+            args.dump_metrics.write_text(
+                json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")
+
+        if not args.quiet:
+            print_detector_report(args.mf4, det_cal, metrics)
+
+        return 0
 
     cal: dict = {}
     for item in args.cal:
