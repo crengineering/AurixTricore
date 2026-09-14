@@ -57,10 +57,16 @@ volatile Xcp_FusionCal g_fusionCal;
  * 0.5-2.0 together with a fused-vs-raw ratio near 1x -- that is coloured
  * receiver noise, not mistuning, so NIS is a reported diagnostic here, not a
  * gate. The product bar is the 2-D scatter ratio against the raw fix, and 1.0
- * is the value that minimises it: t1 1.65x -> 1.27x, every other recording
- * <= 1.02x. varN is correspondingly smaller and reads as more confident --
- * that is relative to the (still metre-class) raw fix, not an absolute
- * accuracy claim; see docs/FUSION.md section 2. */
+ * is the value that minimises it: t1 1.65x -> 1.27x (TASK-3 SWEEP FIGURE, LOCK
+ * DISABLED BY CAL OVERRIDE -- SWE1-FW-014's stationary lock did not exist
+ * when this was measured; at HEAD, with the lock active, t1 is a rest
+ * recording and fuses ZERO GNSS fixes, so this number is not reproducible
+ * there any more. Re-measured 2026-09-14, flight-reviewer fix pass: t2
+ * 0.992x, t4 0.960x, t5 0.977x with the lock live, `tools/nav_replay.py`;
+ * see the evidence index for hashes), every other recording <= 1.02x. varN
+ * is correspondingly smaller and reads as more confident -- that is
+ * relative to the (still metre-class) raw fix, not an absolute accuracy
+ * claim; see docs/FUSION.md section 2. */
 #define FCAL_GNSS_POS_R_SCALE  (1.0f)
 
 #define FCAL_GATE_SIGMA_SQ     (25.0f)

@@ -71,6 +71,18 @@ observations resolve differently:
 > the `gnssPosRScale = 1.0` recommendation — see `docs/NAV_STRAND_2026-09.md`
 > section 3.2 and `SWE1-FW-012`. The per-channel numbers immediately below are
 > stale; the mechanism they describe is not.
+>
+> **Second amendment, 2026-09-14 (flight-reviewer fix pass).** The 1.65x/1.27x
+> t1 figures above are a **task-3 sweep measurement, lock disabled by cal
+> override** (`--cal lockWindowS=1000000`): SWE1-FW-014's stationary lock did
+> not exist yet. At HEAD, with the lock live, t1 is a 301 s rest recording and
+> locks 99.67% of it — `NavGnssUpdates` stays at 0 the whole run, so the ratio
+> is structurally not reproducible on t1 any more (the design's own §10
+> framing: rest recordings are the bench, never the criterion). Re-measured
+> live: t2 0.992x, t4 0.960x, t5 0.977x (`tools/nav_replay.py`, no cal
+> override — see the evidence index for hashes). The 1.27x figure stays on
+> file as what task 3's sweep found; it is not what SWE1-FW-012 is judged
+> against at HEAD.
 
 In the **static** run the filter makes east position **3.2x worse than the raw
 receiver**:

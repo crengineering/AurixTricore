@@ -114,16 +114,35 @@ CAL_FIELDS = {
     "sigmaAccH", "sigmaGnssVel", "gnssPosRScale",
     "gateSigmaSq", "gateMinM", "sigmaAccRw",
     "gnssAltSlewMps", "gnssHAccMax",
+    "lockGyroDps", "lockAccG", "relGyroDps", "relAccG", "lockWindowS",
+    "sigmaZupt", "tauGnssBiasS", "gnssBiasRateMax",
 }
 
 # Compiled defaults (FusionCal.c) -- used to reconstruct R when a --cal
 # override was not given for that field, so NIS can be computed for the
 # values the run actually used, sweep or not.
+#
+# gnssPosRScale: 1.0 since SWE1-FW-012 task 9 (FusionCal.c, 2026-09-14) baked
+# the task-3 sweep recommendation in as the compiled default -- was 8.0
+# before that commit. A replay against a firmware build predating task 9
+# would need --cal gnssPosRScale=8 to reconstruct the right R; every
+# recording on file postdates the estimator, not the firmware default, so
+# this is not a concern for the replays themselves, only for this constant.
 CAL_DEFAULTS = {
-    "gnssPosRScale": 8.0,
+    "gnssPosRScale": 1.0,
     "sigmaGnssVel": 0.3,
     "sigmaBaro": 0.0197,
 }
+
+# SWE1-FW-014: there is no dedicated "disable the lock" cal field -- the
+# design deliberately did not add one (docs/NAV_STRAND_2026-09.md section
+# 10 discusses only the airborne interlock, never a bench override). Setting
+# lockWindowS far past any replay's duration means s_lockGoodS can never
+# reach it, so the lock never engages, without needing a new field: every
+# other lock/ZUPT/release mechanism is gated on stationaryLocked, which then
+# simply never becomes TRUE. Used for FW-012's t1 evidence, which otherwise
+# fuses zero GNSS fixes once locked (t1 is a rest recording).
+CAL_LOCK_DISABLED = {"lockWindowS": 1.0e6}
 
 FUSION_GNSS_HACC_MIN = 1.0    # fusion.c:96
 WINDOW_60S = 60.0

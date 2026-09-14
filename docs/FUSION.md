@@ -941,7 +941,11 @@ too large.
 no setting puts NIS in 0.5-2.0 together with a fused-vs-raw ratio near 1x —
 the receiver's GNSS error is coloured, not white, so that is not a tuning
 failure — and 1.0 is the value that minimises the 2-D scatter ratio against
-the raw fix (t1 1.65x -> 1.27x, every other recording <= 1.02x). `NavVarNorth`
+the raw fix (t1 1.65x -> 1.27x — **task-3 sweep figure, lock disabled by cal
+override**: SWE1-FW-014's stationary lock postdates this measurement, and at
+HEAD, with the lock live, t1 is a rest recording and fuses zero GNSS fixes,
+so 1.27x is not reproducible there any more; re-measured live 2026-09-14,
+t2 0.992x, t4 0.960x, t5 0.977x — every other recording <= 1.02x). `NavVarNorth`
 is correspondingly smaller and reads as more confident; that confidence is
 relative to the (still metre-class) raw fix, not an absolute accuracy claim.
 The correct long-term fix remains a GNSS position-bias state, exactly as the
