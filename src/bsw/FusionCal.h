@@ -170,6 +170,13 @@ typedef struct
  * struct's own sizeof, never a relationship to this slot macro. TASKING
  * does not accept _Static_assert under this project's build flags
  * (tools/gen_a2l.py's own comment) -- same negative-array-size idiom. */
+/* cppcheck-suppress misra-c2012-2.3 ; deviation: the type itself is the
+ * check -- a compile-time assertion via the negative-array-size idiom
+ * (TASKING rejects _Static_assert, see the comment above) has no further
+ * use for the typedef name by construction, the same as every one of
+ * gen_a2l.py's ~185 generated LayoutAssert_gen.h assertions, which this
+ * hand-written one extends to a relationship those generated ones do not
+ * cover (a slot macro vs. the struct it is meant to contain). */
 typedef char fusioncal_slot_covers_struct[
     (XCP_FUSIONCAL_SIZE >= sizeof(Xcp_FusionCal)) ? 1 : -1];
 
