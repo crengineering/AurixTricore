@@ -214,6 +214,14 @@ typedef char layout_assert_Xcp_FusionCal_gateMinM_offset[(offsetof(Xcp_FusionCal
 typedef char layout_assert_Xcp_FusionCal_sigmaAccRw_offset[(offsetof(Xcp_FusionCal, sigmaAccRw) == 0x34u) ? 1 : -1];
 typedef char layout_assert_Xcp_FusionCal_gnssAltSlewMps_offset[(offsetof(Xcp_FusionCal, gnssAltSlewMps) == 0x38u) ? 1 : -1];
 typedef char layout_assert_Xcp_FusionCal_gnssHAccMax_offset[(offsetof(Xcp_FusionCal, gnssHAccMax) == 0x3Cu) ? 1 : -1];
-typedef char layout_assert_Xcp_FusionCal_sizeof[(sizeof(Xcp_FusionCal) == 0x40u) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_lockGyroDps_offset[(offsetof(Xcp_FusionCal, lockGyroDps) == 0x40u) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_lockAccG_offset[(offsetof(Xcp_FusionCal, lockAccG) == 0x44u) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_relGyroDps_offset[(offsetof(Xcp_FusionCal, relGyroDps) == 0x48u) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_relAccG_offset[(offsetof(Xcp_FusionCal, relAccG) == 0x4Cu) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_lockWindowS_offset[(offsetof(Xcp_FusionCal, lockWindowS) == 0x50u) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_sigmaZupt_offset[(offsetof(Xcp_FusionCal, sigmaZupt) == 0x54u) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_tauGnssBiasS_offset[(offsetof(Xcp_FusionCal, tauGnssBiasS) == 0x58u) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_gnssBiasRateMax_offset[(offsetof(Xcp_FusionCal, gnssBiasRateMax) == 0x5Cu) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_sizeof[(sizeof(Xcp_FusionCal) == 0x60u) ? 1 : -1];
 
 #endif /* AURIXTRICORE_LAYOUT_ASSERT_GEN_H */

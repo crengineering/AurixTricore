@@ -398,11 +398,11 @@ class DetectorRecording:
 
     def __init__(self, path: Path, start: Optional[float], end: Optional[float]):
         if path.suffix.lower() == ".csv":
-            t, omega, acc_dev = self._load_csv(path)
+            t, r0, r1, r2, acc = self._load_csv(path)
         else:
-            t, omega, acc_dev = self._load_mf4(path)
+            t, r0, r1, r2, acc = self._load_mf4(path)
 
-        t, omega, acc_dev = self._dedup(t, omega, acc_dev)
+        t, r0, r1, r2, acc = self._dedup(t, r0, r1, r2, acc)
 
         lo = -np.inf if start is None else start
         hi = np.inf if end is None else end
@@ -410,8 +410,18 @@ class DetectorRecording:
         if not keep.any():
             raise SystemExit(f"--start/--end window [{start}, {end}] selects no samples")
         self.t = t[keep]
-        self.omega = omega[keep]
-        self.accDev = acc_dev[keep]
+        self.rate0 = r0[keep]      # [deg/s], AttRate convention
+        self.rate1 = r1[keep]
+        self.rate2 = r2[keep]
+        self.accMagG = acc[keep]   # [g]
+        self.omega = np.sqrt(self.rate0 ** 2 + self.rate1 ** 2 + self.rate2 ** 2)
+        self.accDev = np.abs(self.accMagG - 1.0)
+
+    def dt(self) -> np.ndarray:
+        d = np.empty_like(self.t)
+        d[0] = self.t[1] - self.t[0] if len(self.t) > 1 else 0.01
+        d[1:] = np.diff(self.t)
+        return d
 
     @staticmethod
     def _load_mf4(path: Path):
@@ -430,9 +440,7 @@ class DetectorRecording:
         r1 = sigs["AttRate1"].samples.astype(np.float64)
         r2 = sigs["AttRate2"].samples.astype(np.float64)
         acc = sigs["AttAccMagnitude"].samples.astype(np.float64)
-        omega = np.sqrt(r0 * r0 + r1 * r1 + r2 * r2)
-        acc_dev = np.abs(acc - 1.0)
-        return t, omega, acc_dev
+        return t, r0, r1, r2, acc
 
     @staticmethod
     def _load_csv(path: Path):
@@ -458,12 +466,11 @@ class DetectorRecording:
         t = np.array(t, dtype=np.float64)
         r0, r1, r2 = (np.array(a, dtype=np.float64) for a in (r0, r1, r2))
         acc = np.array(acc, dtype=np.float64)
-        omega = np.sqrt(r0 * r0 + r1 * r1 + r2 * r2)
-        acc_dev = np.abs(acc - 1.0)
-        return t, omega, acc_dev
+        return t, r0, r1, r2, acc
 
     @staticmethod
-    def _dedup(t: np.ndarray, omega: np.ndarray, acc_dev: np.ndarray):
+    def _dedup(t: np.ndarray, r0: np.ndarray, r1: np.ndarray, r2: np.ndarray,
+              acc: np.ndarray):
         """Collapse a sample that is bit-identical to the one right before it.
 
         Measured on 2026-09-12_strandB_level_r3.csv: its bench poller logs at
@@ -479,11 +486,12 @@ class DetectorRecording:
         gnssDupes/baroLastGen: a repeated value is not new evidence, whatever
         rate it was polled at."""
         if len(t) < 2:
-            return t, omega, acc_dev
+            return t, r0, r1, r2, acc
         keep = np.empty(len(t), dtype=bool)
         keep[0] = True
-        keep[1:] = (omega[1:] != omega[:-1]) | (acc_dev[1:] != acc_dev[:-1])
-        return t[keep], omega[keep], acc_dev[keep]
+        keep[1:] = ((r0[1:] != r0[:-1]) | (r1[1:] != r1[:-1])
+                    | (r2[1:] != r2[:-1]) | (acc[1:] != acc[:-1]))
+        return t[keep], r0[keep], r1[keep], r2[keep], acc[keep]
 
 
 def lock_release_timeline(t: np.ndarray, omega: np.ndarray, acc_dev: np.ndarray,
@@ -564,6 +572,50 @@ def detector_metrics(rec: DetectorRecording, cal: dict) -> dict:
         "engaged_at_s": timeline["engaged_at_s"],
         "n_transitions": len(timeline["transitions"]),
         "transitions": timeline["transitions"],
+    }
+
+
+def build_detector_command_stream(rec: DetectorRecording, cal: dict, on_ground: bool) -> str:
+    """STEP-only command stream for the PRODUCTION fusion.c (gen_fusion_trace),
+    carrying the SWE1-FW-014 detector inputs -- no BARO/GNSS at all, since
+    none of these attitude-only recordings have them (and the detector does
+    not need them: task 14 makes no behaviour change, so the vertical/
+    horizontal channels free-integrating in open loop for the run's short
+    duration is immaterial to whether stationaryLocked matches). Confirms the
+    PRODUCTION code reproduces this module's own Python reference
+    (lock_release_timeline), not a second, independent implementation of it."""
+    out = io.StringIO()
+    out.write("INIT\n")
+    for name, value in cal.items():
+        out.write(f"CAL {name} {value:.9g}\n")
+    out.write(f"ONGROUND {1 if on_ground else 0}\n")
+
+    dt = rec.dt()
+    for i in range(len(rec.t)):
+        r0 = math.radians(rec.rate0[i])
+        r1 = math.radians(rec.rate1[i])
+        r2 = math.radians(rec.rate2[i])
+        out.write(f"STEP 0 0 0 {dt[i]:.9g} {r0:.9g} {r1:.9g} {r2:.9g} {rec.accMagG[i]:.9g}\n")
+    return out.getvalue()
+
+
+def check_production_matches_reference(rec: DetectorRecording, cal: dict,
+                                       timeline: dict, exe: Path) -> dict:
+    """Run the SAME sequence through the production fusion.c and diff its
+    published stationaryLocked column against this module's own
+    lock_release_timeline() reference, sample for sample."""
+    commands = build_detector_command_stream(rec, cal, on_ground=True)
+    rows = run_gen_fusion_trace(exe, commands)
+    if len(rows) != len(rec.t):
+        return {"ok": False, "reason": f"row count {len(rows)} != {len(rec.t)}"}
+    c_locked = np.array([int(r["stationaryLocked"]) for r in rows], dtype=bool)
+    py_locked = timeline["locked"]
+    mismatch = np.flatnonzero(c_locked != py_locked)
+    return {
+        "ok": len(mismatch) == 0,
+        "n_mismatch": int(len(mismatch)),
+        "first_mismatch_t": float(rec.t[mismatch[0]]) if len(mismatch) else None,
+        "first_mismatch_t_end": float(rec.t[mismatch[-1]]) if len(mismatch) else None,
     }
 
 
@@ -854,6 +906,12 @@ def main() -> int:
                      help="override one SWE1-FW-014 threshold before a "
                           "--detector run (lockGyroDps, lockAccG, "
                           "relGyroDps, relAccG, lockWindowS); repeatable")
+    ap.add_argument("--production", action="store_true",
+                     help="with --detector: also drive the PRODUCTION "
+                          "fusion.c (gen_fusion_trace, STEP-only, ONGROUND 1) "
+                          "with the same inputs and diff its published "
+                          "stationaryLocked column against this module's own "
+                          "lock_release_timeline() sample for sample")
     args = ap.parse_args()
 
     if not args.mf4.is_file():
@@ -879,6 +937,28 @@ def main() -> int:
 
         if not args.quiet:
             print_detector_report(args.mf4, det_cal, metrics)
+
+        if args.production:
+            exe = args.exe or default_exe()
+            if exe is None or not exe.is_file():
+                sys.exit("gen_fusion_trace not found -- build test/ first "
+                          "(cmake --build test/build) or pass --exe")
+            timeline = lock_release_timeline(rec.t, rec.omega, rec.accDev, det_cal)
+            check = check_production_matches_reference(rec, det_cal, timeline, exe)
+            if not args.quiet:
+                print()
+                if check["ok"]:
+                    print("production fusion.c stationaryLocked matches the "
+                          "Python reference on every sample")
+                else:
+                    print(f"MISMATCH: {check['n_mismatch']} sample(s) differ, "
+                          f"t={check['first_mismatch_t']:.2f}..{check['first_mismatch_t_end']:.2f} s")
+            if args.dump_metrics:
+                merged = dict(metrics)
+                merged["production_check"] = check
+                args.dump_metrics.write_text(
+                    json.dumps(merged, indent=2, sort_keys=True), encoding="utf-8")
+            return 0 if check["ok"] else 1
 
         return 0
 

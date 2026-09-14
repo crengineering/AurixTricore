@@ -240,13 +240,24 @@ def expand(entry: dict, field: Field, index: int | None) -> dict:
 
     {i}  -> 0, 1, 2 ...      (Core{i}ExecTime  -> Core0ExecTime)
     {i2} -> 00, 01, 02 ...   (GPIO_P00_{i2}_state -> GPIO_P00_01_state)
+
+    "names"/"descs": {"<index>": "literal"} override the templated name/desc
+    for one specific element -- for an array of otherwise-unrelated reserved
+    bytes each repurposed for its own signal one at a time (e.g. Xcp_Fusion's
+    reserved3[0] = NavGnssTrusted, [1] = NavStationaryLocked), where no
+    shared {i}-template makes sense because the elements are not a series.
     """
     out = dict(entry)
     i = "" if index is None else str(index)
     i2 = "" if index is None else f"{index:02d}"
-    for key in ("name", "desc"):
-        if key in out:
+    for key, overrides_key in (("name", "names"), ("desc", "descs")):
+        override = out.get(overrides_key, {}).get(i)
+        if override is not None:
+            out[key] = override
+        elif key in out:
             out[key] = out[key].replace("{i2}", i2).replace("{i}", i)
+        else:
+            pass
     if "name" not in out:
         out["name"] = field.name + ("" if index is None else f"_{index}")
     return out

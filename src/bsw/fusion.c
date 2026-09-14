@@ -126,6 +126,24 @@
  * (fusion.h: 32 m in 60 s from accelerometer bias alone). */
 #define FUSION_HORIZ_OK_TIMEOUT_S (2.0f)
 
+/* SWE1-FW-014: stationary-lock detector fallbacks, for when the live
+ * FusionCal fields are unusable (NaN, negative, past FUSIONCAL_MAX). Same
+ * numbers as FusionCal.c's compiled defaults -- see there for the
+ * derivation. */
+#define FUSION_LOCK_GYRO_DPS_DEFAULT (2.0f)
+#define FUSION_LOCK_ACC_G_DEFAULT    (0.03f)
+#define FUSION_REL_GYRO_DPS_DEFAULT  (3.0f)
+#define FUSION_REL_ACC_G_DEFAULT     (0.05f)
+#define FUSION_LOCK_WINDOW_S_DEFAULT (1.0f)
+
+/* Release needs exactly this many CONSECUTIVE violating samples, no more, no
+ * fewer -- one corrupt IMU word is a measured failure mode of this board
+ * (SWE1-FW-009, +1999.76 deg/s on a single tick) and must not release the
+ * lock; two consecutive corrupt words have never been observed. */
+#define FUSION_LOCK_RELEASE_SAMPLES (2u)
+
+#define FUSION_RAD_TO_DEG       (57.29577951f)
+
 /* --- outlier gates -------------------------------------------------------- */
 
 /* Reject a sample further than this many sigma from what the filter expected.
@@ -303,6 +321,18 @@ static boolean s_gnssTrusted;
 static uint8   s_trustRun;
 static uint8   s_untrustRun;
 static float32 s_dtSinceTrustedFix;
+
+/* SWE1-FW-014: the stationary-lock detector and its interlock.
+ * s_lockGoodS accumulates wall-clock time (not sample count -- rate-
+ * invariant, like the process-noise integrals above) while BOTH lock
+ * thresholds hold; s_relBadRun counts CONSECUTIVE samples violating either
+ * release threshold. s_onGround is the airborne interlock (Fusion_
+ * setOnGround()), default TRUE -- see fusion.h for why that is safe only
+ * because nothing arms this vehicle's motors yet. */
+static boolean s_onGround;
+static boolean s_stationaryLocked;
+static float32 s_lockGoodS;
+static uint8   s_relBadRun;
 
 /* GNSS duplicate-of-the-last-fix guard. Read and written ONLY by
  * Fusion_setGnss() (CPU0), never by the consumer, so -- unlike the fields
@@ -846,6 +876,17 @@ void Fusion_init(void)
     s_untrustRun        = 0u;
     s_dtSinceTrustedFix = 0.0f;
 
+    /* s_onGround is NOT reset here: Fusion_init() is called at boot, before
+     * any ASW component could conceivably have called Fusion_setOnGround(),
+     * so this only ever runs once in practice -- but it must default TRUE
+     * regardless (see fusion.h), and a later Fusion_init() (e.g. a re-
+     * acquisition path some caller adds) must not silently re-arm the
+     * interlock closed while genuinely on the ground. */
+    s_onGround         = TRUE;
+    s_stationaryLocked = FALSE;
+    s_lockGoodS        = 0.0f;
+    s_relBadRun        = 0u;
+
     /* g_baroLatch/g_gnssLatch (FusionLatch.h): the PRODUCER's state, zeroed
      * here even though Fusion_init() itself runs on CPU1 (via NavTask_init,
      * T12). Safe by construction, not by synchronisation: SensorTask_baro/
@@ -917,7 +958,8 @@ void Fusion_init(void)
     s_navState.verticalOk   = 0u;
     s_navState.horizontalOk = 0u;
     s_navState.originSet    = 0u;
-    s_navState.gnssTrusted  = 0u;
+    s_navState.gnssTrusted      = 0u;
+    s_navState.stationaryLocked = 0u;
 }
 
 /* Is this a number the filter can safely use?
@@ -1342,7 +1384,81 @@ static void fusion_correctGnss(void)
     }
 }
 
-void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, boolean valid)
+/* SWE1-FW-014's detector, one tick. Time-based accumulation (not a sliding
+ * sample window) for the same reason fusion_chanPredict's Q integrals are
+ * PSDs: it stays correct at any tick rate without a buffer to size. Release
+ * is deliberately sample-based (FUSION_LOCK_RELEASE_SAMPLES CONSECUTIVE
+ * violations), not time-based -- see the macro's own comment. Task 14 ships
+ * this as an OBSERVATION only: nothing downstream reacts to
+ * s_stationaryLocked yet (SWE1-FW-015/-016). */
+static void fusion_updateStationaryLock(const float32 rateBody[3], float32 accMagG, float32 dt)
+{
+    const float32 lockGyro = FusionCal_positive(g_fusionCal.lockGyroDps, 0.0f,
+                                                FUSION_LOCK_GYRO_DPS_DEFAULT);
+    const float32 lockAcc  = FusionCal_positive(g_fusionCal.lockAccG, 0.0f,
+                                                FUSION_LOCK_ACC_G_DEFAULT);
+    const float32 relGyro  = FusionCal_positive(g_fusionCal.relGyroDps, 0.0f,
+                                                FUSION_REL_GYRO_DPS_DEFAULT);
+    const float32 relAcc   = FusionCal_positive(g_fusionCal.relAccG, 0.0f,
+                                                FUSION_REL_ACC_G_DEFAULT);
+    const float32 window   = FusionCal_positive(g_fusionCal.lockWindowS, 0.0f,
+                                                FUSION_LOCK_WINDOW_S_DEFAULT);
+    /* |omega| = hypot(rate0, rate1, rate2), Euclidean -- the design note's
+     * own thresholds (docs/NAV_STRAND_2026-09.md section 10.1) are measured
+     * against this form, not a Manhattan sum. */
+    const float32 omega = sqrtf((rateBody[0] * rateBody[0])
+                              + (rateBody[1] * rateBody[1])
+                              + (rateBody[2] * rateBody[2])) * FUSION_RAD_TO_DEG;
+    const float32 accDev = fabsf(accMagG - 1.0f);
+    const boolean clean = ((omega <= lockGyro) && (accDev <= lockAcc)) ? TRUE : FALSE;
+    const boolean violate = ((omega > relGyro) || (accDev > relAcc)) ? TRUE : FALSE;
+
+    s_lockGoodS = (clean != FALSE) ? (s_lockGoodS + dt) : 0.0f;
+
+    if (violate != FALSE)
+    {
+        if (s_relBadRun < FUSION_LOCK_RELEASE_SAMPLES)
+        {
+            s_relBadRun++;
+        }
+        else
+        {
+            /* already at the threshold */
+        }
+    }
+    else
+    {
+        s_relBadRun = 0u;
+    }
+
+    if (s_stationaryLocked != FALSE)
+    {
+        if (s_relBadRun >= FUSION_LOCK_RELEASE_SAMPLES)
+        {
+            s_stationaryLocked = FALSE;
+            s_lockGoodS         = 0.0f;
+        }
+        else
+        {
+            /* stays locked */
+        }
+    }
+    else
+    {
+        if ((s_onGround != FALSE) && (s_lockGoodS >= window))
+        {
+            s_stationaryLocked = TRUE;
+        }
+        else
+        {
+            /* not yet: either moving, or not on the ground */
+        }
+    }
+}
+
+void Fusion_update(FusionValues *fusion, const float32 accNed[3],
+                   const float32 rateBody[3], float32 accMagG,
+                   float32 dt, boolean valid)
 {
     if ((valid != FALSE) && (dt > FUSION_DT_MIN) && (dt < FUSION_DT_MAX)
         && (fusion_usable(accNed[0], FUSION_INPUT_MAX) != FALSE)
@@ -1376,6 +1492,28 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, bo
          * (clause 3/4) is the same idea, reset there too. */
         s_dtSinceGnssAlt    += dt;
         s_dtSinceTrustedFix += dt;
+
+        /* SWE1-FW-014: run the detector on every usable tick, same gate as
+         * everything else here -- a NaN rate/accMagG makes both `clean` and
+         * `violate` false (every comparison against NaN is false), which
+         * fails safe: it neither accumulates toward a lock nor releases one
+         * that already exists. */
+        if (fusion_usable(rateBody[0], FUSION_INPUT_MAX) != FALSE
+            && fusion_usable(rateBody[1], FUSION_INPUT_MAX) != FALSE
+            && fusion_usable(rateBody[2], FUSION_INPUT_MAX) != FALSE
+            && fusion_usable(accMagG, FUSION_INPUT_MAX) != FALSE)
+        {
+            fusion_updateStationaryLock(rateBody, accMagG, dt);
+        }
+        else
+        {
+            /* absurd input: treated as "not clean", same as a NaN would be,
+             * via the fusion_usable() guard rather than letting it reach
+             * the arithmetic at all -- consistent with how every other
+             * input here is stopped at the door (see fusion_usable()'s own
+             * comment). */
+            s_lockGoodS = 0.0f;
+        }
 
         {
             BaroLatch_t baroSnap;
@@ -1462,7 +1600,8 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, bo
     s_navState.horizontalOk =
         ((s_originOk != FALSE) && (s_gnssTrusted != FALSE)
          && (s_dtSinceTrustedFix <= FUSION_HORIZ_OK_TIMEOUT_S)) ? 1u : 0u;
-    s_navState.gnssTrusted = (s_gnssTrusted != FALSE) ? 1u : 0u;
+    s_navState.gnssTrusted      = (s_gnssTrusted != FALSE) ? 1u : 0u;
+    s_navState.stationaryLocked = (s_stationaryLocked != FALSE) ? 1u : 0u;
 
     *fusion = s_navState;
 }
@@ -1584,5 +1723,30 @@ void Fusion_setGnss(sint32 latDeg1e7, sint32 lonDeg1e7, float32 altM,
         /* No usable solution. Deliberately NOT clearing s_haveITow: when the
          * fix comes back its iTOW will have moved on anyway, and forgetting it
          * would only risk re-fusing a stale fix. */
+    }
+}
+
+/* SWE1-FW-014's airborne interlock -- see fusion.h for the full contract. */
+void Fusion_setOnGround(boolean onGround)
+{
+    s_onGround = onGround;
+
+    if (onGround == FALSE)
+    {
+        /* Release immediately, not on the next violating sample: the hazard
+         * (a lock pinning velocity under a flying, position-controlled
+         * vehicle) must never survive even one extra tick once the
+         * application says "airborne". */
+        s_stationaryLocked = FALSE;
+        s_lockGoodS        = 0.0f;
+        s_relBadRun        = 0u;
+    }
+    else
+    {
+        /* back on the ground: the detector decides on its own inputs again,
+         * from a clean slate -- no stale "already good for N seconds" credit
+         * survives from before whatever kept it off the ground */
+        s_lockGoodS = 0.0f;
+        s_relBadRun = 0u;
     }
 }

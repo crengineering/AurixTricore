@@ -355,8 +355,8 @@ void measurementsSetFusion(const FusionValues *fusion, const Ahrs_Values *ahrs,
     g_xcpFusion.gnssDupes    = fusion->gnssDupes;
 
     g_xcpFusion.ahrsBiasDegraded = ahrs->biasDegraded;
-    g_xcpFusion.reserved3[0] = fusion->gnssTrusted;   /* SWE1-FW-011 */
-    g_xcpFusion.reserved3[1] = 0u;
+    g_xcpFusion.reserved3[0] = fusion->gnssTrusted;      /* SWE1-FW-011 */
+    g_xcpFusion.reserved3[1] = fusion->stationaryLocked; /* SWE1-FW-014 */
     g_xcpFusion.reserved3[2] = 0u;
 
     /* --- flight-controller feedback ---------------------------------------

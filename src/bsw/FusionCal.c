@@ -73,6 +73,24 @@ volatile Xcp_FusionCal g_fusionCal;
  * indoor one (>= 4.612 m) -- docs/NAV_STRAND_2026-09.md section 3.3. */
 #define FCAL_GNSS_HACC_MAX     (4.0f)
 
+/* SWE1-FW-014: stationary-lock thresholds, derived from the 1-second-window
+ * maxima of the two detector inputs across every recording on file (clean
+ * rest tops out at 1.242 deg/s / 0.0169 g; the quietest motion on file, a
+ * 0.45 m hand lift, is 7x above lockAccG). Release is 1.5x the lock
+ * threshold -- that ratio is the hysteresis. */
+#define FCAL_LOCK_GYRO_DPS     (2.0f)
+#define FCAL_LOCK_ACC_G        (0.03f)
+#define FCAL_REL_GYRO_DPS      (3.0f)
+#define FCAL_REL_ACC_G         (0.05f)
+#define FCAL_LOCK_WINDOW_S     (1.0f)
+
+/* SWE1-FW-015: the release mechanism. tauGnssBiasS = 60 s is the measured
+ * 1/e autocorrelation of the raw GNSS horizontal error (60.3 s north /
+ * 56.7 s east indoors, 32.4 s outdoor t1 -- docs/NAV_TUNING.md section 3). */
+#define FCAL_SIGMA_ZUPT           (0.01f)
+#define FCAL_TAU_GNSS_BIAS_S      (60.0f)
+#define FCAL_GNSS_BIAS_RATE_MAX   (0.05f)
+
 void FusionCal_init(void)
 {
     g_fusionCal.twoKpAcc      = FCAL_TWO_KP_ACC;
@@ -95,6 +113,16 @@ void FusionCal_init(void)
 
     g_fusionCal.gnssAltSlewMps = FCAL_GNSS_ALT_SLEW_MPS;
     g_fusionCal.gnssHAccMax    = FCAL_GNSS_HACC_MAX;
+
+    g_fusionCal.lockGyroDps    = FCAL_LOCK_GYRO_DPS;
+    g_fusionCal.lockAccG       = FCAL_LOCK_ACC_G;
+    g_fusionCal.relGyroDps     = FCAL_REL_GYRO_DPS;
+    g_fusionCal.relAccG        = FCAL_REL_ACC_G;
+    g_fusionCal.lockWindowS    = FCAL_LOCK_WINDOW_S;
+
+    g_fusionCal.sigmaZupt        = FCAL_SIGMA_ZUPT;
+    g_fusionCal.tauGnssBiasS     = FCAL_TAU_GNSS_BIAS_S;
+    g_fusionCal.gnssBiasRateMax  = FCAL_GNSS_BIAS_RATE_MAX;
 
     /* Magic last: a master polling for it sees a fully populated block or none
      * of it, never a half-written one. */

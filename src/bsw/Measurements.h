@@ -252,8 +252,11 @@ extern volatile Xcp_Data g_xcpData;
  *   0xBD  uint8   reserved3[3]  [0] = gnssTrusted (SWE1-FW-011): 0/1, the
  *                              estimator's own trust decision on the
  *                              receiver's reported hAcc, separate from
- *                              GnssNavOk ("the receiver has a fix"); [1],
- *                              [2] stay free
+ *                              GnssNavOk ("the receiver has a fix");
+ *                              [1] = stationaryLocked (SWE1-FW-014): 0/1,
+ *                              the vehicle is judged standing still AND
+ *                              Fusion_setOnGround() allows acting on it;
+ *                              [2] stays free
  *   0xF0  uint32  navDropped   measurements refused at the input as NaN,
  *                              infinite or absurd. MUST be 0 with healthy
  *                              sensors -- a rising count IS the sensor fault

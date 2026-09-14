@@ -1105,10 +1105,15 @@
       "hi": "4294967295"
     },
     "reserved3": {
-      "name": "NavGnssTrusted",
-      "desc": "SWE1-FW-011: 1 while the estimator trusts the GNSS receivers reported hAcc (gnssHAccMax, live-tunable) -- separate from GnssNavOk, which only means the receiver claims a usable fix",
+      "names": {
+        "0": "NavGnssTrusted",
+        "1": "NavStationaryLocked"
+      },
+      "descs": {
+        "0": "SWE1-FW-011: 1 while the estimator trusts the GNSS receivers reported hAcc (gnssHAccMax, live-tunable) -- separate from GnssNavOk, which only means the receiver claims a usable fix",
+        "1": "SWE1-FW-014: 1 while the vehicle is judged standing still (gyro+accel detector) AND Fusion_setOnGround() allows acting on it -- the airborne interlock"
+      },
       "skip_index": [
-        1,
         2
       ]
     },
@@ -1276,6 +1281,62 @@
       "unit": "m",
       "lo": "0.1",
       "hi": "1000"
+    },
+    "lockGyroDps": {
+      "name": "FusLockGyroDps",
+      "unit": "deg/s",
+      "lo": "0",
+      "hi": "360",
+      "desc": "TUNING - SWE1-FW-014: engage the stationary lock only while |omega| stays at or below this for lockWindowS. 2.0 default, 1.6x the worst clean rest window measured (1.242 deg/s)"
+    },
+    "lockAccG": {
+      "name": "FusLockAccG",
+      "unit": "g",
+      "lo": "0",
+      "hi": "2",
+      "desc": "TUNING - SWE1-FW-014: engage the stationary lock only while abs(|a|-1g) stays at or below this for lockWindowS. 0.03 default, 1.8x the worst clean rest window (0.0169 g), 4x below the quietest motion on file (a 0.45 m hand lift)"
+    },
+    "relGyroDps": {
+      "name": "FusRelGyroDps",
+      "unit": "deg/s",
+      "lo": "0",
+      "hi": "720",
+      "desc": "TUNING - SWE1-FW-014: release the stationary lock when |omega| exceeds this on 2 CONSECUTIVE samples. 3.0 default, 1.5x lockGyroDps (the hysteresis)"
+    },
+    "relAccG": {
+      "name": "FusRelAccG",
+      "unit": "g",
+      "lo": "0",
+      "hi": "4",
+      "desc": "TUNING - SWE1-FW-014: release the stationary lock when abs(|a|-1g) exceeds this on 2 CONSECUTIVE samples. 0.05 default, 1.5x lockAccG (the hysteresis)"
+    },
+    "lockWindowS": {
+      "name": "FusLockWindowS",
+      "unit": "s",
+      "lo": "0.01",
+      "hi": "60",
+      "desc": "TUNING - SWE1-FW-014: how long both lock thresholds must hold, continuously, before the lock engages. 1.0 default"
+    },
+    "sigmaZupt": {
+      "name": "FusSigmaZupt",
+      "unit": "m/s",
+      "lo": "0.0001",
+      "hi": "10",
+      "desc": "TUNING - SWE1-FW-015: zero-velocity update measurement noise, applied while stationary-locked at the barometer rate. 0.01 default"
+    },
+    "tauGnssBiasS": {
+      "name": "FusTauGnssBiasS",
+      "unit": "s",
+      "lo": "1",
+      "hi": "10000",
+      "desc": "TUNING - SWE1-FW-015: decay time constant of the GNSS position bias installed at lock release. 60.0 default, the measured 1/e autocorrelation of the raw GNSS horizontal error"
+    },
+    "gnssBiasRateMax": {
+      "name": "FusGnssBiasRateMax",
+      "unit": "m/s",
+      "lo": "0.0001",
+      "hi": "100",
+      "desc": "TUNING - SWE1-FW-015: the GNSS position bias may not decay faster than this. 0.05 default"
     }
   }
 }

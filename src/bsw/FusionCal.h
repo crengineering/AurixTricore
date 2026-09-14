@@ -38,7 +38,10 @@
  * whitelist now uses (uint32)&g_fusionCal, so Lcf_Tasking_Tricore_Tc.lsl
  * (LCF_XCP_FUSIONCAL_START) is the only place 0x70030600 is written down. */
 #define XCP_FUSIONCAL_MAGIC  0x4C414346u        /* "FCAL" */
-#define XCP_FUSIONCAL_SIZE   64u
+/* 64 -> 128, SWE1-FW-014 (docs/CODEMAP.md's "next free slot" rule does not
+ * apply here: the block would still fit its existing 256-byte slot at
+ * double this size, so appending inside it is cheaper). */
+#define XCP_FUSIONCAL_SIZE   128u
 
 /* Layout (little-endian, all 4-byte aligned; verify against
  * FusionCal.src after any edit — TASKING aligns uint32 to 2 bytes):
@@ -86,9 +89,31 @@
  *                               every recorded indoor one (docs/NAV_STRAND_
  *                               2026-09.md section 3.3)
  *
- * Block is now FULL at 64 bytes -- SWE1-FW-014 grows XCP_FUSIONCAL_SIZE to
- * 128 and appends its eight fields from 0x40 (still inside this block's own
- * 256-byte slot; see fusion.h and docs/CODEMAP.md).
+ * Block was FULL at 64 bytes after SWE1-FW-010/-011 -- SWE1-FW-014 grows
+ * XCP_FUSIONCAL_SIZE to 128 and appends its eight fields from 0x40, still
+ * inside this block's own 256-byte slot (docs/CODEMAP.md's "next free slot"
+ * rule applies when a block would overrun its slot; this one does not, so
+ * appending here is cheaper). No existing offset moves.
+ *   --- SWE1-FW-014 (the lock) ---
+ *   0x40  float32 lockGyroDps   engage below this |omega| [deg/s], held for
+ *                               lockWindowS. 2.0 default
+ *   0x44  float32 lockAccG      engage below this abs(|a|-1g) [g]. 0.03 default
+ *   0x48  float32 relGyroDps    release above this |omega|, on 2 consecutive
+ *                               samples. 3.0 default
+ *   0x4C  float32 relAccG       release above this abs(|a|-1g), same rule.
+ *                               0.05 default
+ *   0x50  float32 lockWindowS   how long BOTH lock thresholds must hold
+ *                               before engaging [s]. 1.0 default
+ *   --- SWE1-FW-015 (the release) ---
+ *   0x54  float32 sigmaZupt     zero-velocity measurement noise [m/s].
+ *                               0.01 default
+ *   0x58  float32 tauGnssBiasS  GNSS position-bias decay time constant [s],
+ *                               the measured 1/e autocorrelation of the raw
+ *                               horizontal GNSS error. 60.0 default
+ *   0x5C  float32 gnssBiasRateMax  max rate the GNSS position bias may decay
+ *                               at [m/s]. 0.05 default. gnssBiasMaxM (the
+ *                               clamp) stays a compiled #define -- see
+ *                               fusion.c
  */
 typedef struct
 {
@@ -113,6 +138,16 @@ typedef struct
     float32 sigmaAccRw;
     float32 gnssAltSlewMps;
     float32 gnssHAccMax;
+
+    float32 lockGyroDps;
+    float32 lockAccG;
+    float32 relGyroDps;
+    float32 relAccG;
+    float32 lockWindowS;
+
+    float32 sigmaZupt;
+    float32 tauGnssBiasS;
+    float32 gnssBiasRateMax;
 } Xcp_FusionCal;
 
 extern volatile Xcp_FusionCal g_fusionCal;

@@ -515,7 +515,8 @@ void NavTask_step(void)
              * meaningless and integrating it would put a real offset into
              * the velocity before the barometer ever sees it. */
             fusionInputOk = NavTask_inputValid(elapsedTime, present, ahrs.state);
-            Fusion_update(&fusion, ahrs.accNed, elapsedTime, fusionInputOk);
+            Fusion_update(&fusion, ahrs.accNed, ahrs.rate, ahrs.accMagG,
+                         elapsedTime, fusionInputOk);
 
             /* Raw sample + an accumulated liveness sum ride along in the SAME
              * publish as the fusion output (T12 blocker,

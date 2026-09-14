@@ -15,7 +15,7 @@
  *   Xcp_Nvm   (persistent, DFLASH)    0x70030200, 44 bytes, Nvm.h
  *   Xcp_Gpio  (GPIO control, RAM only) 0x70030300, 52 bytes, gpio.h
  *   Xcp_Fusion (navigation state)     0x70030500, 252 bytes, Measurements.h
- *   Xcp_FusionCal (estimator tuning)  0x70030600, 64 bytes, FusionCal.h
+ *   Xcp_FusionCal (estimator tuning)  0x70030600, 96 bytes, FusionCal.h
  * Transport: XCP on UDP/IP, port 5555, station 192.168.0.10.
  * DAQ: dynamic, 1 list, event channel 0 = 100 ms task.
  */
@@ -1312,6 +1312,11 @@ ASAP2_VERSION 1 61
       ECU_ADDRESS 0x700305BD
     /end MEASUREMENT
 
+    /begin MEASUREMENT NavStationaryLocked "SWE1-FW-014: 1 while the vehicle is judged standing still (gyro+accel detector) AND Fusion_setOnGround() allows acting on it -- the airborne interlock"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x700305BE
+    /end MEASUREMENT
+
     /begin MEASUREMENT CtrlPhiIst0 "FLIGHT CONTROL FEEDBACK: attitude for att_ctrl_step, element 0 of [roll, pitch, yaw]. RADIANS, not degrees - this is the controller's own unit"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -6.3 6.3
       ECU_ADDRESS 0x700305C0
@@ -1473,6 +1478,46 @@ ASAP2_VERSION 1 61
     /begin CHARACTERISTIC FusGnssHAccMax "TUNING - horizontal/indoor guard (SWE1-FW-011): GNSS is trusted only while the reported hAcc is at or below this [m]. 4.0 default separates every recorded outdoor fix from every recorded indoor one"
       VALUE 0x7003063C RL_FLOAT32 1000 NO_COMPU_METHOD 0.1 1000
       PHYS_UNIT "m"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC FusLockGyroDps "TUNING - SWE1-FW-014: engage the stationary lock only while |omega| stays at or below this for lockWindowS. 2.0 default, 1.6x the worst clean rest window measured (1.242 deg/s)"
+      VALUE 0x70030640 RL_FLOAT32 360 NO_COMPU_METHOD 0 360
+      PHYS_UNIT "deg/s"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC FusLockAccG "TUNING - SWE1-FW-014: engage the stationary lock only while abs(|a|-1g) stays at or below this for lockWindowS. 0.03 default, 1.8x the worst clean rest window (0.0169 g), 4x below the quietest motion on file (a 0.45 m hand lift)"
+      VALUE 0x70030644 RL_FLOAT32 2 NO_COMPU_METHOD 0 2
+      PHYS_UNIT "g"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC FusRelGyroDps "TUNING - SWE1-FW-014: release the stationary lock when |omega| exceeds this on 2 CONSECUTIVE samples. 3.0 default, 1.5x lockGyroDps (the hysteresis)"
+      VALUE 0x70030648 RL_FLOAT32 720 NO_COMPU_METHOD 0 720
+      PHYS_UNIT "deg/s"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC FusRelAccG "TUNING - SWE1-FW-014: release the stationary lock when abs(|a|-1g) exceeds this on 2 CONSECUTIVE samples. 0.05 default, 1.5x lockAccG (the hysteresis)"
+      VALUE 0x7003064C RL_FLOAT32 4 NO_COMPU_METHOD 0 4
+      PHYS_UNIT "g"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC FusLockWindowS "TUNING - SWE1-FW-014: how long both lock thresholds must hold, continuously, before the lock engages. 1.0 default"
+      VALUE 0x70030650 RL_FLOAT32 60 NO_COMPU_METHOD 0.01 60
+      PHYS_UNIT "s"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC FusSigmaZupt "TUNING - SWE1-FW-015: zero-velocity update measurement noise, applied while stationary-locked at the barometer rate. 0.01 default"
+      VALUE 0x70030654 RL_FLOAT32 10 NO_COMPU_METHOD 0.0001 10
+      PHYS_UNIT "m/s"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC FusTauGnssBiasS "TUNING - SWE1-FW-015: decay time constant of the GNSS position bias installed at lock release. 60.0 default, the measured 1/e autocorrelation of the raw GNSS horizontal error"
+      VALUE 0x70030658 RL_FLOAT32 10000 NO_COMPU_METHOD 1 10000
+      PHYS_UNIT "s"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC FusGnssBiasRateMax "TUNING - SWE1-FW-015: the GNSS position bias may not decay faster than this. 0.05 default"
+      VALUE 0x7003065C RL_FLOAT32 100 NO_COMPU_METHOD 0.0001 100
+      PHYS_UNIT "m/s"
     /end CHARACTERISTIC
 
   /end MODULE

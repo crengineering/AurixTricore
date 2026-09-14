@@ -8,11 +8,20 @@
  *
  *   INIT                                     Fusion_init()
  *   CAL <field> <value>                      write one g_fusionCal field
+ *   ONGROUND <0|1>                           Fusion_setOnGround()
  *   BARO <altM>                              Fusion_setBaroAlt(altM, TRUE)
  *   BAROBAD <altM>                           Fusion_setBaroAlt(altM, FALSE)
  *   GNSS <lat1e7> <lon1e7> <alt> <spd> <hdg> <hacc> <itow>
- *   STEP <aN> <aE> <aD> <dt>                 Fusion_update(), then print a row
- *   STEPBAD <aN> <aE> <aD> <dt>              same with valid = FALSE
+ *   STEP <aN> <aE> <aD> <dt> [<r0> <r1> <r2> <accMagG>]
+ *                                            Fusion_update(), then print a row.
+ *                                            The four SWE1-FW-014 detector
+ *                                            inputs are OPTIONAL, defaulting
+ *                                            to 0,0,0,1.0 (at rest, 1 g) so
+ *                                            every command stream written
+ *                                            before that item still parses
+ *                                            unchanged.
+ *   STEPBAD <aN> <aE> <aD> <dt> [<r0> <r1> <r2> <accMagG>]
+ *                                            same with valid = FALSE
  *
  * Values print with %.9g: float32 round-trips exactly at 9 significant digits,
  * so the comparison in Python sees the same numbers the C saw.
@@ -32,14 +41,14 @@ static void header(void)
     printf("step,d,vd,accBiasD,baroBias,innov,p00,aD,"
            "posN,posE,velN,velE,accBiasN,accBiasE,innovN,innovE,pNN,aN,aE,"
            "rejects,resets,gnssRejects,gnssUpdates,covResets,"
-           "verticalOk,horizontalOk,originSet,gnssTrusted\n");
+           "verticalOk,horizontalOk,originSet,gnssTrusted,stationaryLocked\n");
 }
 
 static void row(void)
 {
     printf("%lu,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,"
            "%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,"
-           "%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
+           "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
            step,
            (double)f.a_d, (double)f.a_v_d, (double)f.accBiasD, (double)f.baroBias,
            (double)f.innov, (double)f.p00, (double)f.a_D,
@@ -49,7 +58,7 @@ static void row(void)
            (unsigned)f.rejects, (unsigned)f.resets, (unsigned)f.gnssRejects,
            (unsigned)f.gnssUpdates, (unsigned)f.covResets,
            (unsigned)f.verticalOk, (unsigned)f.horizontalOk, (unsigned)f.originSet,
-           (unsigned)f.gnssTrusted);
+           (unsigned)f.gnssTrusted, (unsigned)f.stationaryLocked);
 }
 
 static void setCal(const char *name, double v)
@@ -70,6 +79,14 @@ static void setCal(const char *name, double v)
     else if (!strcmp(name, "sigmaAccRw"))    { g_fusionCal.sigmaAccRw = x; }
     else if (!strcmp(name, "gnssAltSlewMps")) { g_fusionCal.gnssAltSlewMps = x; }
     else if (!strcmp(name, "gnssHAccMax"))   { g_fusionCal.gnssHAccMax = x; }
+    else if (!strcmp(name, "lockGyroDps"))   { g_fusionCal.lockGyroDps = x; }
+    else if (!strcmp(name, "lockAccG"))      { g_fusionCal.lockAccG = x; }
+    else if (!strcmp(name, "relGyroDps"))    { g_fusionCal.relGyroDps = x; }
+    else if (!strcmp(name, "relAccG"))       { g_fusionCal.relAccG = x; }
+    else if (!strcmp(name, "lockWindowS"))   { g_fusionCal.lockWindowS = x; }
+    else if (!strcmp(name, "sigmaZupt"))     { g_fusionCal.sigmaZupt = x; }
+    else if (!strcmp(name, "tauGnssBiasS"))  { g_fusionCal.tauGnssBiasS = x; }
+    else if (!strcmp(name, "gnssBiasRateMax")) { g_fusionCal.gnssBiasRateMax = x; }
     else { fprintf(stderr, "unknown cal field '%s'\n", name); exit(2); }
 }
 
@@ -98,6 +115,14 @@ int main(void)
             char name[32]; double v;
             if (sscanf(line, "%*s %31s %lf", name, &v) == 2) { setCal(name, v); }
         }
+        else if (!strcmp(cmd, "ONGROUND"))
+        {
+            long onGround;
+            if (sscanf(line, "%*s %ld", &onGround) == 1)
+            {
+                Fusion_setOnGround((boolean)(onGround != 0 ? TRUE : FALSE));
+            }
+        }
         else if (!strcmp(cmd, "BARO") || !strcmp(cmd, "BAROBAD"))
         {
             double a;
@@ -119,10 +144,15 @@ int main(void)
         else if (!strcmp(cmd, "STEP") || !strcmp(cmd, "STEPBAD"))
         {
             double an, ae, ad, dt;
-            if (sscanf(line, "%*s %lf %lf %lf %lf", &an, &ae, &ad, &dt) == 4)
+            double r0 = 0.0, r1 = 0.0, r2 = 0.0, accMagG = 1.0;
+            const int n = sscanf(line, "%*s %lf %lf %lf %lf %lf %lf %lf %lf",
+                                 &an, &ae, &ad, &dt, &r0, &r1, &r2, &accMagG);
+            if ((n == 4) || (n == 8))
             {
-                const float32 acc[3] = { (float32)an, (float32)ae, (float32)ad };
-                Fusion_update(&f, acc, (float32)dt, (boolean)(cmd[4] == '\0' ? TRUE : FALSE));
+                const float32 acc[3]  = { (float32)an, (float32)ae, (float32)ad };
+                const float32 rate[3] = { (float32)r0, (float32)r1, (float32)r2 };
+                Fusion_update(&f, acc, rate, (float32)accMagG, (float32)dt,
+                             (boolean)(cmd[4] == '\0' ? TRUE : FALSE));
                 ++step;
                 row();
             }

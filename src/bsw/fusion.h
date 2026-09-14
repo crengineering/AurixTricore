@@ -120,6 +120,11 @@ typedef struct
                            *   0 after 10 consecutive fixes that did not.
                            *   Independent of GnssNavOk ("the receiver has a
                            *   fix"), which keeps its own meaning */
+    uint8   stationaryLocked; /**< SWE1-FW-014: 1 while the vehicle is judged
+                           *   to be standing still AND Fusion_setOnGround()
+                           *   says it may act on that. Task 14 publishes
+                           *   this flag only -- ZUPT and the GNSS skip it
+                           *   will drive are SWE1-FW-015/-016            */
 } FusionValues;
 
 /** Reset every channel, the covariances, and both position references. */
@@ -127,14 +132,36 @@ void Fusion_init(void);
 
 /** Run one predict step on all three channels, then any corrections whose
  *  samples have arrived.
- *  \param fusion  receives the current estimate (never NULL)
- *  \param accNed  acceleration in NED with gravity removed [m/s^2], from
- *                 Ahrs_Values.accNed
- *  \param dt      measured time since the previous call [s]
- *  \param valid   FALSE when the IMU read failed or the attitude is not yet
- *                 usable — the estimate is frozen rather than integrating a
- *                 stale sample */
-void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, boolean valid);
+ *  \param fusion   receives the current estimate (never NULL)
+ *  \param accNed   acceleration in NED with gravity removed [m/s^2], from
+ *                  Ahrs_Values.accNed
+ *  \param rateBody bias-corrected body rates p/q/r [rad/s], from
+ *                  Ahrs_Values.rate -- SWE1-FW-014's stationary-detector
+ *                  input, |omega|
+ *  \param accMagG  |specific force| [g], from Ahrs_Values.accMagG -- the
+ *                  detector's other input, abs(accMagG - 1)
+ *  \param dt       measured time since the previous call [s]
+ *  \param valid    FALSE when the IMU read failed or the attitude is not yet
+ *                  usable — the estimate is frozen rather than integrating a
+ *                  stale sample */
+void Fusion_update(FusionValues *fusion, const float32 accNed[3],
+                   const float32 rateBody[3], float32 accMagG,
+                   float32 dt, boolean valid);
+
+/** SWE1-FW-014's airborne interlock: the stationary lock may engage ONLY
+ *  while this is TRUE. Default TRUE at boot (matches every bench recording,
+ *  where the vehicle never leaves the ground); the ASW is meant to call this
+ *  FALSE from arming until touchdown is confirmed, and TRUE otherwise --
+ *  \b no ASW component does so yet (no owner assigned as of this task), so
+ *  today's build always runs with the interlock open, which is safe by
+ *  construction only because nothing yet arms this vehicle's motors either.
+ *  Setting FALSE while locked releases the lock immediately, not on the next
+ *  violating sample: the hazard this guards against (a lock pinning the
+ *  velocity under a flying, position-controlled vehicle) must never survive
+ *  even one extra tick after the application says "airborne". BSW/ASW split
+ *  intact -- this file never includes an ASW header; the ASW calls this
+ *  setter instead. */
+void Fusion_setOnGround(boolean onGround);
 
 /** Latch a barometric altitude for the next Fusion_update() to consume.
  *  \param altM   altitude above the NVM sea-level reference [m], positive UP
