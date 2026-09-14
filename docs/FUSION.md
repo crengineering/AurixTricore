@@ -936,9 +936,16 @@ reparametrised from a per-tick sigma to a PSD, so a stale saved tuning file
 under the old name fails to find the field instead of writing a value ~32x
 too large.
 
-**`gnssPosRScale` defaults to 8.0**, not 1.0 — see §7. It is a stopgap with an
-honest justification, not a derived constant: the correct fix is a GNSS
-position-bias state, exactly as the barometer has.
+**`gnssPosRScale` defaults to 1.0** (SWE1-FW-012, `docs/NAV_STRAND_2026-09.md`
+§3.2/§9; was 8.0 — see §7 for why it started there). The offline sweep found
+no setting puts NIS in 0.5-2.0 together with a fused-vs-raw ratio near 1x —
+the receiver's GNSS error is coloured, not white, so that is not a tuning
+failure — and 1.0 is the value that minimises the 2-D scatter ratio against
+the raw fix (t1 1.65x -> 1.27x, every other recording <= 1.02x). `NavVarNorth`
+is correspondingly smaller and reads as more confident; that confidence is
+relative to the (still metre-class) raw fix, not an absolute accuracy claim.
+The correct long-term fix remains a GNSS position-bias state, exactly as the
+barometer has — this scale is still a stopgap, just a better-measured one.
 
 ### Controller feedback — `Xcp_Fusion` @ `0xC0`..`0xF0`
 

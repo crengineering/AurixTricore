@@ -47,16 +47,21 @@ volatile Xcp_FusionCal g_fusionCal;
 #define FCAL_SIGMA_ACC_RW      (1.0e-4f)
 
 /* GNSS position R multiplier. 1.0 means "trust hAcc as an independent
- * measurement", which the outdoor run on 2026-08-26 showed is wrong: varN
- * claimed sigma 0.3 m while the loop closed at 2.59 m, because ten correlated
- * NAV-PVT solutions per second are counted as ten independent draws.
+ * measurement" -- the outdoor run on 2026-08-26 found that over-confident
+ * (varN claimed sigma 0.3 m while the loop closed at 2.59 m, because ten
+ * correlated NAV-PVT solutions per second were counted as ten independent
+ * draws), which is why this stood at 8.0.
  *
- * 8.0 is the ratio between the claimed and the observed error, applied to the
- * variance so the reported uncertainty stops being a fiction. It is a stopgap
- * with an honest justification, not a derived constant: the correct fix is a
- * GNSS position-bias state, exactly as the barometer has. Until then this at
- * least makes varN safe to look at. */
-#define FCAL_GNSS_POS_R_SCALE  (8.0f)
+ * 1.0 (SWE1-FW-012, task 3/9, docs/NAV_STRAND_2026-09.md section 3.2): the
+ * offline sweep over {8, 4, 2, 1} x sigmaGnssVel found no setting puts NIS in
+ * 0.5-2.0 together with a fused-vs-raw ratio near 1x -- that is coloured
+ * receiver noise, not mistuning, so NIS is a reported diagnostic here, not a
+ * gate. The product bar is the 2-D scatter ratio against the raw fix, and 1.0
+ * is the value that minimises it: t1 1.65x -> 1.27x, every other recording
+ * <= 1.02x. varN is correspondingly smaller and reads as more confident --
+ * that is relative to the (still metre-class) raw fix, not an absolute
+ * accuracy claim; see docs/FUSION.md section 2. */
+#define FCAL_GNSS_POS_R_SCALE  (1.0f)
 
 #define FCAL_GATE_SIGMA_SQ     (25.0f)
 #define FCAL_GATE_MIN_M        (2.0f)
