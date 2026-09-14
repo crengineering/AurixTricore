@@ -168,6 +168,7 @@ CSV_COLUMNS = [
     "innovE", "pNN", "aN", "aE",
     "rejects", "resets", "gnssRejects", "gnssUpdates", "covResets",
     "verticalOk", "horizontalOk", "originSet", "gnssTrusted", "stationaryLocked",
+    "gnssBiasN", "gnssBiasE",  # SWE1-FW-015 (d), review round 2
 ]
 
 FUSION_DT_MIN = 1.0e-4
@@ -883,6 +884,135 @@ def compute_metrics(rows: list[dict], rec: Recording, cal: dict) -> dict:
     return metrics
 
 
+def compute_release_metrics(rows: list[dict], rec: Recording,
+                             t_release: float) -> dict:
+    """SWE1-FW-015 (d)/(d2), measured on the BIAS STATE, not distance to the
+    raw fix (the original distance-based formulation is withdrawn -- see the
+    item file). Independent of compute_metrics()'s own numbers; called only
+    with --force-release-at.
+
+    (d)'s four binding clauses:
+      1. no sample-to-sample step in posN/posE above 0.02 m, from the
+         release tick onward (same bound as (a), asserted through this exit
+         specifically);
+      2. |gnssBias| never increases after the release tick;
+      3. |gnssBias| <= 0.368 * delta0 * 1.10 at 60 s after release (one tau)
+         and <= 0.10 * delta0 at 180 s (three tau);
+      4. the position rate implied by the decay never exceeds
+         gnssBiasRateMax (0.05 m/s default).
+
+    (d2) is reported only: the fused-vs-raw distance track, on fusion.c's own
+    tangent-plane origin (the raw fix converted with the SAME first-usable-fix
+    origin nav_replay.py's own raw-sigma comparison already uses elsewhere in
+    this file -- fusion.c defines its origin identically, "the first usable
+    GNSS fix", so the two coincide by construction, not by re-deriving
+    fusion.c's internal origin over the CSV, which the CSV does not publish).
+    """
+    t = rec.t
+    posN = np.array([float(r["posN"]) for r in rows])
+    posE = np.array([float(r["posE"]) for r in rows])
+    biasN = np.array([float(r["gnssBiasN"]) for r in rows])
+    biasE = np.array([float(r["gnssBiasE"]) for r in rows])
+    locked = np.array([int(r["stationaryLocked"]) for r in rows])
+
+    idx_candidates = np.nonzero((t >= t_release) & (locked == 0))[0]
+    if len(idx_candidates) == 0:
+        return {"error": "lock never released at/after the forced release time"}
+    i_rel = int(idx_candidates[0])
+    t_rel = float(t[i_rel])
+
+    bias_mag = np.sqrt((biasN ** 2) + (biasE ** 2))
+    delta0 = float(bias_mag[i_rel])
+
+    post_mag = bias_mag[i_rel:]
+    post_t = t[i_rel:]
+
+    d_mag = np.diff(post_mag)
+    # float noise tolerance, not a real increase: the decay is a shrinking
+    # exponential rate-limited toward zero, never away from it.
+    never_increases = bool(np.all(d_mag <= 1.0e-6))
+    max_increase = float(d_mag.max()) if len(d_mag) else 0.0
+
+    def bias_near(dt_target: float):
+        target = t_rel + dt_target
+        if target > post_t[-1]:
+            return None, None
+        j = int(np.searchsorted(post_t, target))
+        j = min(j, len(post_mag) - 1)
+        return float(post_mag[j]), float(post_t[j] - t_rel)
+
+    bias_60, t_60 = bias_near(60.0)
+    bias_180, t_180 = bias_near(180.0)
+    bound_60 = 0.368 * delta0 * 1.10
+    bound_180 = 0.10 * delta0
+
+    # Clause (1)/(a): the step AT THE RELEASE TICK itself (this tick vs the
+    # preceding one) -- NOT the largest step anywhere in the rest of the run,
+    # which would also catch ordinary GNSS-driven corrections that have
+    # nothing to do with the release mechanism and are governed by their own
+    # requirements (SWE1-FW-010/-011/-012), not this one.
+    if i_rel > 0:
+        step_n = float(abs(posN[i_rel] - posN[i_rel - 1]))
+        step_e = float(abs(posE[i_rel] - posE[i_rel - 1]))
+    else:
+        step_n = 0.0
+        step_e = 0.0
+    max_step = max(step_n, step_e)
+
+    dt_arr = np.diff(post_t)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        rate = np.where(dt_arr > 0.0, np.abs(d_mag) / dt_arr, 0.0)
+    max_rate = float(rate.max()) if len(rate) else 0.0
+
+    result = {
+        "t_release_requested": t_release,
+        "t_release_actual": t_rel,
+        "i_release": i_rel,
+        "delta0_m": delta0,
+        "clause1_max_step_m": max_step,
+        "clause1_pass": bool(max_step <= 0.02),
+        "clause2_never_increases": never_increases,
+        "clause2_max_increase_m": max_increase,
+        "clause3_bias_at_60s_m": bias_60,
+        "clause3_t_at_60s_actual_s": t_60,
+        "clause3_bound_60s_m": bound_60,
+        "clause3_pass_60s": (bias_60 is not None) and (bias_60 <= bound_60),
+        "clause3_bias_at_180s_m": bias_180,
+        "clause3_t_at_180s_actual_s": t_180,
+        "clause3_bound_180s_m": bound_180,
+        "clause3_pass_180s": (bias_180 is not None) and (bias_180 <= bound_180),
+        "clause4_max_implied_rate_mps": max_rate,
+        "clause4_pass": bool(max_rate <= 0.05 + 1.0e-6),
+    }
+
+    # (d2): fused-vs-raw distance track, reported not gated.
+    navok = (rec.sig["GnssPresent"] != 0) & (rec.sig["GnssNavOk"] != 0)
+    raw_n, raw_e = tangent_plane(rec.sig["GnssLatitude"], rec.sig["GnssLongitude"], navok)
+    track = []
+    if raw_n is not None and len(raw_n) > 1:
+        idx_ok = np.flatnonzero(navok)
+        t_ok = t[idx_ok]
+        for dt_target in (0.0, 10.0, 30.0, 60.0, 90.0, 120.0, 150.0, 180.0):
+            target = t_rel + dt_target
+            if target > t[-1]:
+                break
+            j = int(np.searchsorted(t, target))
+            j = min(j, len(t) - 1)
+            rn = float(np.interp(t[j], t_ok, raw_n))
+            re_ = float(np.interp(t[j], t_ok, raw_e))
+            dist = float(math.hypot(posN[j] - rn, posE[j] - re_))
+            track.append({
+                "dt_after_release_s": dt_target,
+                "t_s": float(t[j]),
+                "fused_n_m": float(posN[j]), "fused_e_m": float(posE[j]),
+                "raw_n_m": rn, "raw_e_m": re_,
+                "distance_m": dist,
+            })
+    result["d2_fused_vs_raw_track"] = track
+
+    return result
+
+
 def print_report(mf4_path: Path, cal: dict, metrics: dict) -> None:
     print(f"# nav_replay: {mf4_path}")
     print(f"# cal overrides: {cal if cal else '(none, compiled defaults)'}")
@@ -947,6 +1077,46 @@ def print_baseline_diff(baseline: dict, current: dict) -> None:
             print(f"  {k}: baseline={b}  current={c}")
             continue
         print(f"  {k}: baseline={b:.4f}  current={c:.4f}  delta={c - b:+.4f}")
+
+
+def print_release_report(r: dict) -> None:
+    print()
+    print("# SWE1-FW-015 (d)/(d2): forced release, measured on the bias state")
+    if "error" in r:
+        print(f"  {r['error']}")
+        return
+    print(f"release requested t={r['t_release_requested']:.1f} s, "
+          f"actual t={r['t_release_actual']:.3f} s (row {r['i_release']})")
+    print(f"delta0 (|gnssBias| at release) = {r['delta0_m']:.4f} m")
+    print(f"(1) max sample-to-sample posN/posE step from release onward: "
+          f"{r['clause1_max_step_m']:.5f} m  <= 0.02 m: "
+          f"{'PASS' if r['clause1_pass'] else 'FAIL'}")
+    print(f"(2) |gnssBias| never increases after release: "
+          f"{'PASS' if r['clause2_never_increases'] else 'FAIL'} "
+          f"(max increase {r['clause2_max_increase_m']:.6f} m)")
+    if r["clause3_bias_at_60s_m"] is not None:
+        print(f"(3) |gnssBias| at +60s (actual +{r['clause3_t_at_60s_actual_s']:.1f}s) = "
+              f"{r['clause3_bias_at_60s_m']:.4f} m  <= {r['clause3_bound_60s_m']:.4f} m: "
+              f"{'PASS' if r['clause3_pass_60s'] else 'FAIL'}")
+    else:
+        print("(3) +60s point not reached inside the recording")
+    if r["clause3_bias_at_180s_m"] is not None:
+        print(f"    |gnssBias| at +180s (actual +{r['clause3_t_at_180s_actual_s']:.1f}s) = "
+              f"{r['clause3_bias_at_180s_m']:.4f} m  <= {r['clause3_bound_180s_m']:.4f} m: "
+              f"{'PASS' if r['clause3_pass_180s'] else 'FAIL'}")
+    else:
+        print("    +180s point not reached inside the recording")
+    print(f"(4) max position rate implied by the decay: "
+          f"{r['clause4_max_implied_rate_mps']:.5f} m/s  <= 0.05 m/s: "
+          f"{'PASS' if r['clause4_pass'] else 'FAIL'}")
+    if r["d2_fused_vs_raw_track"]:
+        print()
+        print("(d2) fused-vs-raw distance track (reported, not gated):")
+        for pt in r["d2_fused_vs_raw_track"]:
+            print(f"  t=rel+{pt['dt_after_release_s']:.1f}s (t={pt['t_s']:.1f}s): "
+                  f"fused=({pt['fused_n_m']:.3f},{pt['fused_e_m']:.3f}) "
+                  f"raw=({pt['raw_n_m']:.3f},{pt['raw_e_m']:.3f}) "
+                  f"dist={pt['distance_m']:.3f} m")
 
 
 def main() -> int:
@@ -1086,12 +1256,17 @@ def main() -> int:
 
     metrics = compute_metrics(rows, rec, cal)
 
+    if args.force_release_at is not None:
+        metrics["fw015d_release"] = compute_release_metrics(rows, rec, args.force_release_at)
+
     if args.dump_metrics:
         args.dump_metrics.write_text(json.dumps(metrics, indent=2, sort_keys=True),
                                       encoding="utf-8")
 
     if not args.quiet:
         print_report(args.mf4, cal, metrics)
+        if args.force_release_at is not None:
+            print_release_report(metrics["fw015d_release"])
 
     if args.baseline:
         baseline = json.loads(args.baseline.read_text(encoding="utf-8"))

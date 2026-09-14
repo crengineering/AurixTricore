@@ -41,14 +41,19 @@ static void header(void)
     printf("step,d,vd,accBiasD,baroBias,innov,p00,aD,"
            "posN,posE,velN,velE,accBiasN,accBiasE,innovN,innovE,pNN,aN,aE,"
            "rejects,resets,gnssRejects,gnssUpdates,covResets,"
-           "verticalOk,horizontalOk,originSet,gnssTrusted,stationaryLocked\n");
+           "verticalOk,horizontalOk,originSet,gnssTrusted,stationaryLocked,"
+           /* SWE1-FW-015 (d), review round 2: gnssBiasN/E appended at the
+            * end so the column stays additive -- any existing positional
+            * or by-name CSV reader is unaffected. */
+           "gnssBiasN,gnssBiasE\n");
 }
 
 static void row(void)
 {
     printf("%lu,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,"
            "%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,"
-           "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
+           "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,"
+           "%.9g,%.9g\n",
            step,
            (double)f.a_d, (double)f.a_v_d, (double)f.accBiasD, (double)f.baroBias,
            (double)f.innov, (double)f.p00, (double)f.a_D,
@@ -58,7 +63,8 @@ static void row(void)
            (unsigned)f.rejects, (unsigned)f.resets, (unsigned)f.gnssRejects,
            (unsigned)f.gnssUpdates, (unsigned)f.covResets,
            (unsigned)f.verticalOk, (unsigned)f.horizontalOk, (unsigned)f.originSet,
-           (unsigned)f.gnssTrusted, (unsigned)f.stationaryLocked);
+           (unsigned)f.gnssTrusted, (unsigned)f.stationaryLocked,
+           (double)f.gnssBiasN, (double)f.gnssBiasE);
 }
 
 static void setCal(const char *name, double v)
