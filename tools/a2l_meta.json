@@ -1105,7 +1105,12 @@
       "hi": "4294967295"
     },
     "reserved3": {
-      "skip": true
+      "name": "NavGnssTrusted",
+      "desc": "SWE1-FW-011: 1 while the estimator trusts the GNSS receivers reported hAcc (gnssHAccMax, live-tunable) -- separate from GnssNavOk, which only means the receiver claims a usable fix",
+      "skip_index": [
+        1,
+        2
+      ]
     },
     "ahrsBiasDegraded": {
       "name": "AttBiasDegraded",

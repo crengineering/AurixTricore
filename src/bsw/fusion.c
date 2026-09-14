@@ -102,6 +102,30 @@
  * multipath. */
 #define FUSION_GNSS_HACC_MIN    (1.0f)
 
+/* SWE1-FW-011: the estimator's own trust decision about the receiver,
+ * separate from GnssNavOk ("the receiver claims a usable 3-D fix"). Fallback
+ * for an unusable g_fusionCal.gnssHAccMax, same idea as
+ * FCAL_GNSS_ALT_SLEW_DEFAULT above but this field has no "0 is special"
+ * requirement, so FusionCal_positive() handles it directly at the read
+ * site. */
+#define FCAL_GNSS_HACC_MAX_DEFAULT (4.0f)
+
+/* Debounce counters, in CONSECUTIVE FIXES (not time) -- a chattering hAcc
+ * must never flip the decision, only a sustained run either side of it may.
+ * 30 fixes to enter (3.0 s at 10 Hz) is deliberately slower than 10 to leave
+ * (1.0 s): trust should be hard-won and easy to lose. */
+#define FUSION_TRUST_ENTER_FIXES  (30u)
+#define FUSION_TRUST_LEAVE_FIXES  (10u)
+
+/* SWE1-FW-011 clause 3/4: how long the horizontal channels may go without a
+ * TRUSTED, fused fix before horizontalOk clears and the channels stop
+ * integrating. Below this, an ordinary dropout (untrusted burst or a genuine
+ * receiver outage -- the timer does not distinguish the two, and clause (c)'s
+ * own acceptance test is phrased as a plain "GNSS outage") just predicts
+ * through; above it, open-loop integration is worth nothing to anybody
+ * (fusion.h: 32 m in 60 s from accelerometer bias alone). */
+#define FUSION_HORIZ_OK_TIMEOUT_S (2.0f)
+
 /* --- outlier gates -------------------------------------------------------- */
 
 /* Reject a sample further than this many sigma from what the filter expected.
@@ -266,6 +290,20 @@ static uint32  s_gnssLastGen;
  * Fusion_update()/fusion_correctGnss(). */
 static float32 s_dtSinceGnssAlt;
 
+/* SWE1-FW-011: the trust decision and its debounce. s_trustRun/s_untrustRun
+ * are saturating (never wrap) -- they only ever need to reach 30/10, and a
+ * saturating counter is simpler to reason about than one that could wrap
+ * back through zero after a very long clean run. s_dtSinceTrustedFix is the
+ * clause 3/4 timer: wall-clock time since GNSS was last BOTH trusted and
+ * fused, reset there and accumulated every tick like s_dtSinceGnssAlt --
+ * this is the one timer that answers "outage" and "untrusted" the same way,
+ * which is what clause (c)'s acceptance test (phrased purely as an outage)
+ * needs. */
+static boolean s_gnssTrusted;
+static uint8   s_trustRun;
+static uint8   s_untrustRun;
+static float32 s_dtSinceTrustedFix;
+
 /* GNSS duplicate-of-the-last-fix guard. Read and written ONLY by
  * Fusion_setGnss() (CPU0), never by the consumer, so -- unlike the fields
  * above -- these carry no cross-core visibility requirement and stay plain
@@ -371,8 +409,19 @@ static void fusion_chanInit(Fusion_Chan *ch, volatile const float32 *sigmaA,
  *   vel' = vel        + (a - accBias)*dt
  * so the state-transition matrix carries the bias into both, with a minus
  * sign. That coupling is the whole point — it is what lets a position sensor
- * that never sees acceleration nevertheless work out the accelerometer offset. */
-static void fusion_chanPredict(Fusion_Chan *ch, float32 a, float32 dt)
+ * that never sees acceleration nevertheless work out the accelerometer offset.
+ *
+ * \param freeze  SWE1-FW-011 clause 4: TRUE holds x[FS_POS] and x[FS_VEL] at
+ *                their current values instead of integrating -- more than
+ *                2.0 s without a trusted, fused GNSS fix, open-loop
+ *                integration is worth nothing (32 m in 60 s from
+ *                accelerometer bias alone, fusion.h) and actively misleads.
+ *                The covariance still grows exactly as it would otherwise:
+ *                that is what lets the covariance-derived gate widen and
+ *                reopen on its own once GNSS is trusted again. Every other
+ *                caller (the vertical channel, which this clause does not
+ *                touch) passes FALSE. */
+static void fusion_chanPredict(Fusion_Chan *ch, float32 a, float32 dt, boolean freeze)
 {
     const float32 dt2  = dt * dt;
     /* Process noise is read from the calibration block every tick. ch->sigmaA
@@ -407,8 +456,15 @@ static void fusion_chanPredict(Fusion_Chan *ch, float32 a, float32 dt)
     uint8   i;
     uint8   j;
 
-    ch->x[FS_POS] += (ch->x[FS_VEL] * dt) + (0.5f * aEff * dt2);
-    ch->x[FS_VEL] += aEff * dt;
+    if (freeze == FALSE)
+    {
+        ch->x[FS_POS] += (ch->x[FS_VEL] * dt) + (0.5f * aEff * dt2);
+        ch->x[FS_VEL] += aEff * dt;
+    }
+    else
+    {
+        /* held -- see \param freeze above */
+    }
     ch->x[FS_MEASB] *= f33;
     /* accBias is a constant plus random walk; measBias reverts to zero */
 
@@ -785,6 +841,11 @@ void Fusion_init(void)
     s_gnssLastGen = 0u;
     s_dtSinceGnssAlt = 0.0f;
 
+    s_gnssTrusted       = FALSE;
+    s_trustRun          = 0u;
+    s_untrustRun        = 0u;
+    s_dtSinceTrustedFix = 0.0f;
+
     /* g_baroLatch/g_gnssLatch (FusionLatch.h): the PRODUCER's state, zeroed
      * here even though Fusion_init() itself runs on CPU1 (via NavTask_init,
      * T12). Safe by construction, not by synchronisation: SensorTask_baro/
@@ -856,7 +917,7 @@ void Fusion_init(void)
     s_navState.verticalOk   = 0u;
     s_navState.horizontalOk = 0u;
     s_navState.originSet    = 0u;
-    s_navState.reserved     = 0u;
+    s_navState.gnssTrusted  = 0u;
 }
 
 /* Is this a number the filter can safely use?
@@ -1047,6 +1108,61 @@ static void fusion_correctGnss(void)
         /* the receiver is already being suitably modest */
     }
 
+    /* SWE1-FW-011: the trust decision, on the RAW reported hAcc (not the
+     * floored value above -- flooring is this filter's own conservatism
+     * about R, unrelated to whether the receiver's claim is believable at
+     * all). Debounced in CONSECUTIVE FIXES, not time or level: a chattering
+     * hAcc increments first one counter then resets it via the other every
+     * single fix, so neither ever reaches its threshold and the decision
+     * cannot flip on chatter. */
+    {
+        const float32 hAccMax = FusionCal_positive(g_fusionCal.gnssHAccMax, 0.0f,
+                                                    FCAL_GNSS_HACC_MAX_DEFAULT);
+
+        if (s_gnssHAcc <= hAccMax)
+        {
+            if (s_trustRun < FUSION_TRUST_ENTER_FIXES)
+            {
+                s_trustRun++;
+            }
+            else
+            {
+                /* already at the threshold: nothing to gain by counting on */
+            }
+            s_untrustRun = 0u;
+
+            if (s_trustRun >= FUSION_TRUST_ENTER_FIXES)
+            {
+                s_gnssTrusted = TRUE;
+            }
+            else
+            {
+                /* not yet 30 consecutive good fixes */
+            }
+        }
+        else
+        {
+            if (s_untrustRun < FUSION_TRUST_LEAVE_FIXES)
+            {
+                s_untrustRun++;
+            }
+            else
+            {
+                /* already at the threshold */
+            }
+            s_trustRun = 0u;
+
+            if (s_untrustRun >= FUSION_TRUST_LEAVE_FIXES)
+            {
+                s_gnssTrusted = FALSE;
+            }
+            else
+            {
+                /* not yet 10 consecutive bad fixes: trust, if any, holds */
+            }
+        }
+    }
+
     /* Inflate the position R. The receiver's hAcc describes a single fix; it
      * does NOT describe ten per second, because consecutive NAV-PVT solutions
      * share most of their information. Counting them as independent is what
@@ -1104,111 +1220,126 @@ static void fusion_correctGnss(void)
         zE = (float32)dLon * FUSION_1E7_TO_DEG * s_mPerDegLon;
     }
 
-    okN = fusion_chanUpdateSlewed(&s_chN, hPos, zN, rPos,
-                                  FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
-                                  gateMinSq, FUSION_NO_SLEW, &yN);
-    okE = fusion_chanUpdateSlewed(&s_chE, hPos, zE, rPos,
-                                  FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
-                                  gateMinSq, FUSION_NO_SLEW, &yE);
-
-    s_navState.innovN = yN;
-    s_navState.innovE = yE;
-
-    if ((okN != FALSE) && (okE != FALSE))
+    /* SWE1-FW-011 clause 2: "untrusted means no GNSS at all" -- position,
+     * velocity AND altitude are skipped together, all three, while the
+     * origin (already latched above, unconditionally) is kept. Clause 3/4's
+     * timer resets here, once per trusted fix, independent of whatever any
+     * individual sub-update's own outlier gate decides -- being trusted is
+     * what counts as "a fix was fused", not whether a specific channel
+     * happened to accept this specific sample. */
+    if (s_gnssTrusted != FALSE)
     {
-        s_navState.gnssUpdates++;
-    }
-    else
-    {
-        s_navState.gnssRejects++;
+        s_dtSinceTrustedFix = 0.0f;
 
-        if (s_chN.rejectRun >= FUSION_REJECT_MAX)
+        okN = fusion_chanUpdateSlewed(&s_chN, hPos, zN, rPos,
+                                      FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
+                                      gateMinSq, FUSION_NO_SLEW, &yN);
+        okE = fusion_chanUpdateSlewed(&s_chE, hPos, zE, rPos,
+                                      FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
+                                      gateMinSq, FUSION_NO_SLEW, &yE);
+
+        s_navState.innovN = yN;
+        s_navState.innovE = yE;
+
+        if ((okN != FALSE) && (okE != FALSE))
         {
-            /* A run of rejected fixes means the horizontal state is wrong, not
-             * the receiver. Re-acquire, exactly as the vertical channel does. */
-            /* Same rule as the vertical channel: the covariance is going back
-             * to its prior, so the mean must too -- all of it. These were
-             * leaving accBias untouched. */
-            s_chN.x[FS_POS]   = zN;
-            s_chE.x[FS_POS]   = zE;
-            s_chN.x[FS_VEL]   = 0.0f;
-            s_chE.x[FS_VEL]   = 0.0f;
-            s_chN.x[FS_ACCB]  = 0.0f;
-            s_chE.x[FS_ACCB]  = 0.0f;
-            s_chN.x[FS_MEASB] = 0.0f;
-            s_chE.x[FS_MEASB] = 0.0f;
-            fusion_chanResetCov(&s_chN);
-            fusion_chanResetCov(&s_chE);
-            s_chN.rejectRun = 0u;
-            s_chE.rejectRun = 0u;
+            s_navState.gnssUpdates++;
         }
         else
         {
-            fusion_chanInflate(&s_chN);
-            fusion_chanInflate(&s_chE);
+            s_navState.gnssRejects++;
+
+            if (s_chN.rejectRun >= FUSION_REJECT_MAX)
+            {
+                /* A run of rejected fixes means the horizontal state is wrong, not
+                 * the receiver. Re-acquire, exactly as the vertical channel does. */
+                /* Same rule as the vertical channel: the covariance is going back
+                 * to its prior, so the mean must too -- all of it. These were
+                 * leaving accBias untouched. */
+                s_chN.x[FS_POS]   = zN;
+                s_chE.x[FS_POS]   = zE;
+                s_chN.x[FS_VEL]   = 0.0f;
+                s_chE.x[FS_VEL]   = 0.0f;
+                s_chN.x[FS_ACCB]  = 0.0f;
+                s_chE.x[FS_ACCB]  = 0.0f;
+                s_chN.x[FS_MEASB] = 0.0f;
+                s_chE.x[FS_MEASB] = 0.0f;
+                fusion_chanResetCov(&s_chN);
+                fusion_chanResetCov(&s_chE);
+                s_chN.rejectRun = 0u;
+                s_chE.rejectRun = 0u;
+            }
+            else
+            {
+                fusion_chanInflate(&s_chN);
+                fusion_chanInflate(&s_chE);
+            }
+        }
+
+        /* Velocity. The receiver reports it as a 2-D speed and a heading, so it
+         * has to be resolved onto north and east before either channel can use it.
+         * This is the measurement that makes the horizontal accelerometer bias
+         * observable — position alone would leave bias and velocity entangled. */
+        headRad = s_gnssHeading * FUSION_DEG_TO_RAD;
+
+        {
+            const float32 sv   = FusionCal_positive(g_fusionCal.sigmaGnssVel, 0.0f,
+                                                   FUSION_SIGMA_GNSS_VEL);
+            const float32 rVel = sv * sv;
+            const float32 vN   = s_gnssSpeed * cosf(headRad);
+            const float32 vE   = s_gnssSpeed * sinf(headRad);
+            const float32 gateMinVelSq = 25.0f;   /* 5 m/s: a corrupt fix, not a manoeuvre */
+            float32 yvN = 0.0f;
+            float32 yvE = 0.0f;
+
+            /* Published rather than discarded: without these the velocity NIS
+             * (var(y)/(P+R)) cannot be computed, and the velocity channel is
+             * exactly the one the PSD reparametrisation above retunes. */
+            (void)fusion_chanUpdateSlewed(&s_chN, hVel, vN, rVel, FUSION_GATE_SIGMA_SQ,
+                                         gateMinVelSq, FUSION_NO_SLEW, &yvN);
+            (void)fusion_chanUpdateSlewed(&s_chE, hVel, vE, rVel, FUSION_GATE_SIGMA_SQ,
+                                         gateMinVelSq, FUSION_NO_SLEW, &yvE);
+
+            s_navState.innovVelN = yvN;
+            s_navState.innovVelE = yvE;
+        }
+
+        /* GNSS altitude, which is what makes the BAROMETER bias observable: the
+         * barometer sees (d + bias) and this sees d, so the pair separates them.
+         *
+         * vAcc is typically 1.5 to 2 times hAcc because every satellite is above
+         * the receiver and the vertical geometry is inherently poor, so this is
+         * deliberately a weak measurement — it is here to pin the slow drift, not
+         * to compete with the barometer for short-term altitude. */
+        {
+            const float32 zD      = -(s_gnssAlt - s_originAlt) + s_originAltOffset;
+            const float32 sigma   = hAcc * 2.0f;
+            /* SWE1-FW-010: read DIRECTLY, not through FusionCal_positive(), which
+             * would substitute the compiled default for 0 -- and 0 is a defined
+             * value here ("the GNSS-altitude update is off"). Bounded only
+             * against NaN and the absurd, per the requirement. */
+            const float32 slew    = g_fusionCal.gnssAltSlewMps;
+            const float32 maxStep = ((slew >= 0.0f) && (slew < FUSIONCAL_MAX))
+                                  ? (slew * s_dtSinceGnssAlt)
+                                  : (FCAL_GNSS_ALT_SLEW_DEFAULT * s_dtSinceGnssAlt);
+            float32 yd = 0.0f;
+
+            (void)fusion_chanUpdateSlewed(&s_chD, hPos, zD, sigma * sigma,
+                                         FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
+                                         gateMinSq, maxStep, &yd);
+
+            /* dtFix (the interval this bounds a RATE over) starts accumulating
+             * again from this fix, whether or not the update above was accepted
+             * by the outlier gate -- it measures "since we last had a GNSS
+             * altitude to offer", not "since the last accepted one". */
+            s_dtSinceGnssAlt = 0.0f;
         }
     }
-
-    /* Velocity. The receiver reports it as a 2-D speed and a heading, so it
-     * has to be resolved onto north and east before either channel can use it.
-     * This is the measurement that makes the horizontal accelerometer bias
-     * observable — position alone would leave bias and velocity entangled. */
-    headRad = s_gnssHeading * FUSION_DEG_TO_RAD;
-
+    else
     {
-        const float32 sv   = FusionCal_positive(g_fusionCal.sigmaGnssVel, 0.0f,
-                                               FUSION_SIGMA_GNSS_VEL);
-        const float32 rVel = sv * sv;
-        const float32 vN   = s_gnssSpeed * cosf(headRad);
-        const float32 vE   = s_gnssSpeed * sinf(headRad);
-        const float32 gateMinVelSq = 25.0f;   /* 5 m/s: a corrupt fix, not a manoeuvre */
-        float32 yvN = 0.0f;
-        float32 yvE = 0.0f;
-
-        /* Published rather than discarded: without these the velocity NIS
-         * (var(y)/(P+R)) cannot be computed, and the velocity channel is
-         * exactly the one the PSD reparametrisation above retunes. */
-        (void)fusion_chanUpdateSlewed(&s_chN, hVel, vN, rVel, FUSION_GATE_SIGMA_SQ,
-                                     gateMinVelSq, FUSION_NO_SLEW, &yvN);
-        (void)fusion_chanUpdateSlewed(&s_chE, hVel, vE, rVel, FUSION_GATE_SIGMA_SQ,
-                                     gateMinVelSq, FUSION_NO_SLEW, &yvE);
-
-        s_navState.innovVelN = yvN;
-        s_navState.innovVelE = yvE;
+        /* Untrusted: nothing published above changes this tick -- the
+         * position, velocity and altitude updates simply did not run. */
     }
-
-    /* GNSS altitude, which is what makes the BAROMETER bias observable: the
-     * barometer sees (d + bias) and this sees d, so the pair separates them.
-     *
-     * vAcc is typically 1.5 to 2 times hAcc because every satellite is above
-     * the receiver and the vertical geometry is inherently poor, so this is
-     * deliberately a weak measurement — it is here to pin the slow drift, not
-     * to compete with the barometer for short-term altitude. */
-    {
-        const float32 zD      = -(s_gnssAlt - s_originAlt) + s_originAltOffset;
-        const float32 sigma   = hAcc * 2.0f;
-        /* SWE1-FW-010: read DIRECTLY, not through FusionCal_positive(), which
-         * would substitute the compiled default for 0 -- and 0 is a defined
-         * value here ("the GNSS-altitude update is off"). Bounded only
-         * against NaN and the absurd, per the requirement. */
-        const float32 slew    = g_fusionCal.gnssAltSlewMps;
-        const float32 maxStep = ((slew >= 0.0f) && (slew < FUSIONCAL_MAX))
-                              ? (slew * s_dtSinceGnssAlt)
-                              : (FCAL_GNSS_ALT_SLEW_DEFAULT * s_dtSinceGnssAlt);
-        float32 yd = 0.0f;
-
-        (void)fusion_chanUpdateSlewed(&s_chD, hPos, zD, sigma * sigma,
-                                     FUSION_GNSS_GATE_K * FUSION_GNSS_GATE_K,
-                                     gateMinSq, maxStep, &yd);
-
-        /* dtFix (the interval this bounds a RATE over) starts accumulating
-         * again from this fix, whether or not the update above was accepted
-         * by the outlier gate -- it measures "since we last had a GNSS
-         * altitude to offer", not "since the last accepted one". */
-        s_dtSinceGnssAlt = 0.0f;
-    }
-
-    s_navState.horizontalOk = (s_chN.anchored != FALSE) ? 1u : 0u;
 }
 
 void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, boolean valid)
@@ -1226,14 +1357,25 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, bo
         s_navState.a_E = aE;
         s_navState.a_D = aD;
 
-        fusion_chanPredict(&s_chD, aD, dt);
-        fusion_chanPredict(&s_chN, aN, dt);
-        fusion_chanPredict(&s_chE, aE, dt);
+        /* SWE1-FW-011 clause 4: more than 2.0 s since GNSS was last both
+         * trusted and fused, the horizontal channels stop integrating.
+         * Decided on the timer's value as it stood at the START of this
+         * tick, same convention as every other predict-time decision here. */
+        {
+            const boolean freezeHoriz =
+                (s_dtSinceTrustedFix > FUSION_HORIZ_OK_TIMEOUT_S) ? TRUE : FALSE;
+
+            fusion_chanPredict(&s_chD, aD, dt, FALSE);
+            fusion_chanPredict(&s_chN, aN, dt, freezeHoriz);
+            fusion_chanPredict(&s_chE, aE, dt, freezeHoriz);
+        }
 
         /* SWE1-FW-010's dtFix: real elapsed time since the last GNSS-altitude
          * opportunity, whatever the tick rate -- reset inside
-         * fusion_correctGnss() itself, never here. */
-        s_dtSinceGnssAlt += dt;
+         * fusion_correctGnss() itself, never here. SWE1-FW-011's own timer
+         * (clause 3/4) is the same idea, reset there too. */
+        s_dtSinceGnssAlt    += dt;
+        s_dtSinceTrustedFix += dt;
 
         {
             BaroLatch_t baroSnap;
@@ -1311,6 +1453,16 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3], float32 dt, bo
 
     s_navState.verticalOk = (s_chD.anchored != FALSE) ? 1u : 0u;
     s_navState.covResets  = s_covResets;
+
+    /* SWE1-FW-011 clauses 3/4: recomputed EVERY tick, not just when a GNSS
+     * fix arrives -- a total outage (no fixes at all, so
+     * fusion_correctGnss() never runs) must still clear horizontalOk once
+     * s_dtSinceTrustedFix crosses the timeout, purely from time passing.
+     * NOT a latch (it used to be: s_chN.anchored set once, never cleared). */
+    s_navState.horizontalOk =
+        ((s_originOk != FALSE) && (s_gnssTrusted != FALSE)
+         && (s_dtSinceTrustedFix <= FUSION_HORIZ_OK_TIMEOUT_S)) ? 1u : 0u;
+    s_navState.gnssTrusted = (s_gnssTrusted != FALSE) ? 1u : 0u;
 
     *fusion = s_navState;
 }

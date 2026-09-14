@@ -110,9 +110,16 @@ typedef struct
                            *   to be small but NON-ZERO: the 10 Hz poll and the
                            *   10 Hz solution are on independent clocks         */
     uint8   verticalOk;   /**< 1 once the barometer has anchored the channel  */
-    uint8   horizontalOk; /**< 1 once the tangent-plane origin is set         */
+    uint8   horizontalOk; /**< SWE1-FW-011: 1 only while originSet AND
+                           *   gnssTrusted AND a fix was fused within the
+                           *   last 2.0 s -- NOT a latch (it used to be:
+                           *   set once at first anchor, never cleared) */
     uint8   originSet;    /**< 1 once a usable fix defined the origin         */
-    uint8   reserved;
+    uint8   gnssTrusted;  /**< SWE1-FW-011: 1 while the reported hAcc has
+                           *   satisfied gnssHAccMax for 30 consecutive fixes,
+                           *   0 after 10 consecutive fixes that did not.
+                           *   Independent of GnssNavOk ("the receiver has a
+                           *   fix"), which keeps its own meaning */
 } FusionValues;
 
 /** Reset every channel, the covariances, and both position references. */

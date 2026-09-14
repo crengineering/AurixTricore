@@ -68,7 +68,7 @@ void setUp(void)
     s_fusion.gnssRejects = 3u; s_fusion.gnssUpdates = 4u; s_fusion.covResets = 5u;
     s_fusion.gnssITow = 123456u; s_fusion.dropped = 6u; s_fusion.gnssDupes = 7u;
     s_fusion.verticalOk = 1u; s_fusion.horizontalOk = 1u; s_fusion.originSet = 1u;
-    s_fusion.reserved = 0u;
+    s_fusion.gnssTrusted = 0u;
 
     s_imuAcc[0]  = 0.1f;  s_imuAcc[1]  = 0.2f;  s_imuAcc[2]  = -0.98f;
     s_imuGyro[0] = 1.0f;  s_imuGyro[1] = -2.0f; s_imuGyro[2] = 3.0f;

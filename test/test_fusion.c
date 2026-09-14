@@ -287,7 +287,10 @@ void test_gnss_noise_to_zero_snaps_position_and_variance(void)
     const sint32 lat0 = 482000000, lon0 = 116000000;
     uint32 itow = 1000u;
     int i;
-    for (i = 0; i < 200; ++i)
+    /* SWE1-FW-011: horizontalOk now needs 30 CONSECUTIVE trusted fixes
+     * (hAcc = 2.4 m <= the 4.0 m default), not just one -- 700 ticks at one
+     * fix per 20 gives 35, comfortably past the debounce. */
+    for (i = 0; i < 700; ++i)
     {
         if ((i % 20) == 0)
         {
@@ -297,7 +300,8 @@ void test_gnss_noise_to_zero_snaps_position_and_variance(void)
         Fusion_setBaroAlt(600.0f, TRUE);
         Fusion_update(&f, ZERO3, DT, TRUE);
     }
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.originSet, "no origin after 10 clean fixes");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.originSet, "no origin after 35 clean fixes");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.gnssTrusted, "gnssTrusted never set after 35 clean fixes");
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.horizontalOk, "horizontalOk never set");
 
     g_fusionCal.gnssPosRScale = 1e-8f;      /* R -> 0 */
@@ -963,6 +967,194 @@ void test_gnss_alt_slew_small_offset_does_not_bind_once_converged(void)
     TEST_ASSERT_EQUAL_FLOAT_MESSAGE(fNoLimit.a_d, fDefault.a_d, msg);
 }
 
+/* ==========================================================================
+ * SWE1-FW-011 -- GNSS is trusted by accuracy, an untrusted fix invalidates
+ * the horizontal estimate
+ * ======================================================================== */
+
+void test_gnss_trust_chatter_never_flips(void)
+{
+    /* SWE1-FW-011 (c): the debounce is on CONSECUTIVE fixes, so an hAcc that
+     * alternates every fix can never reach 30 (to enter) or 10 (to leave) --
+     * it resets the OTHER counter every single time instead. Checked from
+     * both starting points: never-yet-trusted, and already-trusted. */
+    static const sint32 LAT0 = 482000000, LON0 = 116000000;
+    FusionValues f; memset(&f, 0, sizeof f);
+    uint32 itow = 1000u;
+    int i;
+
+    /* Starting FALSE: alternate good (2 m) / bad (6 m) every fix, 2000 fixes. */
+    for (i = 0; i < 40000; ++i)
+    {
+        if ((i % 20) == 0)
+        {
+            const float32 hacc = (((i / 20) % 2) == 0) ? 2.0f : 6.0f;
+            Fusion_setGnss(LAT0, LON0, 600.0f, 0.0f, 0.0f, hacc, itow, TRUE);
+            itow += 100u;
+        }
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(&f, ZERO3, DT, TRUE);
+    }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0u, f.gnssTrusted,
+        "chattering hAcc flipped gnssTrusted away from its initial FALSE");
+
+    /* Starting TRUE: 40 clean fixes to enter, then chatter for 2000 more. */
+    setUp();
+    for (i = 0; i < 800; ++i)
+    {
+        if ((i % 20) == 0)
+        {
+            Fusion_setGnss(LAT0, LON0, 600.0f, 0.0f, 0.0f, 2.0f, itow, TRUE);
+            itow += 100u;
+        }
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(&f, ZERO3, DT, TRUE);
+    }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.gnssTrusted, "did not enter trust after 40 clean fixes");
+
+    for (i = 0; i < 40000; ++i)
+    {
+        if ((i % 20) == 0)
+        {
+            const float32 hacc = (((i / 20) % 2) == 0) ? 2.0f : 6.0f;
+            Fusion_setGnss(LAT0, LON0, 600.0f, 0.0f, 0.0f, hacc, itow, TRUE);
+            itow += 100u;
+        }
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(&f, ZERO3, DT, TRUE);
+    }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.gnssTrusted,
+        "chattering hAcc dropped gnssTrusted away from its previous TRUE");
+}
+
+void test_gnss_trust_short_outage_keeps_horizontal_ok_and_predicting(void)
+{
+    /* SWE1-FW-011 (c): a 1.5 s total GNSS outage leaves horizontalOk = 1 and
+     * the channels predicting (P keeps growing -- proof the predict step is
+     * still moving, not frozen). */
+    FusionValues f; memset(&f, 0, sizeof f);
+    int i;
+
+    anchorGnssAndBaro(&f, 600.0f, 2.0f, 40000);   /* 200 s: well past 30 fixes */
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.gnssTrusted, "never trusted after anchor");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.horizontalOk, "never anchored after anchor");
+    const float32 pNNBefore = f.pNN;
+
+    const int outageTicks = (int)(1.5f / DT);
+    for (i = 0; i < outageTicks; ++i)
+    {
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(&f, ZERO3, DT, TRUE);   /* no Fusion_setGnss at all */
+    }
+
+    char msg[200];
+    (void)snprintf(msg, sizeof msg, "after 1.5 s outage: horizontalOk=%u pNN %.9g -> %.9g",
+        (unsigned)f.horizontalOk, (double)pNNBefore, (double)f.pNN);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.horizontalOk, msg);
+    TEST_ASSERT_TRUE_MESSAGE(f.pNN > pNNBefore, msg);
+}
+
+void test_gnss_trust_long_outage_clears_horizontal_ok_and_freezes(void)
+{
+    /* SWE1-FW-011 (c): a 5.0 s outage clears horizontalOk and freezes both
+     * horizontal channels (x[FS_POS]/x[FS_VEL] held from the 2.0 s mark
+     * onward, per clause 4) -- checked by injecting a nonzero acceleration
+     * during the outage, which a predicting channel WOULD move on. */
+    FusionValues f; memset(&f, 0, sizeof f);
+    const float32 accel[3] = { 0.3f, -0.2f, 0.0f };   /* would move posN/posE if not frozen */
+    int i;
+
+    anchorGnssAndBaro(&f, 600.0f, 2.0f, 40000);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.horizontalOk, "never anchored after anchor");
+
+    const int toFreezeTicks = (int)(2.1f / DT);   /* just past the 2.0 s freeze mark */
+    for (i = 0; i < toFreezeTicks; ++i)
+    {
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(&f, ZERO3, DT, TRUE);
+    }
+    const float32 posNFrozen = f.posN;
+    const float32 posEFrozen = f.posE;
+    const float32 velNFrozen = f.velN;
+
+    const int toFiveSTicks = (int)(5.0f / DT) - toFreezeTicks;
+    for (i = 0; i < toFiveSTicks; ++i)
+    {
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(&f, accel, DT, TRUE);   /* real acceleration, still no GNSS */
+    }
+
+    char msg[240];
+    (void)snprintf(msg, sizeof msg,
+        "after 5.0 s outage: horizontalOk=%u posN %.9g -> %.9g posE -> %.9g velN -> %.9g",
+        (unsigned)f.horizontalOk, (double)posNFrozen, (double)f.posN,
+        (double)f.posE, (double)f.velN);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0u, f.horizontalOk, msg);
+    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(posNFrozen, f.posN, msg);
+    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(posEFrozen, f.posE, msg);
+    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(velNFrozen, f.velN, msg);
+    assertFusionSane(&f, "5 s outage, frozen");
+}
+
+void test_gnss_trust_reacquires_after_exactly_30_fixes_origin_kept(void)
+{
+    /* SWE1-FW-011 (c): trust lost via 10 consecutive bad fixes re-enters
+     * only after exactly 30 consecutive good ones -- not before, not later
+     * -- and the origin is never reset by any of it. */
+    static const sint32 LAT0 = 482000000, LON0 = 116000000;
+    FusionValues f; memset(&f, 0, sizeof f);
+    uint32 itow = 1000u;
+    int i;
+
+    anchorGnssAndBaro(&f, 600.0f, 2.0f, 40000);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.gnssTrusted, "never trusted after anchor");
+    const float32 originLat = f.originLatDeg;
+    const float32 originLon = f.originLonDeg;
+
+    /* 10 consecutive bad fixes: loses trust. */
+    for (i = 0; i < (10 * 20); ++i)
+    {
+        if ((i % 20) == 0)
+        {
+            Fusion_setGnss(LAT0, LON0, 600.0f, 0.0f, 0.0f, 6.0f, itow, TRUE);
+            itow += 100u;
+        }
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(&f, ZERO3, DT, TRUE);
+    }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0u, f.gnssTrusted, "did not lose trust after 10 bad fixes");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.originSet, "origin cleared by losing trust");
+
+    /* 29 good fixes: must still be untrusted. */
+    for (i = 0; i < (29 * 20); ++i)
+    {
+        if ((i % 20) == 0)
+        {
+            Fusion_setGnss(LAT0, LON0, 600.0f, 0.0f, 0.0f, 2.0f, itow, TRUE);
+            itow += 100u;
+        }
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(&f, ZERO3, DT, TRUE);
+    }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0u, f.gnssTrusted, "trusted before the 30th good fix");
+
+    /* the 30th good fix: must now be trusted. */
+    for (i = 0; i < 20; ++i)
+    {
+        if ((i % 20) == 0)
+        {
+            Fusion_setGnss(LAT0, LON0, 600.0f, 0.0f, 0.0f, 2.0f, itow, TRUE);
+            itow += 100u;
+        }
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(&f, ZERO3, DT, TRUE);
+    }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.gnssTrusted, "not trusted after exactly 30 good fixes");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.originSet, "origin cleared by re-acquisition");
+    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(originLat, f.originLatDeg, "origin latitude moved");
+    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(originLon, f.originLonDeg, "origin longitude moved");
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -988,5 +1180,9 @@ int main(void)
     RUN_TEST(test_gnss_alt_slew_zero_is_bit_identical_to_no_gnss_altitude);
     RUN_TEST(test_gnss_alt_slew_covariance_stays_psd_over_1e6_steps);
     RUN_TEST(test_gnss_alt_slew_small_offset_does_not_bind_once_converged);
+    RUN_TEST(test_gnss_trust_chatter_never_flips);
+    RUN_TEST(test_gnss_trust_short_outage_keeps_horizontal_ok_and_predicting);
+    RUN_TEST(test_gnss_trust_long_outage_clears_horizontal_ok_and_freezes);
+    RUN_TEST(test_gnss_trust_reacquires_after_exactly_30_fixes_origin_kept);
     return UNITY_END();
 }

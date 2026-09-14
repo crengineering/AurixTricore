@@ -1307,6 +1307,11 @@ ASAP2_VERSION 1 61
       ECU_ADDRESS 0x700305BC
     /end MEASUREMENT
 
+    /begin MEASUREMENT NavGnssTrusted "SWE1-FW-011: 1 while the estimator trusts the GNSS receivers reported hAcc (gnssHAccMax, live-tunable) -- separate from GnssNavOk, which only means the receiver claims a usable fix"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x700305BD
+    /end MEASUREMENT
+
     /begin MEASUREMENT CtrlPhiIst0 "FLIGHT CONTROL FEEDBACK: attitude for att_ctrl_step, element 0 of [roll, pitch, yaw]. RADIANS, not degrees - this is the controller's own unit"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 -6.3 6.3
       ECU_ADDRESS 0x700305C0

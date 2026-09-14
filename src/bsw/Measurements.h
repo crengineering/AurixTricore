@@ -249,7 +249,11 @@ extern volatile Xcp_Data g_xcpData;
  *   0xB4  uint32  gnssITow     iTOW of the last fix fused [ms]
  *   0xB8  uint32  gnssDupes    polls carrying an already-fused fix
  *   0xBC  uint8   ahrsBiasDegraded  1 = gyro bias taken while moving
- *   0xBD  uint8   reserved3[3]
+ *   0xBD  uint8   reserved3[3]  [0] = gnssTrusted (SWE1-FW-011): 0/1, the
+ *                              estimator's own trust decision on the
+ *                              receiver's reported hAcc, separate from
+ *                              GnssNavOk ("the receiver has a fix"); [1],
+ *                              [2] stay free
  *   0xF0  uint32  navDropped   measurements refused at the input as NaN,
  *                              infinite or absurd. MUST be 0 with healthy
  *                              sensors -- a rising count IS the sensor fault

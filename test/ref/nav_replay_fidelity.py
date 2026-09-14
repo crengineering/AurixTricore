@@ -114,8 +114,22 @@ def main() -> int:
 
     if int(rows[-1]["verticalOk"]) != 1:
         fail("verticalOk did not reach 1 over the excerpt")
-    if int(rows[-1]["horizontalOk"]) != 1:
-        fail("horizontalOk did not reach 1 over the excerpt")
+    if int(rows[-1]["originSet"]) != 1:
+        fail("originSet did not reach 1 over the excerpt")
+    # SWE1-FW-011: this excerpt is 40 s of the 2026-09-14 INDOOR recording,
+    # hAcc 4.6-6.8 m throughout -- always above gnssHAccMax's 4.0 m default,
+    # which is the whole point of the trust gate (docs/NAV_STRAND_2026-09.md
+    # section 3.3). horizontalOk reaching 1 here would mean the trust gate
+    # is not doing its job, not that the fidelity is good.
+    if int(rows[-1]["horizontalOk"]) != 0:
+        fail("horizontalOk reached 1 on an indoor (untrusted) excerpt -- "
+             "the SWE1-FW-011 trust gate is not refusing it")
+    else:
+        note("horizontalOk stayed 0 (indoor, untrusted, as SWE1-FW-011 requires)")
+    if int(rows[-1]["gnssTrusted"]) != 0:
+        fail("gnssTrusted reached 1 on an indoor excerpt")
+    else:
+        note("gnssTrusted stayed 0")
 
     if failures:
         print(f"\n{len(failures)} FAILURE(S)")

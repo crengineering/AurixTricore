@@ -148,7 +148,7 @@ CSV_COLUMNS = [
     "posN", "posE", "velN", "velE", "accBiasN", "accBiasE", "innovN",
     "innovE", "pNN", "aN", "aE",
     "rejects", "resets", "gnssRejects", "gnssUpdates", "covResets",
-    "verticalOk", "horizontalOk", "originSet",
+    "verticalOk", "horizontalOk", "originSet", "gnssTrusted",
 ]
 
 FUSION_DT_MIN = 1.0e-4
@@ -732,7 +732,22 @@ def compute_metrics(rows: list[dict], rec: Recording, cal: dict) -> dict:
         "verticalOk_final": int(col["verticalOk"][-1]),
         "horizontalOk_final": int(col["horizontalOk"][-1]),
         "originSet_final": int(col["originSet"][-1]),
+        "gnssTrusted_final": int(col["gnssTrusted"][-1]),
     }
+    # SWE1-FW-011 (a)/(b): the fraction of the run GNSS was trusted, and the
+    # largest sample-to-sample jump in the (supposedly frozen) horizontal
+    # position while untrusted.
+    trusted = col["gnssTrusted"] != 0
+    metrics["gnssTrusted_pct"] = float(100.0 * trusted.sum() / len(trusted)) if len(trusted) else 0.0
+    untrusted = ~trusted
+    if untrusted.sum() > 1:
+        dN = np.abs(np.diff(posN[untrusted]))
+        dE = np.abs(np.diff(posE[untrusted]))
+        metrics["untrusted_posN_max_delta"] = float(dN.max()) if len(dN) else 0.0
+        metrics["untrusted_posE_max_delta"] = float(dE.max()) if len(dE) else 0.0
+    else:
+        metrics["untrusted_posN_max_delta"] = None
+        metrics["untrusted_posE_max_delta"] = None
 
     metrics["lift_events"] = detect_steps(t, -posD)  # -posD: NED down -> up
 
@@ -775,7 +790,12 @@ def print_report(mf4_path: Path, cal: dict, metrics: dict) -> None:
     print(f"counters: baroRejects={c['baroRejects']} baroResets={c['baroResets']} "
           f"gnssRejects={c['gnssRejects']} gnssUpdates={c['gnssUpdates']} "
           f"covResets={c['covResets']} verticalOk={c['verticalOk_final']} "
-          f"horizontalOk={c['horizontalOk_final']} originSet={c['originSet_final']}")
+          f"horizontalOk={c['horizontalOk_final']} originSet={c['originSet_final']} "
+          f"gnssTrusted={c['gnssTrusted_final']}")
+    print(f"gnssTrusted {metrics['gnssTrusted_pct']:.2f} % of the run"
+          + (f"; while untrusted, max|delta| N={metrics['untrusted_posN_max_delta']:.4f} m "
+             f"E={metrics['untrusted_posE_max_delta']:.4f} m"
+             if metrics["untrusted_posN_max_delta"] is not None else ""))
     if metrics["lift_events"]:
         print()
         print("detected vertical steps (baro-driven, replayable per SWE1-FW-013 a):")

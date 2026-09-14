@@ -32,14 +32,14 @@ static void header(void)
     printf("step,d,vd,accBiasD,baroBias,innov,p00,aD,"
            "posN,posE,velN,velE,accBiasN,accBiasE,innovN,innovE,pNN,aN,aE,"
            "rejects,resets,gnssRejects,gnssUpdates,covResets,"
-           "verticalOk,horizontalOk,originSet\n");
+           "verticalOk,horizontalOk,originSet,gnssTrusted\n");
 }
 
 static void row(void)
 {
     printf("%lu,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,"
            "%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,"
-           "%u,%u,%u,%u,%u,%u,%u,%u\n",
+           "%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
            step,
            (double)f.a_d, (double)f.a_v_d, (double)f.accBiasD, (double)f.baroBias,
            (double)f.innov, (double)f.p00, (double)f.a_D,
@@ -48,7 +48,8 @@ static void row(void)
            (double)f.pNN, (double)f.a_N, (double)f.a_E,
            (unsigned)f.rejects, (unsigned)f.resets, (unsigned)f.gnssRejects,
            (unsigned)f.gnssUpdates, (unsigned)f.covResets,
-           (unsigned)f.verticalOk, (unsigned)f.horizontalOk, (unsigned)f.originSet);
+           (unsigned)f.verticalOk, (unsigned)f.horizontalOk, (unsigned)f.originSet,
+           (unsigned)f.gnssTrusted);
 }
 
 static void setCal(const char *name, double v)
