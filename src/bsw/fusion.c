@@ -1752,6 +1752,11 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3],
         const float32 aN = fusion_clampAcc(accNed[0]);
         const float32 aE = fusion_clampAcc(accNed[1]);
         const float32 aD = fusion_clampAcc(accNed[2]);
+        /* Task 18 (flight-reviewer/architect, 2026-09-14): set below in the
+         * detector block, consumed in the GNSS block further down -- see
+         * that block's own comment for why the actual install is deferred
+         * that far. */
+        boolean releasedThisTick = FALSE;
 
         s_navState.a_N = aN;
         s_navState.a_E = aE;
@@ -1830,12 +1835,14 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3],
             if ((wasLocked != FALSE) && (s_stationaryLocked == FALSE))
             {
                 /* SWE1-FW-015: release, this tick -- an IMU-detected release
-                 * and an interlock-driven one (above) both land here, the
-                 * one path fusion_releaseGnssBias() is ever called from.
+                 * and an interlock-driven one (above) both land here. Task
+                 * 18 (2026-09-14): the actual fusion_releaseGnssBias() call
+                 * is deferred to the GNSS block below, AFTER that block's
+                 * own latch read, not fired here -- see its comment for why.
                  * Installing the bias does NOT touch x[FS_POS]/x[FS_VEL] --
                  * the state is continuous by construction, nothing jumps
-                 * here. */
-                fusion_releaseGnssBias();
+                 * either way. */
+                releasedThisTick = TRUE;
             }
             else
             {
@@ -1892,6 +1899,7 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3],
 
         {
             GnssLatch_t gnssSnap;
+            boolean haveNewFix = FALSE;
 
             if ((gnssLatch_get(&gnssSnap) != FALSE) && (gnssSnap.gen != s_gnssLastGen))
             {
@@ -1902,7 +1910,39 @@ void Fusion_update(FusionValues *fusion, const float32 accNed[3],
                 s_gnssHeading = gnssSnap.headingDeg;
                 s_gnssHAcc    = gnssSnap.hAccM;
                 s_gnssLastGen = gnssSnap.gen;
+                haveNewFix    = TRUE;
+            }
+            else
+            {
+                /* no new fix this tick */
+            }
 
+            if (releasedThisTick != FALSE)
+            {
+                /* SWE1-FW-015, task 18 (2026-09-14): install the release
+                 * bias HERE, after the latch read directly above, not in
+                 * the detector block further up -- if a fix lands on the
+                 * exact release tick, s_gnssLat/Lon are ALREADY the fresh
+                 * one by this point, so fusion_releaseGnssBias() (which
+                 * always reads whichever is currently cached) computes the
+                 * bias from that fix, and fusion_correctGnss() immediately
+                 * below sees a corrected innovation of exactly zero
+                 * unconditionally -- not only when the release and the next
+                 * fix happen to land on different ticks, which is what the
+                 * old ordering left to chance (flight-reviewer/architect,
+                 * measured 0.0243 m on t1 where a same-tick fix landed).
+                 * When no fix lands on this tick, s_gnssLat/Lon are
+                 * whatever was already cached, same as before -- ordering
+                 * this after an EMPTY latch read changes nothing. */
+                fusion_releaseGnssBias();
+            }
+            else
+            {
+                /* not a release this tick */
+            }
+
+            if (haveNewFix != FALSE)
+            {
                 fusion_correctGnss();
                 s_navState.gnssITow = gnssSnap.iTOW;
             }

@@ -1880,6 +1880,89 @@ void test_gnss_bias_decay_bit_identical_after_the_hoist(void)
     }
 }
 
+/* ==========================================================================
+ * SWE1-FW-015 (d)(1), task 18 (architect, 2026-09-14): a fix landing on the
+ * exact release tick must not step the position -- the release bias has to
+ * be installed from THAT fix, not a stale cached one.
+ * ======================================================================== */
+
+void test_release_bias_uses_the_fix_that_lands_on_the_release_tick(void)
+{
+    /* FAILS ON THE OLD CODE (0.0243 m measured on t1, --force-release-at 60,
+     * row 600, gnssUpdates 0->1 on the exact release row): the old ordering
+     * installed the bias from whatever fix was cached BEFORE the GNSS latch
+     * read that same tick, so a fix landing on the release tick itself was
+     * fused against a bias computed from the PREVIOUS fix -- a nonzero
+     * innovation of (new fix - previous fix), an ordinary few centimetres of
+     * GNSS jitter that had nothing to do with the release. New code installs
+     * the bias AFTER the latch read (fusion.c Fusion_update(), the GNSS
+     * block), so on a same-tick fix, bias = (this fix) - x[FS_POS] exactly,
+     * and the corrected innovation is zero by construction, not by luck of
+     * timing. */
+    static const sint32 LAT0 = 482000000, LON0 = 116000000;
+    static const float32 staleOffsetN = 3.0f;   /* cached before release */
+    static const float32 freshOffsetN = 3.5f;   /* lands ON the release tick */
+    FusionValues f; memset(&f, 0, sizeof f);
+    uint32 itow = 1000u;
+    int i;
+
+    for (i = 0; i < 4000; ++i)   /* 20 s: anchor + lock at the origin */
+    {
+        if ((i % 20) == 0)
+        {
+            Fusion_setGnss(LAT0, LON0, 600.0f, 0.0f, 0.0f, 2.0f, itow, TRUE);
+            itow += 100u;
+        }
+        if ((i % 2) == 0) { Fusion_setBaroAlt(600.0f, TRUE); }
+        Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+    }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.stationaryLocked, "never locked");
+
+    /* while still locked: latch and consume the STALE offset -- this is
+     * what a plain release (no coincident fix) would use. */
+    {
+        const sint32 dLat = (sint32)((staleOffsetN / 111132.0f) * 1.0e7f);
+        Fusion_setGnss(LAT0 + dLat, LON0, 600.0f, 0.0f, 0.0f, 2.0f, itow, TRUE);
+        itow += 100u;
+    }
+    Fusion_update(&f, ZERO3, ZERO3, 1.0f, DT, TRUE);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.stationaryLocked, "released too early");
+
+    /* first of the two consecutive "moving" samples FUSION_LOCK_RELEASE_
+     * SAMPLES needs -- still locked after this one, no new fix. */
+    Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1u, f.stationaryLocked,
+        "released after only one violating sample");
+
+    const float32 posNBefore = f.posN;
+    const float32 posEBefore = f.posE;
+
+    /* latch the FRESH offset now, so it is waiting when the SECOND violating
+     * sample's Fusion_update() call -- the release tick itself -- reads the
+     * GNSS latch. */
+    {
+        const sint32 dLat = (sint32)((freshOffsetN / 111132.0f) * 1.0e7f);
+        Fusion_setGnss(LAT0 + dLat, LON0, 600.0f, 0.0f, 0.0f, 2.0f, itow, TRUE);
+        itow += 100u;
+    }
+    Fusion_update(&f, ZERO3, MOVING_RATE, 1.0f, DT, TRUE);   /* the release tick */
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0u, f.stationaryLocked, "did not release");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1u, f.gnssUpdates,
+        "the fresh fix was not actually fused on the release tick -- test setup is wrong");
+
+    const float32 stepN = fabsf(f.posN - posNBefore);
+    const float32 stepE = fabsf(f.posE - posEBefore);
+    const float32 step = (stepN > stepE) ? stepN : stepE;
+
+    char msg[220];
+    (void)snprintf(msg, sizeof msg,
+        "step at the release tick with a same-tick fix: %.9g m "
+        "(posN %.9g -> %.9g, posE %.9g -> %.9g)",
+        (double)step, (double)posNBefore, (double)f.posN,
+        (double)posEBefore, (double)f.posE);
+    TEST_ASSERT_TRUE_MESSAGE(step <= 0.02f, msg);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -1923,5 +2006,6 @@ int main(void)
     RUN_TEST(test_gnss_alt_dtfix_resets_through_a_long_lock_not_just_on_use);
     RUN_TEST(test_gnss_alt_dtfix_clamped_during_a_total_outage);
     RUN_TEST(test_gnss_bias_decay_bit_identical_after_the_hoist);
+    RUN_TEST(test_release_bias_uses_the_fix_that_lands_on_the_release_tick);
     return UNITY_END();
 }
