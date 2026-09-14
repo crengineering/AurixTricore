@@ -68,6 +68,16 @@ correctly by this hold with no special-casing.
 Usage
 -----
     python tools/nav_replay.py <file.mf4>
+    python tools/nav_replay.py <file.csv> --start 770.334   # bench recorder
+                                                             # CSV (task 3b);
+                                                             # t_rel is since
+                                                             # the recorder
+                                                             # armed, not
+                                                             # since boot --
+                                                             # use --start to
+                                                             # select the
+                                                             # post-reconnect
+                                                             # segment
     python tools/nav_replay.py <file.mf4> --cal gnssPosRScale=1.0 --cal sigmaGnssVel=0.12
     python tools/nav_replay.py <file.mf4> --start 0 --end 40 --dump-commands cmds.txt
     python tools/nav_replay.py <file.mf4> --dump-csv trace.csv --dump-metrics metrics.json
@@ -172,23 +182,10 @@ class Recording:
     ]
 
     def __init__(self, path: Path, start: Optional[float], end: Optional[float]):
-        raw = {}
-        with MDF(path) as mdf:
-            available = set(mdf.channels_db.keys())
-            missing = [name for name in self.NEEDED if name not in available]
-            if missing:
-                raise SystemExit(
-                    f"{path.name}: not replayable -- missing channel(s) "
-                    f"{missing}. This recording predates one or more of "
-                    "AttAccNed{0,1,2} (needed to drive STEP) and the Nav* "
-                    "estimator outputs (needed as ground truth); "
-                    "nav_replay.py cannot reconstruct either from raw "
-                    "IMU/GNSS alone (that IS the estimator). Not faked -- "
-                    "report this recording as not replayable.")
-            for name in self.NEEDED:
-                sig = mdf.get(name)
-                raw[name] = (sig.timestamps.astype(np.float64),
-                             sig.samples.astype(np.float64))
+        if path.suffix.lower() == ".csv":
+            raw = self._load_csv(path)
+        else:
+            raw = self._load_mf4(path)
 
         t_acc = raw["AttAccNed0"][0]
         lo = -np.inf if start is None else start
@@ -209,6 +206,59 @@ class Recording:
             if name.startswith("AttAccNed"):
                 continue
             self.sig[name] = hold_at(t_src, x_src, self.t)
+
+    @classmethod
+    def _load_mf4(cls, path: Path) -> dict:
+        raw = {}
+        with MDF(path) as mdf:
+            available = set(mdf.channels_db.keys())
+            missing = [name for name in cls.NEEDED if name not in available]
+            if missing:
+                raise SystemExit(
+                    f"{path.name}: not replayable -- missing channel(s) "
+                    f"{missing}. This recording predates one or more of "
+                    "AttAccNed{0,1,2} (needed to drive STEP) and the Nav* "
+                    "estimator outputs (needed as ground truth); "
+                    "nav_replay.py cannot reconstruct either from raw "
+                    "IMU/GNSS alone (that IS the estimator). Not faked -- "
+                    "report this recording as not replayable.")
+            for name in cls.NEEDED:
+                sig = mdf.get(name)
+                raw[name] = (sig.timestamps.astype(np.float64),
+                             sig.samples.astype(np.float64))
+        return raw
+
+    @classmethod
+    def _load_csv(cls, path: Path) -> dict:
+        """Minimal CSV front end (SWE1-FW-013 task 3b): a from-boot bench
+        recording made by a plain XCP reconnect-loop poller has no AHRS/
+        AttAccNed timebase alignment work to do -- every column is read on
+        one shared clock already -- so this is a thin format swap, not a
+        second data model. The CSV must carry a `t_rel` column (seconds
+        since the recorder armed, NOT since boot -- use --start/--end to
+        select the from-boot segment, e.g. after a reconnect) plus one
+        column per name in NEEDED, named exactly like the MF4 channels."""
+        with path.open(newline="", encoding="utf-8") as fh:
+            reader = csv.DictReader(fh)
+            fields = reader.fieldnames or []
+            if "t_rel" not in fields:
+                raise SystemExit(f"{path.name}: no 't_rel' column -- not a "
+                                  "recognised from-boot recorder CSV")
+            missing = [name for name in cls.NEEDED if name not in fields]
+            if missing:
+                raise SystemExit(
+                    f"{path.name}: not replayable -- missing column(s) "
+                    f"{missing}. Not faked -- report this recording as not "
+                    "replayable.")
+            t: list[float] = []
+            cols: dict[str, list[float]] = {name: [] for name in cls.NEEDED}
+            for row in reader:
+                t.append(float(row["t_rel"]))
+                for name in cls.NEEDED:
+                    cols[name].append(float(row[name]))
+        t_arr = np.array(t, dtype=np.float64)
+        return {name: (t_arr, np.array(vals, dtype=np.float64))
+                for name, vals in cols.items()}
 
     def dt(self) -> np.ndarray:
         d = np.empty_like(self.t)
