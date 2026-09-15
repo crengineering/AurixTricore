@@ -345,4 +345,16 @@ if(Python3_FOUND)
                      $<TARGET_FILE:gen_fusion_trace>
                      ${CMAKE_CURRENT_SOURCE_DIR}/data)
     set_tests_properties(nav_replay PROPERTIES TIMEOUT 600)
+
+    #[[
+    nav_outdoor_eval (SYS2-NAV-003 / SWE1-FW-012/-013): the window/step/
+    radius math behind tools/nav_outdoor_eval.py, checked on hand-computable
+    synthetic traces -- no MF4, no gen_fusion_trace, no asammdf (that import
+    is lazy in the tool itself, only inside Recording.__init__, precisely so
+    this test needs nothing this CI job does not already have).
+    ]]
+    add_test(NAME nav_outdoor_eval
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/ref/nav_outdoor_eval_test.py)
+    set_tests_properties(nav_outdoor_eval PROPERTIES TIMEOUT 120)
 endif()
