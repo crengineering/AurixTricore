@@ -23,6 +23,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+      - name: Install numpy
+        run: pip install numpy    # ctest nav_outdoor_eval: window/step/radius math only, no asammdf needed
       - name: Run Unit tests
         run: python3 tools/utest.py
       - name: Tests into summary
@@ -34,6 +36,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+      - name: Install numpy
+        run: pip install numpy    # ctest nav_outdoor_eval: window/step/radius math only, no asammdf needed
       - name: Run Sanitize checks
         run: python3 tools/utest.py --variant sanitize
   coverage:
@@ -44,6 +48,8 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install gcovr
         run: pip install gcovr
+      - name: Install numpy
+        run: pip install numpy    # ctest nav_outdoor_eval: window/step/radius math only, no asammdf needed
       - name: Run coverage checks
         run: python3 tools/utest.py --variant coverage
       - name: Coverage into summary
