@@ -125,6 +125,13 @@ flash.bat            :: AURIXFlasher, erase + program + verify
 erase_flash.bat      :: full chip erase
 ```
 
+`flash.bat`'s post-flash XCP version check waits 3 s for the board to finish
+booting before its first CONNECT, then retries up to 3 times (2 s apart) —
+added 2026-09-15 after two spurious "Maximum CONNECT retries reached"
+failures on a board that was actually fine. A build whose version genuinely
+does not match still fails on every attempt and reports **VERSION CHECK
+FEHLGESCHLAGEN** with exit code 1, unchanged.
+
 ### Watch it run
 
 ```bat
