@@ -49,6 +49,19 @@ the receiver. 2b-2 says that at rest it does not have to — the receiver is
 simply not consulted. The residual metre-class wander in 2b-1 is then confined
 to the part of the flight where the vehicle is actually moving.
 
+**2b-3, added 2026-09-14 after the second indoor recording — a consequence, not
+a design change.** No threshold, mechanism or approved number changes. What
+changes is that SWE1-FW-011's acceptance clause (e) was written against an
+assumption the data has refuted (that indoors always fails the hAcc gate; it
+does not — 47.6 % of a 410 s at-rest run was nominally trusted), and that the
+residual risk behind it is now explicit: **a badly multipathed fix that reports
+a good `hAcc` is not distinguishable, and this filter will trust it.** Section
+3.3a has the negative result over all five candidates and the three-layer bound
+on the damage — at rest nothing is fused, after release the pull is limited to
+0.05 m/s per axis so a 15 m error takes at least 300 s and arrives as wander
+rather than a jump, and beyond that it is the SAF fallback. It matters for what
+SYS1-004 position hold can promise near buildings.
+
 **One thing to take to Chris now rather than after the first flight:** his
 "hover wander <= 1 m over 2 minutes" target is **not reachable with the
 NEO-M9N**. The RAW fix walks a 2.50 m median / 5.99 m maximum radius over
@@ -324,15 +337,53 @@ publish gnssTrusted in the FREE Xcp_Fusion byte at 0xBD (reserved3[0])
 | `abs(innov)/hAcc` p95 N/E | 3.30 / 1.18 | up to 3.86 / 7.59 | does not discriminate — rejected |
 | `vAcc/hAcc` | 0.996 - 1.212 | 1.243 - 2.218 | separates, one indoor run only — open question |
 
-The `vAcc/hAcc` result has a physical story behind it (indoors only
+The `vAcc/hAcc` result had a physical story behind it (indoors only
 near-overhead signals survive the roof, so the vertical geometry stops being
-the worse one, which never happens under open sky) and it separates across five
-outdoor runs on three different dynamics. It rests on **one** indoor recording,
-so it is an open question for gate 2, not a gate today.
+the worse one, which never happens under open sky). **It was deferred to a
+second indoor recording, and that recording refuted it** — see 3.3a. Recording
+it as a candidate that was tested and failed, rather than deleting it, is the
+point: the next person to have the same idea should find the measurement, not
+repeat it.
 
-*Consequences.* The threshold's recorded margin is 0.65 m (outdoor worst 3.347,
-indoor best 4.612), which is thin — hence a live-tunable field rather than a
-`#define`, and hence the deferred outdoor clause. Indoors the vehicle now has
+### 3.3a The deferred question, answered: no discriminator exists
+
+*(2026-09-14, on-board recording 9600BAA6FBB967D6, 410 s at rest on fw
+1.19.28 — the second indoor recording gate 2b asked for.)* `hAcc` ranged
+**2.831 - 5.164 m** and sat below the 4.0 m threshold for **47.6 %** of the
+run, in three smooth debounced windows, so `NavGnssTrusted` and
+`NavHorizontalOk` were both 1 indoors. Every candidate has now been tested
+against three indoor and five outdoor recordings:
+
+| candidate | indoor (3 runs) | outdoor (5 runs) | verdict |
+|---|---|---|---|
+| `hAcc` | **2.831** - 9.029 m | 1.135 - **3.347** m | overlaps — no separating threshold exists |
+| `vAcc/hAcc` | 0.854 - 1.634 | **1.243** - 2.218 | **refuted**; the gap seen on one run was that run's coincidence |
+| `hAcc` 30 s rolling std | 0.101 / 0.166 / 0.300 median | t3 **0.310** median | refuted — the noisiest run on file is outdoor |
+| `numSats` / `fixType` | 10-15 / 3 | t3 min 11, t2 min 12 | overlaps |
+
+This is a negative result over the receiver's whole published-accuracy feature
+set, not a search still in progress. **The answer is (d): accept that a
+good-looking multipathed fix is indistinguishable, and state the bound.**
+Indoors is not a flight case — flights are outdoors — but it is a faithful
+proxy for multipath near buildings. What bounds the damage: at rest **nothing
+is fused at all** (the lock skips GNSS; measured position flat to 5e-5 m
+through 47.6 % of a nominally trusted run); after release the **rate** is
+bounded, because SWE1-FW-015's bias absorbs the whole difference at the release
+tick and decays at at most 0.05 m/s per axis, so a 15 m bad fix cannot step the
+vehicle and needs **at least 300 s** to be absorbed, arriving as slow wander;
+beyond that it is the SAF fallback and the controller's metre-class tolerance,
+which is a system property and not a filter one.
+
+`gnssHAccMax` **stays at 4.0 m**. Lowering it to 3.0 was evaluated and
+rejected: it would still trust 12 % of that recording (`hAcc` minimum 2.831 m)
+while refusing the legitimate outdoor t1 static run wherever it sat above
+3.0 m, which is much of it (`hAcc` p95 3.32 m). Nothing gained indoors, real
+fixes lost outdoors.
+
+*Consequences.* The threshold's margin was recorded at gate 2 as 0.65 m
+(outdoor worst 3.347, indoor best 4.612). With the second indoor recording it
+is **negative** — indoor best is 2.831 m — hence a live-tunable field rather
+than a `#define`, and hence the deferred outdoor clause. Indoors the vehicle now has
 **no** horizontal estimate at all, declared: `horizontalOk = 0`, position
 frozen, `gnssTrusted = 0`. The safety consequence, for the SYS2-SAF chain and
 for `src/asw/flight_ctrl`: position hold must not arm on `horizontalOk = 0` and
@@ -758,6 +809,20 @@ reference, and the GNSS error after the re-origin is the same realisation);
 freeze velocity only (rejected — the position then keeps random-walking, which
 is the defect).
 
+**Installation ordering — install the bias from the fix that lands on the
+release tick** *(2026-09-14, review addendum; task 18)*. `Fusion_update()`
+reads the GNSS latch after the lock state is evaluated, so installing the bias
+from the CACHED fix and latching the new one later in the same tick leaves a
+corrected innovation equal to one fix-to-fix increment of the raw receiver —
+measured 0.0243 m against a 0.00525 m ordinary-fix step at the same row, 4.3x
+its neighbours. The bias installation therefore has to happen **after** the
+latch read. In a 10 Hz replay the coincidence has probability 1; on the board
+at 1014 Hz it is about 1 % of releases — and one liftoff in a hundred is not an
+acceptable home for this mechanism's only residual. It also makes the sentence
+above ("the innovation at the release tick is exactly zero") true
+unconditionally, which is the point: a design statement that holds 99 % of the
+time is not a design statement.
+
 **How the release is verified, and a criterion that was withdrawn**
 *(2026-09-14, after SWE1-FW-015 (d) was executed for the first time)*. The
 acceptance is on **the bias state**, not on the distance between the fused
@@ -833,7 +898,9 @@ Chris now, not then.**
 | 14 | `fusion.c`, `fusion.h` (detector + `Fusion_setOnGround`), `FusionCal.h/.c` (size 64 -> 128, fields from 0x40), `Measurements.h/.c` (`reserved3[1]` at 0xBE), `test/test_fusion.c`, `tools/a2l_meta.json`, A2L, `Version.h` | the detector and the flag only — **no ZUPT yet, no skipping of GNSS**; the flag is observed against the board's existing behaviour | SWE1-FW-014 (b) and (c) on the host; replay shows the flag timeline of task 13 reproduced by the production code; every existing offset unchanged in `Measurements.src` and `FusionCal.src`; MISRA clean; NavStep < 300 us | SWE1-FW-014 | (b) |
 | 15 | `fusion.c` (ZUPT at baro rate, skip GNSS while locked), `test/test_fusion.c` | the lock's effect | SWE1-FW-014 (a) and (d): rest velocities <= 0.03 m/s, position drift <= 0.05 m, bias converges to 2e-3 m/s^2 and 60 s open loop drifts < 3 m. Replay baseline on 02F0B754CCA975C6 is 21.9 m north p2p | SWE1-FW-014 | (b) |
 | 16 | `fusion.c` (GNSS position bias, decay, rate limit), `FusionCal` fields, `test/test_fusion.c` | continuous release | SWE1-FW-015 (a)-(d): release step <= 0.02 m, 1/e in 60 +/- 3 s, rate <= 0.05 m/s, replay of 78EF295E854465E4 releases within 2 samples of each of the four events | SWE1-FW-015 | (b) |
-| 17 | none (bench) | flash 14-16, calibration restore + read-back, >= 300 s at rest indoors, then a motors-at-idle recording **when the airframe exists** | SWE1-FW-014 (f); the idle recording sets the final `lockAccG` (clause g) | SWE1-FW-014 | (b) |
+| 17 | none (bench) | flash 14-16, calibration restore + read-back, >= 300 s at rest indoors, then a motors-at-idle recording **when the airframe exists** | SWE1-FW-014 (f); the idle recording sets the final `lockAccG` (clause g). The release in the timing run (c2) is an **IMU** release until an XCP trigger for `Fusion_setOnGround` exists | SWE1-FW-014 | (b) |
+| 18 | `fusion.c` (`fusion_releaseGnssBias()` call site: re-install the bias after the GNSS latch read in `Fusion_update()`), `test/test_fusion.c`, `Version.h` -> 1.19.29 | install the bias from the fix that lands on the release tick when there is one | SWE1-FW-015 (d) part 1 **absolute** at or under 0.02 m on the t1 forced-release replay, including a release tick that carries a fix (in a 10 Hz replay, every tick) — pre-change 0.0243 m against a 0.00525 m ordinary-fix step must FAIL it; (a) and (a2) unchanged on both exits; MISRA clean. **Release path only** — the fw 1.19.28 bench pass stands for every at-rest clause | SWE1-FW-015 | (b) |
+| 19 (follow-up) | XCP trigger for `Fusion_setOnGround` | make the interlock exit reachable from the bench | the exit that carries the liftoff path, and today the one exit no bench run can reach | SWE1-FW-014, -015 | (b) |
 
 Ordering rationale: task 13 is host-only and produces the numbers; task 14
 ships the detector as an OBSERVATION with no behaviour change, so the flag can
