@@ -114,6 +114,8 @@ boolean diagnosticsUpdate(void)
     float32 tempDelta;
     boolean uartLost;
     boolean anyFault;
+    boolean gnssTrusted;
+    boolean gnssNavOk;
 
     /* UART link heartbeat: a received 'H' resets the silence counter */
     if (Uart_heartbeatReceived() != FALSE)
@@ -179,10 +181,28 @@ boolean diagnosticsUpdate(void)
     /* NAVDIAG_* -- a second word, separate from diagStatus above (which is
      * full): the estimator's own trust decision, read from the published
      * structs only (never fusion.c's internals). No debounce -- the trust
-     * gate in fusion.c already debounces gnssTrusted itself. */
-    g_xcpFusion.navDiag = diagnosticsNavGnssUntrusted(
-        (boolean)(g_xcpFusion.reserved3[0] != 0u),
-        (boolean)(g_xcpData.gnssnavOk != 0u));
+     * gate in fusion.c already debounces gnssTrusted itself. Assigned via
+     * if/else rather than a cast on the comparison, like uartLost above --
+     * a cast onto the comparison result is misra-c2012-10.5 here. */
+    if (g_xcpFusion.reserved3[0] != 0u)
+    {
+        gnssTrusted = TRUE;
+    }
+    else
+    {
+        gnssTrusted = FALSE;
+    }
+
+    if (g_xcpData.gnssnavOk != 0u)
+    {
+        gnssNavOk = TRUE;
+    }
+    else
+    {
+        gnssNavOk = FALSE;
+    }
+
+    g_xcpFusion.navDiag = diagnosticsNavGnssUntrusted(gnssTrusted, gnssNavOk);
 
     if (status != 0u) {
         anyFault = TRUE;
