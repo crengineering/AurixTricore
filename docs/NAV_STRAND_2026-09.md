@@ -908,3 +908,84 @@ be judged on the bench before anything depends on it; tasks 15 and 16 then turn
 on the two behaviours separately. Nothing arms or drives a motor, no pin
 changes, and `Fusion_setOnGround` defaults TRUE so the pre-ASW build behaves
 exactly as the bench expects.
+
+---
+
+## 11. Open for gate 3: the vertical velocity has no measurement (2026-09-15)
+
+On the hand-move recording of fw 1.19.29, `NavVelDown` reached **11.34 m/s**
+while the barometer was flat to 0.14 m, the position stayed inside
+-1.393 .. -0.045 m, and every counter — `NavBaroRejects`, `NavBaroResets`,
+`NavCovResets`, `NavDropped` — stayed 0 with `NavVerticalOk` = 1. Item
+**SWE1-FW-016**. Not a blocker for the diagnostics bit; it is an estimator
+defect that flight will meet.
+
+**(a) Mechanism, with the numbers.** Three things compounded, and only the
+third is this filter's own.
+
+1. **The IMU was declared absent for 72.8 % of the recording.** `AttState` = 3
+   = `AHRS_NO_SENSOR` ("IMU absent; outputs frozen", `Ahrs.h:58`) in three
+   episodes: 63.0-127.5 s (64.4 s), 148.6-159.2 s (10.6 s) and 173.1-360.1 s
+   (**187.0 s**, to the end of the run). Frozen block on 99.9 % of those
+   samples, `AttAccNed` published as exactly zero on 100 % of them. **This is
+   the bigger finding and it is upstream — SWE1-FW-008 territory, chase it
+   first.**
+2. **The excursion starts 0.1 s after the AHRS returns to `AHRS_RUNNING`** at
+   127.53 s, while the board is rolled through inversion (`AttRoll` -161.8 ->
+   +3.5 deg, `AttPitch` to 64.0 deg — Euler is in gimbal lock here, so the
+   quaternion is the diagnostic, not these angles) and genuinely shaken
+   (`AttAccMagnitude` 0.175-1.197 g). `AttAccNed2` then sits at **+15 to
+   +19 m/s^2 for about 2 s** — 1.5 to 1.9 g *downward* — with
+   `AttAccMagnitude` at 0.97-1.01 g, `AttAccTrusted` = 1 and
+   `AttAccWeightPct` = 100 through most of it. A measured 1 g of specific force
+   that projects as 2 g into NED-down is the signature of a vertical that is
+   about **180 degrees wrong**, not of handling. The arithmetic settles it: the
+   integral of `AttAccNed2` over the window is **46.5 m/s**, a body that really
+   did that falls about **36 m**, and the barometer moved **0.14 m** — so at
+   least 99.6 % of the input was spurious.
+3. **Nothing in the DOWN channel observes velocity.** The barometer observes
+   `d + measBias` and GNSS altitude observes `d`; `vD` is pure integration,
+   corrected only through the covariance coupling to position. So the spurious
+   acceleration went into velocity while the barometer held the position
+   exactly where it belonged, and every health check stayed green.
+   `NavAccBiasDown` ran 0.0324 -> 0.1456 m/s^2 absorbing part of it, and
+   `NavInnovDown` reached **-1.235 m** — 63x `sigmaBaro` — without one reject,
+   because `FUSION_GATE_MIN_M` = 2.0 m floors that gate. The **ZUPT at the
+   re-lock (130.4 s) is what cleaned it up in a single tick**, which is the
+   clue: a velocity measurement fixes this, and in flight there is no lock to
+   provide one.
+
+**(b) Yes, SYS2-NAV-001's acceptance needs a velocity clause.** Its amended
+text bounds altitude drift and says nothing about `vD`, and `vD` is what the
+altitude controller damps on — an estimator can satisfy every altitude clause
+in this strand while handing the controller 11 m/s of fiction. Proposed text in
+SWE1-FW-016, for the system architect to apply.
+
+**(c) Recommendation: give the channel the measurement it structurally lacks —
+a barometric vertical rate**, `(baroAlt[k] - baroAlt[k-N])/dt` over a
+`baroVelWindowS` = 0.5 s window, `h = [0,1,0,0]`, `sigmaBaroVel` = 0.3 m/s, at
+the barometer rate, as one more caller of `fusion_chanUpdate()`. The
+differentiated noise is `0.0197*sqrt(2)/0.5` = 0.056 m/s, so 0.3 m/s is a
+five-fold margin, not a fit. This is **observability, not a clamp**: it makes
+`accBiasD` observable on a one-second timescale so a spurious acceleration is
+attributed to bias instead of integrated — exactly what the ZUPT did at
+130.4 s.
+
+Levers considered and not recommended. *Retuning `sigmaAccD` or the velocity
+gain*: helps and bounds nothing — under a sustained 1.8 g error the velocity
+still runs, just less far, and it costs the vertical channel the tuning that is
+currently the best part of this filter. *A hard clamp on `|vD|`*: state surgery
+without its covariance, the same incoherence rejected for the ZUPT and
+documented in `fusion.c`'s own re-acquisition comment. *Accepting it as a hand
+artefact*: no — the trigger is an IMU-fault recovery, which is a flight case
+(SWE1-FW-008 exists because it happens), and 64 degrees of pitch is inside a
+quadrocopter's envelope. **A hard plausibility backstop is deliberately not
+specified yet**: if the measurement does not bring the replayed event under
+2.0 m/s, the next step is to extend `fusion_correctBaro()`'s existing audited
+reject-run re-acquisition to a velocity bound — decided with the replay in
+hand. Specifying two mechanisms when one may do is how a filter acquires a
+second escape hatch nobody tests.
+
+Also worth a line: **`NavVerticalOk` stayed 1 through a 187 s IMU outage.**
+Defensible — the barometer does anchor the channel — but not what a reader of
+that flag assumes, and it deserves a sentence in `docs/FUSION.md`.
