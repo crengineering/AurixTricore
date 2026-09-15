@@ -262,8 +262,7 @@ extern volatile Xcp_Data g_xcpData;
  *                              sensors -- a rising count IS the sensor fault
  *   0xF4  float32 innovVelN, innovVelE  [m/s] last GNSS velocity innovation
  *                              per horizontal channel -- makes the velocity
- *                              NIS computable (docs/NAV_TUNING.md). Appended
- *                              at the end: nothing above it moves.
+ *                              NIS computable (docs/NAV_TUNING.md).
  *
  *   --- flight-controller feedback, in the CONTROLLER's units and frames ---
  *   Everything above is published for humans: degrees, NED. src/asw/flight_ctrl.h
@@ -276,8 +275,21 @@ extern volatile Xcp_Data g_xcpData;
  *   0xD8  float32 p_ned_ist[3] position N, E, D [m]
  *   0xE4  float32 v_b_ist[3]   velocity u, v, w [m/s] — BODY frame
  *
- * Total 0xFC = 252 bytes, leaving 4 before the next slot at 0x70030600.
- * Exceeds XCP MAX_CTO (64), so clients read it in several SHORT_UPLOADs.
+ *   0xFC  uint32  navDiag      estimator-level diagnostics bitmask, NAVDIAG_*
+ *                              (Diagnostics.h). Xcp_Data's diagStatus is full
+ *                              (32/32 bits, docs/DIAGNOSTICS.md resource
+ *                              budget) and its bits are peripheral liveness
+ *                              anyway -- this word is for the estimator's OWN
+ *                              decisions instead (bit 0 = NavDiag_GnssUntrusted,
+ *                              SWE1-FW-011; bits 1-31 reserved for more of the
+ *                              same kind). Appended at the end: nothing above
+ *                              it moves.
+ *
+ * Total 0x100 = 256 bytes -- exactly fills the slot, ending precisely at the
+ * next one, 0x70030600 (was 0xFC = 252 bytes, leaving 4; navDiag above uses
+ * that last uint32, so there is no headroom left in this block; a future
+ * field needs a new slot). Exceeds XCP MAX_CTO (64), so clients read it in
+ * several SHORT_UPLOADs.
  * --------------------------------------------------------------------------- */
 /* XCP_FUSION_ADDR deleted, T5 -- same reasoning as XCP_DATA_ADDR above. */
 #define XCP_FUSION_MAGIC  0x4E535546u
@@ -350,6 +362,10 @@ typedef struct
     /* Appended at the end so nothing above it moves -- see the block map. */
     float32 innovVelN;
     float32 innovVelE;
+
+    /* Estimator-level diagnostics, NAVDIAG_* (Diagnostics.h) -- diagStatus
+     * above (Xcp_Data) is full. Fills the block exactly; see the block map. */
+    uint32  navDiag;
 } Xcp_Fusion;
 
 extern volatile Xcp_Fusion g_xcpFusion;

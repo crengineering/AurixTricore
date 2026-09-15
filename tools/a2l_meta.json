@@ -816,6 +816,12 @@
       "desc": "calibration block magic broken, defaults reloaded"
     }
   },
+  "navdiag_bits": {
+    "NAVDIAG_GNSS_UNTRUSTED": {
+      "name": "NavDiag_GnssUntrusted",
+      "desc": "GNSS fix present but refused by the trust gate (hAcc above gnssHAccMax or debouncing): horizontal position is held, not updated - SWE1-FW-011"
+    }
+  },
   "Xcp_Fusion": {
     "magic": {
       "skip": true
@@ -1170,6 +1176,12 @@
       "unit": "m/s",
       "lo": "-200",
       "hi": "200"
+    },
+    "navDiag": {
+      "name": "NavDiag",
+      "desc": "estimator-level diagnostics bitmask, NAVDIAG_* (Diagnostics.h) - a second word because Xcp_Data's diagStatus is full (32/32 bits); see docs/DIAGNOSTICS.md",
+      "lo": "0",
+      "hi": "4294967295"
     }
   },
   "Xcp_FusionCal": {

@@ -90,6 +90,31 @@ freien" — war seit der GNSS-Integration veraltet; ebenso ist der Kommentar
 > Wiederherstellungs-Budget (≤ 2 s, kein Reset) in
 > `docs/IMU_INTERRUPT.md` §5.7.
 
+## Zweites Statuswort `navDiag` (`Xcp_Fusion`, ab v1.19.30)
+
+`diagStatus` oben ist **voll** (32/32 Bits, siehe Resource-Budget-Tabelle) und
+jedes belegte Bit ist eine **Peripherie-Lebendigkeit** (`PeriphDiag.c`), keine
+Entscheidung des Schätzers selbst. Statt dafür die im Resource-Budget
+angekündigte Migration (gerätespezifische Fehler raus in ein Array) vorzuziehen,
+bekommt der Schätzer ein eigenes, zweites Wort: `navDiag` in `Xcp_Fusion`,
+Offset `0xFC` (Basis `0x70030500`, also `0x700305FC`) — füllt den Block exakt
+auf 256 Byte, endet genau vor `Xcp_FusionCal` bei `0x70030600`, kein
+Platz mehr übrig. `NAVDIAG_*`-Makros stehen neben den `DIAG_*`-Makros in
+`Diagnostics.h`.
+
+| Bit | Maske | Bedeutung | Vergleich |
+|----:|---|---|---|
+| 0 | `0x00000001` | `NAVDIAG_GNSS_UNTRUSTED` (SWE1-FW-011, ab v1.19.30) — GNSS-Fix vorhanden, aber vom Trust-Gate abgelehnt: Horizontalposition wird gehalten, nicht aktualisiert | `NavGnssTrusted == 0 UND GnssNavOk == 1` |
+
+Gesetzt/gelöscht in `diagnosticsUpdate()` im selben 100-ms-Takt wie
+`diagStatus`, gelesen ausschließlich aus den veröffentlichten Feldern
+(`Xcp_Fusion.reserved3[0]` = `NavGnssTrusted`, `Xcp_Data.gnssnavOk` =
+`GnssNavOk`), nie aus den internen Zuständen von `fusion.c`. Löscht sofort bei
+Vertrauen ODER bei fehlendem Fix — Letzteres ist ohnehin **nirgendwo** als
+Fehler markiert (`SensorTask.c`: `DIAG_GNSS_IMPLAUSIBLE` ist bewusst nicht an
+`navOk` gekoppelt, „kein Satellit" ist der normale Innenraum-Zustand). Details
+und Herleitung: `docs/FUSION.md` §11.
+
 ### Peripherie-Diagnose lesen (ab v1.13.0)
 
 Die vier Fehlerarten je Gerät sind absichtlich getrennt, weil sie

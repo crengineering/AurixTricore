@@ -140,6 +140,18 @@ target_link_libraries(test_imuint PRIVATE unity test_common)
 add_test(NAME imuint COMMAND test_imuint)
 
 #[[
+Diagnostics: diagnosticsNavGnssUntrusted() (SWE1-FW-011) is `static inline`
+in Diagnostics.h with no iLLD include, same idiom as ImuInt_accumulate()
+above -- no fake, no other source file needed. diagnosticsUpdate() itself
+(Uart/Nvm/PeriphDiag-dependent) is not exercised here.
+]]
+add_executable(test_diagnostics
+    test_diagnostics.c
+)
+target_link_libraries(test_diagnostics PRIVATE unity test_common)
+add_test(NAME diagnostics COMMAND test_diagnostics)
+
+#[[
 ImuEdge (T15, docs/REFACTORING_PLAN.md §3.6): the ISR->NavTask_step edge
 handoff protocol. ImuEdge_snapshot() is pure and iLLD-free (Ifx_Types.h only,
 same static-inline-in-the-header idiom as ImuInt_accumulate() above); g_imuEdge

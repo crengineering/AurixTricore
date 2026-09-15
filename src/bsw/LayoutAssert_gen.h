@@ -195,7 +195,8 @@ typedef char layout_assert_Xcp_Fusion_v_b_ist_offset[(offsetof(Xcp_Fusion, v_b_i
 typedef char layout_assert_Xcp_Fusion_navDropped_offset[(offsetof(Xcp_Fusion, navDropped) == 0xF0u) ? 1 : -1];
 typedef char layout_assert_Xcp_Fusion_innovVelN_offset[(offsetof(Xcp_Fusion, innovVelN) == 0xF4u) ? 1 : -1];
 typedef char layout_assert_Xcp_Fusion_innovVelE_offset[(offsetof(Xcp_Fusion, innovVelE) == 0xF8u) ? 1 : -1];
-typedef char layout_assert_Xcp_Fusion_sizeof[(sizeof(Xcp_Fusion) == 0xFCu) ? 1 : -1];
+typedef char layout_assert_Xcp_Fusion_navDiag_offset[(offsetof(Xcp_Fusion, navDiag) == 0xFCu) ? 1 : -1];
+typedef char layout_assert_Xcp_Fusion_sizeof[(sizeof(Xcp_Fusion) == 0x100u) ? 1 : -1];
 
 /* Xcp_FusionCal (FusionCal.h) */
 typedef char layout_assert_Xcp_FusionCal_magic_offset[(offsetof(Xcp_FusionCal, magic) == 0x0u) ? 1 : -1];

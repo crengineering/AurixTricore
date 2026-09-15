@@ -1066,6 +1066,25 @@ channels hold position and velocity while `P` keeps growing from process
 noise, which is what lets the gate reopen on its own. `gnssTrusted` publishes
 at `Xcp_Fusion 0xBD` (`NavGnssTrusted`).
 
+**"Fix present but refused" diagnostic (SWE1-FW-011, task 2026-09-15).**
+`gnssTrusted = 0` alone is not distinguishable from "no fix at all" without
+also reading the receiver's own claim — the two happen for different reasons
+and want different reactions on the ground. `NAVDIAG_GNSS_UNTRUSTED`
+(`Diagnostics.h`) closes that gap: set while `NavGnssTrusted = 0`
+**and** `GnssNavOk = 1` — the receiver says the fix is usable, but the
+trust gate above (`gnssHAccMax` or its debounce) refuses it anyway, so the
+horizontal position is held, not updated. It clears the instant either flag
+flips, which covers "no fix at all" without a special case: `GnssNavOk = 0`
+already clears it, and that case is deliberately unflagged everywhere else
+too (`SensorTask.c`: `DIAG_GNSS_IMPLAUSIBLE` is not gated on `navOk`, because
+"no satellites" is the normal indoor state, not a fault). It lives in its own
+word, `Xcp_Fusion.navDiag` at offset `0xFC` (`NavDiag`/`NavDiag_GnssUntrusted`
+in the A2L), not in `Xcp_Data.diagStatus` — that word is full at 32/32 bits
+(`docs/DIAGNOSTICS.md`), and every one of its occupied bits is peripheral
+liveness, not an estimator decision like this one. Evaluated in
+`diagnosticsUpdate()` on its normal 100 ms cadence, from the published
+`Xcp_Fusion`/`Xcp_Data` fields only, never from `fusion.c`'s internals.
+
 **Stationary lock (SWE1-FW-014) and its release (SWE1-FW-015).** While
 `|omega| <= lockGyroDps` (2.0 deg/s) and `abs(|a|-1g) <= lockAccG` (0.03 g)
 hold together for `lockWindowS` (1.0 s) **and** the ASW has called

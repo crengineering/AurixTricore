@@ -86,7 +86,12 @@ every A2L entry and GUI plot below it. Append.
 
 `Diagnostics.h` (`#define DIAG_*`) → the check in `Diagnostics.c` →
 `docs/DIAGNOSTICS.md` → the GUI's `BIT_MASK` lines (`DIAGNOSTICS.md:55` says
-these move together). Bit budget as above.
+these move together). Bit budget as above. `diagStatus` (`Xcp_Data`) is for
+**peripheral liveness** and is full (32/32) — an **estimator-level** decision
+(a trust gate, not "is the sensor answering") goes in the second word instead,
+`navDiag` (`Xcp_Fusion` `0xFC`, `NAVDIAG_*` macros next to `DIAG_*` in the same
+header, `tools/a2l_meta.json`'s `navdiag_bits` section, `gen_a2l.py`'s generic
+`bit_objects()`). 31 of `navDiag`'s 32 bits are still free.
 
 ### IMU data-ready interrupt
 
@@ -179,7 +184,9 @@ wrong. See `docs/FUSION.md` §8 for the case where this bit.
 
 Blocks are 256 bytes apart. `Xcp_Data` is **full** — its last field ends within
 8 bytes of the 256-byte boundary, so the next appended measurement collides
-with `Xcp_Cal`.
+with `Xcp_Cal`. `Xcp_Fusion` is now **full too** (v1.19.30, `navDiag` at
+`0xFC`) — it ends exactly at `0x70030600`, zero bytes to spare before
+`Xcp_FusionCal`; the next appended field needs a new slot.
 
 **`SharedRam` is not an XCP block** — it is the cross-core (CPU-to-CPU) shared
 block introduced in T9 (`docs/REFACTORING_PLAN.md` §2.4), separate from the

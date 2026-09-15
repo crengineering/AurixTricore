@@ -97,16 +97,59 @@ typedef struct
 #define DIAG_GNSS_STUCK_DATA    0x20000000u     /* bit 29                    */
 #define DIAG_GNSS_IMPLAUSIBLE   0x40000000u     /* bit 30                    */
 
-/* ⚠️ Bits 27-30 are the LAST four free bits: room for exactly ONE more
- * peripheral in this scheme. Still to come are the GNSS (NEO-M9N), the flight
- * IMU (ICM-42688-P) and 4x ESC telemetry — six devices needing 24 bits into 4.
- * Before adding the device after next, move the per-device faults OUT of this
- * shared word into a per-peripheral status array indexed by PeriphDiag_Id, and
- * leave diagStatus for board-level faults. That change touches Xcp_Data, the
- * A2L and the GUI's BIT_MASK rows together, so it wants doing deliberately
- * rather than under pressure. See docs/DIAGNOSTICS.md. */
+/* ⚠️ STALE as of the GNSS (NEO-M9N) integration -- this used to say "bits
+ * 27-30 are the last four free bits; still to come are the GNSS, the flight
+ * IMU and 4x ESC telemetry". The GNSS took those four; bit 31 below is
+ * DIAG_CAL_INVALID. The word is now FULL: 32/32 bits, all of 13-30 already a
+ * peripheral (docs/DIAGNOSTICS.md resource-budget table). Adding the flight
+ * IMU's or an ESC's faults still needs the per-device-faults-out-of-this-
+ * shared-word migration this comment used to forecast (a per-peripheral
+ * status array indexed by PeriphDiag_Id, leaving diagStatus for board-level
+ * faults) -- that touches Xcp_Data, the A2L and the GUI's BIT_MASK rows
+ * together, so it wants doing deliberately rather than under pressure.
+ * NAVDIAG_* below is a DIFFERENT word for a different reason (estimator
+ * decisions, not peripheral liveness) and does not draw on this budget.
+ * See docs/DIAGNOSTICS.md. */
 
 #define DIAG_CAL_INVALID        0x80000000u     /* bit 31 */
+
+/* diagStatus above is FULL -- 32/32 bits, see the resource-budget table in
+ * docs/DIAGNOSTICS.md -- and every one of bits 13-30 is a PERIPHERAL
+ * liveness fault (PeriphDiag.c), not something the estimator itself decides.
+ * Rather than force the per-peripheral-status-array migration the comment
+ * above forecasts just to make room for an estimator-level flag, this is a
+ * second, independent bitmask word: Xcp_Fusion.navDiag (Measurements.h,
+ * offset 0xFC -- appended, fills the block exactly, see its block map).
+ * Peripheral liveness stays in diagStatus; the estimator's OWN decisions
+ * (trust gates, not "is the sensor answering") live here instead. */
+#define NAVDIAG_GNSS_UNTRUSTED  0x00000001u     /* bit 0 */
+/* bits 1-31 reserved for more estimator-level diagnostics of this kind */
+
+/* Pure decision for NAVDIAG_GNSS_UNTRUSTED (SWE1-FW-011): "GNSS fix present
+ * but refused by the trust gate" -- gnssTrusted is the fusion's OWN gate
+ * (Xcp_Fusion.reserved3[0], hAcc vs the tunable gnssHAccMax plus debounce);
+ * gnssNavOk is the receiver's own claim (Xcp_Data.gnssnavOk, hAcc vs the
+ * fixed GNSS_HACC_USABLE_MM in GnssM9N.c). Clears when trusted, or when
+ * there is no fix at all -- "no fix" is deliberately NOT flagged anywhere
+ * else either (SensorTask.c: DIAG_GNSS_IMPLAUSIBLE is not gated on navOk,
+ * because "no satellites" is the normal indoor state, not a fault).
+ *
+ * `static inline`, defined here rather than in Diagnostics.c, same reason as
+ * ImuInt_accumulate() (ImuInt.h): this header includes nothing but
+ * Ifx_Types.h, so a host test (test/test_diagnostics.c) reaches the real
+ * decision directly, no fake needed. diagnosticsUpdate() calls this same
+ * definition on its normal 100 ms cadence. */
+static inline uint32 diagnosticsNavGnssUntrusted(boolean gnssTrusted, boolean gnssNavOk)
+{
+    uint32 bit = 0u;
+
+    if ((gnssTrusted == FALSE) && (gnssNavOk != FALSE))
+    {
+        bit = NAVDIAG_GNSS_UNTRUSTED;
+    }
+
+    return bit;
+}
 
 extern volatile Xcp_Cal g_xcpCal;
 

@@ -17,7 +17,10 @@ So the layout is DERIVED here and never typed:
     Xcp_Nvm   0x70030200  Nvm.h           -> CHARACTERISTIC  (NVM_*)
     Xcp_Gpio  0x70030300  gpio.h          -> CHARACTERISTIC  (GPIO_*)
     Xcp_Fusion 0x70030500 Measurements.h  -> MEASUREMENT
-    DIAG_* defines        Diagnostics.h   -> MEASUREMENT with BIT_MASK
+    DIAG_* defines        Diagnostics.h   -> MEASUREMENT with BIT_MASK (Xcp_Data.diagStatus)
+    NAVDIAG_* defines     Diagnostics.h   -> MEASUREMENT with BIT_MASK (Xcp_Fusion.navDiag --
+                                             diagStatus is full, this is the estimator's own
+                                             second word, see Diagnostics.h)
 
 What is NOT derived is the prose: descriptions, units and display limits carry
 knowledge that simply is not in the C code ("~0.48 G in Munich", "LEVEL ONLY,
@@ -200,12 +203,30 @@ def resolve_enum_count(symbol: str) -> int:
     raise SystemExit(f"error: cannot resolve array dimension '{symbol}'")
 
 
-def parse_diag_bits(header: Path) -> list[tuple[str, int]]:
-    """(macro name, mask) for every DIAG_* define, in bit order."""
+def parse_bit_macros(header: Path, prefix: str) -> list[tuple[str, int]]:
+    """(macro name, mask) for every '#define <prefix>...' in header, bit order.
+
+    Generalised (was parse_diag_bits, DIAG_-only) so a second bitmask word
+    reuses the same emission path: Xcp_Data.diagStatus is full (32/32 bits,
+    docs/DIAGNOSTICS.md), so estimator-level diagnostics got their own word,
+    Xcp_Fusion.navDiag, with its own NAVDIAG_* macros (Diagnostics.h) rather
+    than forcing a diagStatus restructure. Anchored at '#define <prefix>' so
+    DIAG_ and NAVDIAG_ never cross-match each other."""
     bits = []
-    for m in re.finditer(r"^#define\s+(DIAG_\w+)\s+(0x[0-9A-Fa-f]+)u?", read(header), re.M):
+    pat = rf"^#define\s+({re.escape(prefix)}\w+)\s+(0x[0-9A-Fa-f]+)u?"
+    for m in re.finditer(pat, read(header), re.M):
         bits.append((m.group(1), int(m.group(2), 16)))
     return sorted(bits, key=lambda b: b[1])
+
+
+def parse_diag_bits(header: Path) -> list[tuple[str, int]]:
+    """(macro name, mask) for every DIAG_* define, in bit order."""
+    return parse_bit_macros(header, "DIAG_")
+
+
+def parse_navdiag_bits(header: Path) -> list[tuple[str, int]]:
+    """(macro name, mask) for every NAVDIAG_* define, in bit order."""
+    return parse_bit_macros(header, "NAVDIAG_")
 
 
 def parse_version(header: Path) -> str:
@@ -316,6 +337,24 @@ def emit_characteristic(entry: dict, field: Field, addr: int, warn: list[str]) -
         out.append(f'      PHYS_UNIT "{entry["unit"]}"')
     out.append("    /end CHARACTERISTIC")
     return "\n".join(out)
+
+
+def bit_objects(header: Path, prefix: str, meta_key: str, base_addr: int,
+                meta: dict, warn: list[str]) -> list[str]:
+    """Emit BIT_MASK MEASUREMENTs for every '<prefix>*' macro in header, all
+    reading the single word at base_addr. Shared by diag_bits (Xcp_Data.
+    diagStatus) and navdiag_bits (Xcp_Fusion.navDiag) -- see parse_bit_macros."""
+    objs = []
+    for macro, mask in parse_bit_macros(header, prefix):
+        entry = meta_for(meta, meta_key, macro)
+        if entry.get("skip"):
+            continue
+        if "name" not in entry:
+            entry = dict(entry, name=macro,
+                         desc=entry.get("desc", f"{macro} (no metadata)"))
+            warn.append(f"{macro}: no metadata, using the macro name")
+        objs.append(emit_bit_measurement(entry, base_addr, mask))
+    return objs
 
 
 def block_objects(block: str, meta: dict, warn: list[str], kind: str) -> tuple[list[str], int]:
@@ -459,17 +498,13 @@ def generate() -> tuple[str, list[str]]:
 
     diag_fields, _ = parse_struct(BSW / "Measurements.h", "Xcp_Data")
     diag_off = next(f.offset for f in diag_fields if f.name == "diagStatus")
+    diag_objs = bit_objects(BSW / "Diagnostics.h", "DIAG_", "diag_bits",
+                            data_addr + diag_off, meta, warn)
 
-    diag_objs = []
-    for macro, mask in parse_diag_bits(BSW / "Diagnostics.h"):
-        entry = meta_for(meta, "diag_bits", macro)
-        if entry.get("skip"):
-            continue
-        if "name" not in entry:
-            entry = dict(entry, name=macro,
-                         desc=entry.get("desc", f"{macro} (no metadata)"))
-            warn.append(f"{macro}: no metadata, using the macro name")
-        diag_objs.append(emit_bit_measurement(entry, data_addr + diag_off, mask))
+    fusion_fields, _ = parse_struct(BSW / "Measurements.h", "Xcp_Fusion")
+    navdiag_off = next(f.offset for f in fusion_fields if f.name == "navDiag")
+    navdiag_objs = bit_objects(BSW / "Diagnostics.h", "NAVDIAG_", "navdiag_bits",
+                               fusion_addr + navdiag_off, meta, warn)
 
     parts = [PREAMBLE.format(version=parse_version(BSW / "Version.h"),
                              data_addr=data_addr, cal_addr=cal_addr,
@@ -492,6 +527,8 @@ def generate() -> tuple[str, list[str]]:
     parts.append("\n\n".join(gpio_objs))
     parts.append(f"\n\n    /* Navigation state: Xcp_Fusion @ 0x{fusion_addr:08X} (see Measurements.h) */\n")
     parts.append("\n\n".join(fusion_objs))
+    parts.append("\n\n    /* individual navigation diagnostics bits (BIT_MASK views on NavDiag) */\n")
+    parts.append("\n\n".join(navdiag_objs))
     parts.append(f"\n\n    /* Estimator tuning: Xcp_FusionCal @ 0x{fcal_addr:08X}, RAM only (FusionCal.h) */\n")
     parts.append("\n\n".join(fcal_objs))
     parts.append("\n\n  /end MODULE\n/end PROJECT\n")
@@ -690,6 +727,14 @@ def seed() -> None:
     meta["diag_bits"] = {}
     for macro, mask in parse_diag_bits(BSW / "Diagnostics.h"):
         meta["diag_bits"][macro] = by_mask.get(
+            mask, {"__TODO__": f"mask {mask:#010x} not in the previous A2L"})
+
+    # navdiag_bits (Xcp_Fusion.navDiag): a word introduced after the previous
+    # A2L this migration reads from, so every NAVDIAG_* macro is expected to
+    # come back __TODO__ -- describe it by hand, same as any other new field.
+    meta["navdiag_bits"] = {}
+    for macro, mask in parse_navdiag_bits(BSW / "Diagnostics.h"):
+        meta["navdiag_bits"][macro] = by_mask.get(
             mask, {"__TODO__": f"mask {mask:#010x} not in the previous A2L"})
 
     META_PATH.write_text(json.dumps(meta, indent=2) + "\n",

@@ -176,6 +176,14 @@ boolean diagnosticsUpdate(void)
 
     g_xcpData.diagStatus = status;
 
+    /* NAVDIAG_* -- a second word, separate from diagStatus above (which is
+     * full): the estimator's own trust decision, read from the published
+     * structs only (never fusion.c's internals). No debounce -- the trust
+     * gate in fusion.c already debounces gnssTrusted itself. */
+    g_xcpFusion.navDiag = diagnosticsNavGnssUntrusted(
+        (boolean)(g_xcpFusion.reserved3[0] != 0u),
+        (boolean)(g_xcpData.gnssnavOk != 0u));
+
     if (status != 0u) {
         anyFault = TRUE;
     } else {
