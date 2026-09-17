@@ -29,7 +29,8 @@ void Uart_printHexByte(uint8 v);
 #define UART_HEARTBEAT_BYTE 0x48u
 
 /* UART speed rates */
-#define UART_SPEED_38400 38400.0f
+#define UART_SPEED_38400   38400.0f
+#define UART_SPEED_115200 115200.0f
 
 /** Drain the hardware RX FIFO; TRUE if a heartbeat byte arrived since the
  *  last call. Used as link-alive detector for the UART-link diagnosis. */

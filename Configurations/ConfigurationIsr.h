@@ -41,5 +41,6 @@
 #define ISR_PRIORITY_IMU_DRDY       106                         /* ERU/OGU0, ICM-42688-P INT1 data-ready (P10.7);
                                                                     on CPU1 since T15 (ImuInt.c), same core as the
                                                                     QSPI0 priorities above -- still unique per core   */
+#define ISR_PRIORITY_ASCLIN6_RX     107                         /* ASCLIN6 receive*/
 
 #endif
