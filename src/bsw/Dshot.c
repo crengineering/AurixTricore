@@ -32,8 +32,8 @@ volatile uint8                g_escTlmRaw[ESC_T_MESSAGE_LENGTH];
 volatile uint8                g_escTlmIndex    = 0u;
 volatile boolean              g_escTlmComplete = FALSE;
 static   Esc_telemetry        g_esc_Tlm;
-static   uint8                g_escTlmCrcOk    = 0u;
-static   uint8                g_escTlmCrcFail  = 0u;
+static   uint32               g_escTlmCrcOk    = 0u;
+static   uint32               g_escTlmCrcFail  = 0u;
 
 /******************************************************************************/
 /*--------------------------Function Declaration------------------------------*/
@@ -110,11 +110,17 @@ void Dshot_init(void)
 
     /* set baudrate for ESC Telemetry*/
     config.baudrate.baudrate =  UART_SPEED_115200;
+    /* 16 ticks per bit, sample mid-bit, majority of three: the iLLD default
+     * (4x, one sample at the last quarter) framed-errored ~40 % of the ESC's
+     * back-to-back bytes (bench 2026-09-17, ASCLIN6 FLAGS.FE set). */
+    config.baudrate.oversampling         = IfxAsclin_OversamplingFactor_16;
+    config.bitTiming.samplePointPosition = IfxAsclin_SamplePointPosition_8;
+    config.bitTiming.medianFilter        = IfxAsclin_SamplesPerBit_three;
 
     static const IfxAsclin_Asc_Pins pins = {
         .cts       = NULL_PTR,                        /* no hardware flow control */
         .rx        = &IfxAsclin6_RXA_P23_3_IN,
-        .rxMode    = IfxPort_InputMode_pullUp,
+        .rxMode    = IfxPort_InputMode_noPullDevice,
         .rts       = NULL_PTR,                        /* no hardware flow control */
         .pinDriver = IfxPort_PadDriver_ttlSpeed1
 
@@ -236,4 +242,10 @@ void Dshot_task(void)
         telem_requested  = FALSE;
 
     }
+}
+
+uint32 Dshot_getTelemetry(Esc_telemetry *out)
+{
+    *out = g_esc_Tlm;
+    return g_escTlmCrcOk;
 }

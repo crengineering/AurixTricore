@@ -3,6 +3,7 @@
 
 #include "Ifx_Types.h"
 #include "GnssM9N.h"
+#include "Dshot.h"
 #include "fusion.h"
 #include "Ahrs.h"
 
@@ -342,6 +343,52 @@ typedef struct
 
 extern volatile Xcp_Fusion g_xcpFusion;
 
+/* ---------------------------------------------------------------------------
+ * Xcp_Esc — ESC telemetry (KISS packet over pad T, decoded by Dshot.c) plus
+ * the DShot link counters, in its own block at the next free 256-byte slot.
+ *
+ * SEPARATE BLOCK for the same reason as Xcp_Fusion: Xcp_Data is full. The
+ * sensor task (SensorTask_esc) pulls the last CRC-valid packet from the
+ * driver with Dshot_getTelemetry() and writes it here; the driver itself
+ * never touches XCP.
+ *
+ * Block map (little-endian, 4-byte aligned groups — see Xcp_Fusion above):
+ *
+ *   0x00  uint32  magic        0x31435345 ("ESC1")
+ *   0x04  uint32  tickMs       uptime when this block was written
+ *   0x08  uint32  tlmCount     CRC-valid telemetry packets since boot (driver counter)
+ *   0x0C  sint32  tempC        ESC temperature [degC] (sint32: the A2L generator has no SBYTE layout)
+ *   0x10  uint8   tlmFresh     1 = a new packet arrived since the previous task run
+ *   0x11  uint8   reserved[3]
+ *   0x14  uint16  voltageCv    pack voltage [cV] — INVALID on the GOKU G55M (floating ADC)
+ *   0x16  uint16  currentCa    motor current [cA] — INVALID on the GOKU G55M (floating ADC)
+ *   0x18  uint16  mAh          consumed charge [mAh] — integrates the invalid current
+ *   0x1A  uint16  eRpm100      electrical rpm / 100, as sent by the ESC
+ *   0x1C  float32 rpm          mechanical rpm = eRpm100 * 100 / (poles / 2), poles = 14
+ *
+ * Total 0x20 = 32 bytes. One ESC for now (channel 1); channels 2..4 append
+ * after rpm when the driver serves them, nothing above moves.
+ * --------------------------------------------------------------------------- */
+#define XCP_ESC_MAGIC        0x31435345u
+#define XCP_ESC_MOTOR_POLES  14u        /* X2216-III 12N14P, docs/ESC_BRINGUP_2026-09-16.md */
+
+typedef struct
+{
+    uint32  magic;
+    uint32  tickMs;
+    uint32  tlmCount;
+    sint32  tempC;
+    uint8   tlmFresh;
+    uint8   reserved[3];
+    uint16  voltageCv;
+    uint16  currentCa;
+    uint16  mAh;
+    uint16  eRpm100;
+    float32 rpm;
+} Xcp_Esc;
+
+extern volatile Xcp_Esc g_xcpEsc;
+
 void measurementsInit(void);    /* DTS + DTSC + EVR monitor init (CPU0)  */
 void measurementsUpdate(void);  /* call cyclically, e.g. every 100 ms    */
 
@@ -364,6 +411,11 @@ void measurementsSetImu(boolean present, const float32 acc[3], const float32 gyr
 /* Publish per-core execution time and Ethernet utilisation. Called from the
  * 100 ms task on CPU0; reads the other cores' slots in g_coreStats. */
 void measurementsSetSystemLoad(void);
+
+/* Publish the ESC telemetry packet the driver decoded last. `count` is the
+ * driver's CRC-valid packet counter; `fresh` says whether it changed since
+ * the sensor task last looked. Called by SensorTask_esc (CPU0, 20 ms). */
+void measurementsSetEsc(uint32 count, boolean fresh, const Esc_telemetry *tlm);
 
 /*
  * Publish the latest gnss sample into the XCP block. Called by the measurement task

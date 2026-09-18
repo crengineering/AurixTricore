@@ -11,7 +11,7 @@ What it asserts, all from the real linked output, never assumed:
      -- this is also what catches a stale .map: edit the .lsl and forget to
      rebuild, and the .map still shows the OLD address, which now disagrees
      with the .lsl you just read. That mismatch is exactly rule 1 failing.
-  2. no two of the thirteen shared objects (seven XCP blocks, six LMU
+  2. no two of the fourteen shared objects (eight XCP blocks, six LMU
      objects) overlap, given their real sizes
   3. every LMU object lies inside 0xB00F0000..0xB00FFFFF (lmuram_shared)
   4. the measurement block (Xcp_Data) has not outgrown its 256-byte slot
@@ -42,6 +42,7 @@ XCP_BLOCKS = {
     "I2c_Debug":     ("LCF_XCP_I2CDBG_START",    ".bss.xcp_i2cdbg"),
     "Xcp_Fusion":    ("LCF_XCP_FUSION_START",    ".bss.xcp_fusion"),
     "Xcp_FusionCal": ("LCF_XCP_FUSIONCAL_START", ".bss.xcp_fusioncal"),
+    "Xcp_Esc":       ("LCF_XCP_ESC_START",       ".bss.xcp_esc"),
 }
 
 # LMU objects are NOT pinned (docs/MEMORY_PLACEMENT.md part 4: "free to
@@ -148,7 +149,7 @@ def main() -> int:
             continue
         lmu_objs.append((section, addr, size))
 
-    # --- 2. no two of the thirteen objects overlap --------------------------
+    # --- 2. no two of the fourteen objects overlap --------------------------
     all_objs = sorted(xcp_objs + lmu_objs, key=lambda o: o[1])
     for (name_a, addr_a, size_a), (name_b, addr_b, size_b) in zip(all_objs, all_objs[1:]):
         end_a = addr_a + size_a

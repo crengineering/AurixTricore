@@ -27,5 +27,9 @@ void SensorTask_mag(void);
 /** Read the GNSS receiver, publish the fix, latch it for the navigation
  *  filter, report plausibility. 100 ms (10 Hz). */
 void SensorTask_gnss(void);
+/** Pull the last CRC-valid ESC telemetry packet from the DShot driver and
+ *  publish it (Xcp_Esc). The driver only hands out a copy plus its packet
+ *  counter; this task decides what is new. 20 ms (50 Hz). */
+void SensorTask_esc(void);
 
 #endif /* SENSORTASK_H */

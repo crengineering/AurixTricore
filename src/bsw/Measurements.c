@@ -50,6 +50,15 @@ volatile Xcp_Fusion g_xcpFusion;
 #pragma section farbss restore
 #endif
 
+/* ESC telemetry block, next free slot (0x70030700) -- see Measurements.h. */
+#if defined(__TASKING__)
+#pragma section farbss "xcp_esc"
+#endif
+volatile Xcp_Esc g_xcpEsc;
+#if defined(__TASKING__)
+#pragma section farbss restore
+#endif
+
 void measurementsInit(void)
 {
     IfxDts_Dts_Config dtsConfig;
@@ -212,6 +221,20 @@ void measurementsSetImu(boolean present, const float32 acc[3], const float32 gyr
     }
 }
 
+void measurementsSetEsc(uint32 count, boolean fresh, const Esc_telemetry *tlm)
+{
+    g_xcpEsc.tickMs    = g_xcpData.tickMs;
+    g_xcpEsc.tlmCount  = count;
+    g_xcpEsc.tlmFresh  = (fresh != FALSE) ? 1u : 0u;
+    g_xcpEsc.tempC     = (sint32)tlm->temperature;
+    g_xcpEsc.voltageCv = tlm->voltage;
+    g_xcpEsc.currentCa = tlm->current;
+    g_xcpEsc.mAh       = tlm->mAh;
+    g_xcpEsc.eRpm100   = tlm->eRPM;
+    /* eRPM counts electrical revolutions; one mechanical turn = poles/2 of them */
+    g_xcpEsc.rpm       = ((float32)tlm->eRPM * 100.0f) / ((float32)XCP_ESC_MOTOR_POLES / 2.0f);
+}
+
 void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)
 {
     if (present != FALSE)
@@ -293,6 +316,7 @@ void measurementsSetFusion(const FusionValues *fusion, const Ahrs_Values *ahrs,
 
     /* --- the full state ------------------------------------------------ */
     g_xcpFusion.magic  = XCP_FUSION_MAGIC;
+    g_xcpEsc.magic     = XCP_ESC_MAGIC;
     g_xcpFusion.tickMs = g_TickCount_1ms;
 
     /* Angles are published in DEGREES. The filter works in radians and always

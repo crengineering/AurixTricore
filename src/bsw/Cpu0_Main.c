@@ -151,6 +151,7 @@ int core0_main(void)
     (void)Scheduler_addTask(&g_sched, Task_Lwip,       SCHED_MS(1u));    /* 1 kHz lwIP poll */
     (void)Scheduler_addTask(&g_sched, SensorTask_baro, SCHED_MS(20u));   /* 50 Hz barometer */
     (void)Scheduler_addTask(&g_sched, SensorTask_mag,  SCHED_MS(20u));   /* 50 Hz magnetometer */
+    (void)Scheduler_addTask(&g_sched, SensorTask_esc,  SCHED_MS(20u));   /* 50 Hz ESC telemetry publish */
     /* NavTask_step moved to core1_main's own scheduler (T12,
      * docs/REFACTORING_PLAN.md): the flight core gets nothing else, ever. */
     /* Registration order preserves the original dispatch order within a

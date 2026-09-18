@@ -106,7 +106,7 @@ Pins are board‑fixed (see §4) but actively used by the firmware Ethernet stac
 
 | Pin | Motor | ATOM out | TIM in | Header·pin | Status |
 |---|---|---|---|---|---|
-| P22.1 | M1 | ATOM0.0 (TOUT48) | TIM0.0 / TIM7.2 | **X702·30 — hole proven 2026‑09‑08** | plan (pad drives, HW‑verified) |
+| P22.1 | M1 | ATOM0.0 (TOUT48) | TIM0.0 / TIM7.2 | **X702·30 — hole proven 2026‑09‑08** | **impl, HW‑verified 2026‑09‑17** (open‑drain + 2 kΩ→3V3: 3,3 V / 0,26 V; ATOM0 SOMP DShot300 frames decoded by the Nano analyzer, ESC answers) |
 | P22.0 | M2 | ATOM0.1 (TOUT47) | TIM0.1 / TIM7.3 | **X702·32 — hole proven 2026‑09‑08** | plan (pad drives, HW‑verified) |
 | P22.2 | M3 | ATOM0.3 (TOUT49) | TIM0.3 / TIM7.1 | **X702·36 — hole proven 2026‑09‑08** | plan (pad drives, HW‑verified) |
 | P22.3 | M4 | ATOM0.4 (TOUT50) | TIM0.4 / TIM7.0 | **X702·34 — hole proven 2026‑09‑08** | plan (pad drives, HW‑verified) |
@@ -245,7 +245,7 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 | Signal | Pin / channel | Resource | Header·pin | Status |
 |---|---|---|---|---|
 | ESC current sense (Pad C) | ~~AN7~~ | ~~EVADC **G0CH7**~~ | ~~X703·19~~ | **deferred 2026‑09‑06** — not wired (see note) |
-| ESC telemetry RX (Pad T) | P23.3 | ASCLIN6 RXA (`IfxAsclin6_RXA_P23_3_IN`) | **X702·24 — hole proven 2026‑09‑08** | plan (pad drives, HW‑verified) |
+| ESC telemetry RX (Pad T) | P23.3 | ASCLIN6 RXA (`IfxAsclin6_RXA_P23_3_IN`) | **X702·24 — hole proven 2026‑09‑08** | **impl, HW‑verified 2026‑09‑17** (KISS packets 122/122 CRC‑ok at 16× oversampling, `noPullDevice`) |
 
 > **2026-09-03 audit** (ESC arrival pre-check, `docs/ESC_AM32.md`): the Flywoo
 > GOKU G55M's full pad row is **`G V 1 2 3 4 C T`** — this section only
@@ -272,10 +272,16 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 
 > **2026-09-09 (Chris, bench): Pad T idles at ≈ 0,17 V** with the ESC powered
 > and nothing connected — the ESC releases the telemetry line between frames.
-> **P23.3 must supply the idle-high**: at minimum the pad's internal pull-up
-> (`IfxPort_InputMode_pullUp`) in the ASCLIN6 RX init; provision an external
-> 4,7–10 kΩ to 3,3 V on the breakout board in case the ESC turns out to be
-> open-drain during the frame too (`docs/ESC_AM32.md` Gaps). Pads 1–4 idle
+> **P23.3 must supply the idle-high — but NOT with the pad's internal pull-up.**
+> Measured 2026-09-17 (Chris): with `IfxPort_InputMode_pullUp` in the ASCLIN6
+> RX init the released line sits at **5 V** — a P22/P23 pad pull-up goes to the
+> pad supply VEXT, not to 3,3 V. The ESC's AT32 pins tolerate it and the current
+> is tens of µA, but it is wrong by design. Rule: **`IfxPort_InputMode_noPullDevice`
+> on every RX pad that a 3,3 V device releases or may leave undriven** (ESC pad T,
+> and the GNSS `TXO` too — it reads 5 V whenever the module is unplugged). The
+> idle-high comes from an **external 4,7–10 kΩ to +3V3** on the breakout board
+> (bench today: the Nano analyzer's pull-up on D12). Firmware: `Dshot.c` and
+> `GnssM9N.c` use `noPullDevice` since 2026-09-17. Pads 1–4 idle
 > at 3,3 V, V pad = supply voltage (12 V on the lab supply) — both as expected.
 
 **ADC header (X703/X803) — scarce filtered inputs + references:**

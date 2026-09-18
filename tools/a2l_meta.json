@@ -1254,5 +1254,73 @@
       "lo": "0.000001",
       "hi": "1"
     }
+  },
+  "Xcp_Esc": {
+    "magic": {
+      "skip": true
+    },
+    "tickMs": {
+      "name": "EscTickMs",
+      "desc": "uptime when the ESC block was last written",
+      "unit": "ms",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "tlmCount": {
+      "name": "EscTlmCount",
+      "desc": "CRC-valid KISS telemetry packets since boot (ESC 1)",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "tempC": {
+      "name": "EscTempC",
+      "desc": "ESC 1 temperature (KISS byte 0)",
+      "unit": "degC",
+      "lo": "-40",
+      "hi": "125"
+    },
+    "tlmFresh": {
+      "name": "EscTlmFresh",
+      "desc": "1 = a new telemetry packet arrived since the previous publish",
+      "lo": "0",
+      "hi": "1"
+    },
+    "reserved": {
+      "skip": true
+    },
+    "voltageCv": {
+      "name": "EscVoltageCv",
+      "desc": "ESC 1 reported pack voltage [cV] - INVALID on the GOKU G55M (floating ADC), shown raw",
+      "unit": "cV",
+      "lo": "0",
+      "hi": "65535"
+    },
+    "currentCa": {
+      "name": "EscCurrentCa",
+      "desc": "ESC 1 reported motor current [cA] - INVALID on the GOKU G55M (floating ADC), shown raw",
+      "unit": "cA",
+      "lo": "0",
+      "hi": "65535"
+    },
+    "mAh": {
+      "name": "EscMah",
+      "desc": "ESC 1 consumed charge as integrated by the ESC (from the invalid current)",
+      "unit": "mAh",
+      "lo": "0",
+      "hi": "65535"
+    },
+    "eRpm100": {
+      "name": "EscERpm100",
+      "desc": "ESC 1 electrical rpm / 100, raw KISS field",
+      "lo": "0",
+      "hi": "65535"
+    },
+    "rpm": {
+      "name": "EscRpm",
+      "desc": "ESC 1 mechanical speed, eRPM*100/(poles/2) with 14 poles",
+      "unit": "rpm",
+      "lo": "0",
+      "hi": "60000"
+    }
   }
 }

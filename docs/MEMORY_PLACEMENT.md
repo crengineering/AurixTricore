@@ -230,6 +230,7 @@ block, with the literal defined once beside the existing `LCF_*_START` defines
 #define LCF_XCP_I2CDBG_START    0x70030400
 #define LCF_XCP_FUSION_START    0x70030500
 #define LCF_XCP_FUSIONCAL_START 0x70030600
+#define LCF_XCP_ESC_START       0x70030700
 ...
             group (ordered)
             {

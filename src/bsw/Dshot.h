@@ -33,5 +33,8 @@ typedef struct
 
 void Dshot_init(void);
 void Dshot_task(void);
+/* Copies the last CRC-valid telemetry packet; returns the driver's CRC-ok packet
+ * count so the caller can tell whether a new packet arrived since it last asked. */
+uint32 Dshot_getTelemetry(Esc_telemetry *out);
 
 #endif /* DSHOT_H */

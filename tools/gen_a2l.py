@@ -17,6 +17,7 @@ So the layout is DERIVED here and never typed:
     Xcp_Nvm   0x70030200  Nvm.h           -> CHARACTERISTIC  (NVM_*)
     Xcp_Gpio  0x70030300  gpio.h          -> CHARACTERISTIC  (GPIO_*)
     Xcp_Fusion 0x70030500 Measurements.h  -> MEASUREMENT
+    Xcp_Esc    0x70030700 Measurements.h  -> MEASUREMENT
     DIAG_* defines        Diagnostics.h   -> MEASUREMENT with BIT_MASK
 
 What is NOT derived is the prose: descriptions, units and display limits carry
@@ -73,6 +74,7 @@ BLOCKS = {
     "Xcp_Gpio": ("gpio.h",         "LCF_XCP_GPIO_START"),
     "Xcp_Fusion": ("Measurements.h", "LCF_XCP_FUSION_START"),
     "Xcp_FusionCal": ("FusionCal.h", "LCF_XCP_FUSIONCAL_START"),
+    "Xcp_Esc": ("Measurements.h", "LCF_XCP_ESC_START"),
 }
 
 
@@ -348,6 +350,7 @@ PREAMBLE = """\
  *   Xcp_Gpio  (GPIO control, RAM only) 0x{gpio_addr:08X}, {gpio_size} bytes, gpio.h
  *   Xcp_Fusion (navigation state)     0x{fusion_addr:08X}, {fusion_size} bytes, Measurements.h
  *   Xcp_FusionCal (estimator tuning)  0x{fcal_addr:08X}, {fcal_size} bytes, FusionCal.h
+ *   Xcp_Esc   (ESC telemetry)         0x{esc_addr:08X}, {esc_size} bytes, Measurements.h
  * Transport: XCP on UDP/IP, port 5555, station 192.168.0.10.
  * DAQ: dynamic, 1 list, event channel 0 = 100 ms task.
  */
@@ -438,6 +441,7 @@ def generate() -> tuple[str, list[str]]:
     gpio_objs, gpio_size = block_objects("Xcp_Gpio", meta, warn, "char")
     fusion_objs, fusion_size = block_objects("Xcp_Fusion", meta, warn, "meas")
     fcal_objs, fcal_size = block_objects("Xcp_FusionCal", meta, warn, "char")
+    esc_objs, esc_size = block_objects("Xcp_Esc", meta, warn, "meas")
 
     data_addr = read_lsl_define("LCF_XCP_DATA_START")
     cal_addr = read_lsl_define("LCF_XCP_CAL_START")
@@ -445,6 +449,7 @@ def generate() -> tuple[str, list[str]]:
     gpio_addr = read_lsl_define("LCF_XCP_GPIO_START")
     fusion_addr = read_lsl_define("LCF_XCP_FUSION_START")
     fcal_addr = read_lsl_define("LCF_XCP_FUSIONCAL_START")
+    esc_addr = read_lsl_define("LCF_XCP_ESC_START")
 
     diag_fields, _ = parse_struct(BSW / "Measurements.h", "Xcp_Data")
     diag_off = next(f.offset for f in diag_fields if f.name == "diagStatus")
@@ -464,6 +469,7 @@ def generate() -> tuple[str, list[str]]:
                              data_addr=data_addr, cal_addr=cal_addr,
                              nvm_addr=nvm_addr, gpio_addr=gpio_addr,
                              fusion_addr=fusion_addr, fcal_addr=fcal_addr,
+                             esc_addr=esc_addr, esc_size=esc_size,
                              data_size=data_size, cal_size=cal_size,
                              nvm_size=nvm_size, gpio_size=gpio_size,
                              fusion_size=fusion_size, fcal_size=fcal_size)]
@@ -483,6 +489,8 @@ def generate() -> tuple[str, list[str]]:
     parts.append("\n\n".join(fusion_objs))
     parts.append(f"\n\n    /* Estimator tuning: Xcp_FusionCal @ 0x{fcal_addr:08X}, RAM only (FusionCal.h) */\n")
     parts.append("\n\n".join(fcal_objs))
+    parts.append(f"\n\n    /* ESC telemetry: Xcp_Esc @ 0x{esc_addr:08X} (see Measurements.h) */\n")
+    parts.append("\n\n".join(esc_objs))
     parts.append("\n\n  /end MODULE\n/end PROJECT\n")
     return "".join(parts), warn
 
