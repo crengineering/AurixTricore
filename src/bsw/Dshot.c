@@ -73,21 +73,26 @@ void asclin6IsrReceive(void)
 /******************************************************************************/
 /*--------------------------Function Implementations--------------------------*/
 /******************************************************************************/
-void Dshot_init_motors(void)
+static void Dshot_init_motors(void)
 {
-    for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
+    Ifx_GTM          *gtm  = &MODULE_GTM;
+    Ifx_GTM_ATOM_AGC *agc;
+    uint16            mask = 0u;
+    uint32            ticksPerBit;
+    Dshot_Motor_t     motor_id;
+
+    /* CLK0 = GTM module clock, undivided. Additive: the 2-bit CLK_EN fields leave FXCLK alone.
+     * Once, before any channel: CMU_CLK dividers may only be written while the clock is off. */
+    IfxGtm_Cmu_setClkFrequency(gtm, IfxGtm_Cmu_Clk_0, IfxGtm_Cmu_getModuleFrequency(gtm));
+    IfxGtm_Cmu_enableClocks(gtm, IFXGTM_CMU_CLKEN_CLK0);
+    g_dshotClk0Hz = IfxGtm_Cmu_getClkFrequency(gtm, IfxGtm_Cmu_Clk_0, TRUE);
+
+    ticksPerBit = (uint32)(g_dshotClk0Hz * 3.333e-6f + 0.5f);   /* DShot300 bit slot */
+    g_t0hTicks  = (3u * ticksPerBit) / 8u;    /* 1.25 us */
+    g_t1hTicks  = (3u * ticksPerBit) / 4u;    /* 2.50 us */
+
+    for (motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
     {
-        Ifx_GTM                 *gtm = &MODULE_GTM;
-
-        /* CLK0 = GTM module clock, undivided. Additive: the 2-bit CLK_EN fields leave FXCLK alone. */
-        IfxGtm_Cmu_setClkFrequency(gtm, IfxGtm_Cmu_Clk_0, IfxGtm_Cmu_getModuleFrequency(gtm));
-        IfxGtm_Cmu_enableClocks(gtm, IFXGTM_CMU_CLKEN_CLK0);
-        g_dshotClk0Hz = IfxGtm_Cmu_getClkFrequency(gtm, IfxGtm_Cmu_Clk_0, TRUE);
-
-        uint32 ticksPerBit = (uint32)(g_dshotClk0Hz * 3.333e-6f + 0.5f);   /* DShot300 bit slot */
-        g_t0hTicks = (3u * ticksPerBit) / 8u;    /* 1.25 us */
-        g_t1hTicks = (3u * ticksPerBit) / 4u;    /* 2.50 us */
-
         IfxGtm_Atom_Pwm_Config cfg;
         IfxGtm_Atom_Pwm_initConfig(&cfg, gtm);
 
@@ -98,21 +103,27 @@ void Dshot_init_motors(void)
         cfg.dutyCycle                = 0u;
         cfg.signalLevel              = Ifx_ActiveState_high;
         cfg.synchronousUpdateEnabled = TRUE;
-        cfg.immediateStartEnabled    = TRUE;
+        cfg.immediateStartEnabled    = FALSE;      /* all channels start together below */
         cfg.pin.outputPin            = g_Dshot_MotorCfg[motor_id].pin;
         cfg.pin.outputMode           = IfxPort_OutputMode_openDrain;
         cfg.pin.padDriver            = IfxPort_PadDriver_ttlSpeed1;
 
         (void)IfxGtm_Atom_Pwm_init(&g_atomMX[motor_id], &cfg);
-        IfxGtm_Atom_Pwm_start(&g_atomMX[motor_id], TRUE);
+        mask |= (uint16)(1u << (uint16)g_atomMX[motor_id].atomChannel);
     }
+
+    /* One host trigger starts every channel on the same GTM tick, so all four
+     * share the period boundary the frame loop waits for on M1. Channels started
+     * one after another (IfxGtm_Atom_Pwm_start) sit at fixed phase offsets and a
+     * frame's first shadow write could be overwritten before it transferred
+     * (bench 2026-09-19: 15 of 16 pulses on M3/M4, "sometimes"). */
+    agc = g_atomMX[DSHOT_M1].agc;
+    IfxGtm_Atom_Agc_enableChannels(agc, mask, 0u, FALSE);
+    IfxGtm_Atom_Agc_enableChannelsOutput(agc, mask, 0u, FALSE);
+    IfxGtm_Atom_Agc_trigger(agc);
 }
 
-void Dshot_init(void)
-{
-    /* init Dshot Motor channels */
-
-    Dshot_init_motors();
+static void Dshot_init_uart(void){
     /* 
     init UART Telemetry from ESC on P23.3
     */
@@ -158,6 +169,12 @@ void Dshot_init(void)
     IfxAsclin_clearAllFlags(&MODULE_ASCLIN6);
 }
 
+void Dshot_init(void)
+{
+    Dshot_init_motors();
+    Dshot_init_uart();
+}
+
 /* throttle 0..2047 (0 = stop, 1..47 = commands), telem = request bit */
 static uint16 dshotBuild(uint16 value, boolean telem)
 {
@@ -166,26 +183,33 @@ static uint16 dshotBuild(uint16 value, boolean telem)
     return (uint16)((v << 4) | crc);
 }
 
-static void dshotSendFrame(uint16 frame, IfxGtm_Atom_Pwm_Driver motor_id)
+static void dshotSendFrame(uint16 frame[DSHOT_MEND])
 {
-    Ifx_GTM_ATOM    *atom = motor_id.atom;
-    IfxGtm_Atom_Ch   ch   = motor_id.atomChannel;
-    Ifx_GTM_ATOM_CH *regs = IfxGtm_Atom_Ch_getChannelPointer(atom, ch);
-    boolean          irq  = IfxCpu_disableInterrupts();
+    Ifx_GTM_ATOM    *atom  = g_atomMX[DSHOT_M1].atom;
+    IfxGtm_Atom_Ch   refCh = g_atomMX[DSHOT_M1].atomChannel;
+    Ifx_GTM_ATOM_CH *regs  = IfxGtm_Atom_Ch_getChannelPointer(atom, refCh);
+    boolean          irq   = IfxCpu_disableInterrupts();
     sint8            i;
+    Dshot_Motor_t    motor_id;
 
-    IfxGtm_Atom_Ch_clearZeroNotification(atom, ch);            /* CCU0TC: period boundary */
+    IfxGtm_Atom_Ch_clearZeroNotification(atom, refCh);            /* CCU0TC: period boundary */
     for (i = 15; i >= 0; i--)
     {
-        uint32 hi = (((frame >> i) & 1u) != 0u) ? g_t1hTicks : g_t0hTicks;
         while (regs->IRQ.NOTIFY.B.CCU0TC == 0u) { }
-        IfxGtm_Atom_Ch_clearZeroNotification(atom, ch);
-        IfxGtm_Atom_Ch_setCompareOneShadow(atom, ch, hi);     /* lands at the next boundary */
+        IfxGtm_Atom_Ch_clearZeroNotification(atom, refCh);
+        for(motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
+        {
+            uint32 hi = (((frame[motor_id] >> i) & 1u) != 0u) ? g_t1hTicks : g_t0hTicks;
+            IfxGtm_Atom_Ch_setCompareOneShadow(atom, g_atomMX[motor_id].atomChannel, hi);     /* lands at the next boundary */
+        }
     }
 
     while (regs->IRQ.NOTIFY.B.CCU0TC == 0u) { }
-    IfxGtm_Atom_Ch_clearZeroNotification(atom, ch);
-    IfxGtm_Atom_Ch_setCompareOneShadow(atom, ch, 0u);         /* back to idle low */
+    IfxGtm_Atom_Ch_clearZeroNotification(atom, refCh);
+    for(motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
+    {
+        IfxGtm_Atom_Ch_setCompareOneShadow(atom, g_atomMX[motor_id].atomChannel, 0u);         /* back to idle low */
+    }
 
     IfxCpu_restoreInterrupts(irq);
     g_dshotFrames++;
@@ -236,6 +260,11 @@ static boolean Dshot_interpret_ESC_Tlm(Esc_telemetry *esc_Tlm){
 /* 1 kHz task: zero throttle = the arming stream; every 256th frame asks for telemetry */
 void Dshot_task(void)
 {
+    uint16 frames[DSHOT_MEND];
+    for (uint8 i = 0u; i < 4u; i++)
+    {
+        frames[i] = dshotBuild(0u, 1u);
+    }
     /* telemetrics request */
     static boolean telem_requested = FALSE;
     boolean telem = ((g_dshotFrames & 0xFFu) == 0u) ? TRUE : FALSE;
@@ -245,10 +274,7 @@ void Dshot_task(void)
     }
 
     /* Dshot send Frames */
-    for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
-    {
-        dshotSendFrame(dshotBuild(0u, 1u), g_atomMX[motor_id]);
-    }
+    dshotSendFrame(frames);
 
 
     /* decode telemetrics*/
@@ -259,7 +285,6 @@ void Dshot_task(void)
         g_escTlmIndex    = 0u;
         g_escTlmComplete = FALSE;
         telem_requested  = FALSE;
-
     }
 }
 
