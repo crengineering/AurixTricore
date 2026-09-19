@@ -19,7 +19,7 @@ first for anything about frame timing, telemetry format, or GTM mapping.
 
 | Pad | Meaning | Wired to AURIX? | Pin / header | Status |
 |---|---|---|---|---|
-| G | ESC ground | Yes — common return | X702 GND pins (1-4, 37, 38, 41, 43, 44, 61, 62, 76) | must share ground with the AURIX board |
+| G | ESC ground | Yes — common return | X702 GND pins (1-4, 19, 20, 49, 50, 76 — PINNING §5; the earlier list here was X703's) | must share ground with the AURIX board |
 | V | **ESC VBAT pass-through/sense pad** — the AM32 4-in-1 board's own regulator/sense tap on the pack rail | **No — never wire this to any AURIX pin** | — | see §2 |
 | 1 | M1 signal, single-pin bidirectional DShot300 | Yes | P22.1 / ATOM0.0 (TOUT48) / TIM0.0 or TIM7.2 | X702·30, `PINNING.md` §2.1 |
 | 2 | M2 signal | Yes | P22.0 / ATOM0.1 (TOUT47) / TIM0.1 or TIM7.3 | X702·32 |

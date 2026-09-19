@@ -16,10 +16,13 @@
 #include "IfxAsclin_Asc.h"
 #include "IfxAsclin.h"
 #include "ConfigurationIsr.h"
+#include "Dshot_cfg.h"
 
 #define ESC_T_MESSAGE_LENGTH 10u
 
-static IfxGtm_Atom_Pwm_Driver g_atomM1;
+static const Dshot_MotorCfg g_Dshot_MotorCfg[DSHOT_MEND] = DSHOT_MOTOR_CFG;
+static IfxGtm_Atom_Pwm_Driver g_atomMX[DSHOT_MEND];
+
 static uint32                 g_t0hTicks;
 static uint32                 g_t1hTicks;
 uint32                        g_dshotFrames;
@@ -70,37 +73,46 @@ void asclin6IsrReceive(void)
 /******************************************************************************/
 /*--------------------------Function Implementations--------------------------*/
 /******************************************************************************/
+void Dshot_init_motors(void)
+{
+    for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
+    {
+        Ifx_GTM                 *gtm = &MODULE_GTM;
+
+        /* CLK0 = GTM module clock, undivided. Additive: the 2-bit CLK_EN fields leave FXCLK alone. */
+        IfxGtm_Cmu_setClkFrequency(gtm, IfxGtm_Cmu_Clk_0, IfxGtm_Cmu_getModuleFrequency(gtm));
+        IfxGtm_Cmu_enableClocks(gtm, IFXGTM_CMU_CLKEN_CLK0);
+        g_dshotClk0Hz = IfxGtm_Cmu_getClkFrequency(gtm, IfxGtm_Cmu_Clk_0, TRUE);
+
+        uint32 ticksPerBit = (uint32)(g_dshotClk0Hz * 3.333e-6f + 0.5f);   /* DShot300 bit slot */
+        g_t0hTicks = (3u * ticksPerBit) / 8u;    /* 1.25 us */
+        g_t1hTicks = (3u * ticksPerBit) / 4u;    /* 2.50 us */
+
+        IfxGtm_Atom_Pwm_Config cfg;
+        IfxGtm_Atom_Pwm_initConfig(&cfg, gtm);
+
+        cfg.atom                     = IfxGtm_Atom_0;
+        cfg.atomChannel              = g_Dshot_MotorCfg[motor_id].atomChannel;
+        cfg.clock                    = IfxGtm_Cmu_Clk_0;
+        cfg.period                   = ticksPerBit;
+        cfg.dutyCycle                = 0u;
+        cfg.signalLevel              = Ifx_ActiveState_high;
+        cfg.synchronousUpdateEnabled = TRUE;
+        cfg.immediateStartEnabled    = TRUE;
+        cfg.pin.outputPin            = g_Dshot_MotorCfg[motor_id].pin;
+        cfg.pin.outputMode           = IfxPort_OutputMode_openDrain;
+        cfg.pin.padDriver            = IfxPort_PadDriver_ttlSpeed1;
+
+        (void)IfxGtm_Atom_Pwm_init(&g_atomMX[motor_id], &cfg);
+        IfxGtm_Atom_Pwm_start(&g_atomMX[motor_id], TRUE);
+    }
+}
+
 void Dshot_init(void)
 {
-    Ifx_GTM                 *gtm = &MODULE_GTM;
+    /* init Dshot Motor channels */
 
-    /* CLK0 = GTM module clock, undivided. Additive: the 2-bit CLK_EN fields leave FXCLK alone. */
-    IfxGtm_Cmu_setClkFrequency(gtm, IfxGtm_Cmu_Clk_0, IfxGtm_Cmu_getModuleFrequency(gtm));
-    IfxGtm_Cmu_enableClocks(gtm, IFXGTM_CMU_CLKEN_CLK0);
-    g_dshotClk0Hz = IfxGtm_Cmu_getClkFrequency(gtm, IfxGtm_Cmu_Clk_0, TRUE);
-
-    uint32 ticksPerBit = (uint32)(g_dshotClk0Hz * 3.333e-6f + 0.5f);   /* DShot300 bit slot */
-    g_t0hTicks = (3u * ticksPerBit) / 8u;    /* 1.25 us */
-    g_t1hTicks = (3u * ticksPerBit) / 4u;    /* 2.50 us */
-
-    IfxGtm_Atom_Pwm_Config cfg;
-    IfxGtm_Atom_Pwm_initConfig(&cfg, gtm);
-
-    cfg.atom                     = IfxGtm_Atom_0;
-    cfg.atomChannel              = IfxGtm_Atom_Ch_0;
-    cfg.clock                    = IfxGtm_Cmu_Clk_0;
-    cfg.period                   = ticksPerBit;
-    cfg.dutyCycle                = 0u;
-    cfg.signalLevel              = Ifx_ActiveState_high;
-    cfg.synchronousUpdateEnabled = TRUE;
-    cfg.immediateStartEnabled    = TRUE;
-    cfg.pin.outputPin            = &IfxGtm_ATOM0_0_TOUT48_P22_1_OUT;
-    cfg.pin.outputMode           = IfxPort_OutputMode_openDrain;
-    cfg.pin.padDriver            = IfxPort_PadDriver_ttlSpeed1;
-
-    (void)IfxGtm_Atom_Pwm_init(&g_atomM1, &cfg);
-    IfxGtm_Atom_Pwm_start(&g_atomM1, TRUE);
-
+    Dshot_init_motors();
     /* 
     init UART Telemetry from ESC on P23.3
     */
@@ -154,10 +166,10 @@ static uint16 dshotBuild(uint16 value, boolean telem)
     return (uint16)((v << 4) | crc);
 }
 
-static void dshotSendFrame(uint16 frame)
+static void dshotSendFrame(uint16 frame, IfxGtm_Atom_Pwm_Driver motor_id)
 {
-    Ifx_GTM_ATOM    *atom = g_atomM1.atom;
-    IfxGtm_Atom_Ch   ch   = g_atomM1.atomChannel;
+    Ifx_GTM_ATOM    *atom = motor_id.atom;
+    IfxGtm_Atom_Ch   ch   = motor_id.atomChannel;
     Ifx_GTM_ATOM_CH *regs = IfxGtm_Atom_Ch_getChannelPointer(atom, ch);
     boolean          irq  = IfxCpu_disableInterrupts();
     sint8            i;
@@ -224,13 +236,20 @@ static boolean Dshot_interpret_ESC_Tlm(Esc_telemetry *esc_Tlm){
 /* 1 kHz task: zero throttle = the arming stream; every 256th frame asks for telemetry */
 void Dshot_task(void)
 {
+    /* telemetrics request */
     static boolean telem_requested = FALSE;
     boolean telem = ((g_dshotFrames & 0xFFu) == 0u) ? TRUE : FALSE;
     if (telem != FALSE)
     {
         telem_requested = TRUE;
     }
-    dshotSendFrame(dshotBuild(0u, telem));
+
+    /* Dshot send Frames */
+    for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
+    {
+        dshotSendFrame(dshotBuild(0u, 1u), g_atomMX[motor_id]);
+    }
+
 
     /* decode telemetrics*/
     if ( (telem_requested  != FALSE) &&

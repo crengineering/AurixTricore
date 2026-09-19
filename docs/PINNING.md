@@ -107,9 +107,9 @@ Pins are board‑fixed (see §4) but actively used by the firmware Ethernet stac
 | Pin | Motor | ATOM out | TIM in | Header·pin | Status |
 |---|---|---|---|---|---|
 | P22.1 | M1 | ATOM0.0 (TOUT48) | TIM0.0 / TIM7.2 | **X702·30 — hole proven 2026‑09‑08** | **impl, HW‑verified 2026‑09‑17** (open‑drain + 2 kΩ→3V3: 3,3 V / 0,26 V; ATOM0 SOMP DShot300 frames decoded by the Nano analyzer, ESC answers) |
-| P22.0 | M2 | ATOM0.1 (TOUT47) | TIM0.1 / TIM7.3 | **X702·32 — hole proven 2026‑09‑08** | plan (pad drives, HW‑verified) |
-| P22.2 | M3 | ATOM0.3 (TOUT49) | TIM0.3 / TIM7.1 | **X702·36 — hole proven 2026‑09‑08** | plan (pad drives, HW‑verified) |
-| P22.3 | M4 | ATOM0.4 (TOUT50) | TIM0.4 / TIM7.0 | **X702·34 — hole proven 2026‑09‑08** | plan (pad drives, HW‑verified) |
+| P22.0 | M2 | ATOM0.1 (TOUT47) | TIM0.1 / TIM7.3 | **X702·32 — hole proven 2026‑09‑08** | **HW‑verified 2026‑09‑18** (same `Dshot.c`, ATOM0 ch1 open‑drain, ESC pad 1 rewired: frames decoded, ESC answers KISS) |
+| P22.2 | M3 | ATOM0.3 (TOUT49) | TIM0.3 / TIM7.1 | **X702·36 — hole proven 2026‑09‑08** | **HW‑verified 2026‑09‑18** (ATOM0 ch3 open‑drain, LVDS_TX pad class — sinks fine, ESC answers) |
+| P22.3 | M4 | ATOM0.4 (TOUT50) | TIM0.4 / TIM7.0 | **X702·34 — hole proven 2026‑09‑08** | **HW‑verified 2026‑09‑18** (ATOM0 ch4 open‑drain, LVDS_TX pad class — ESC answers) |
 
 Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verification: §2.6).
 
@@ -374,11 +374,7 @@ unused elsewhere (the GPIO/PWM feature uses **TOM0/TOM3** on P00). Central `MODU
 scheduler). GTM module + FXCLK are already enabled by `gpio.c`; DShot init must only add its
 ATOM0/TIM cluster, not re‑init the whole GTM.
 
-**⚠ Open verification before populating all four channels** (project handoff §7.3): bench‑test
-that an **LVDS_TX pad sinks correctly in open‑drain while driven by a GTM ATOM in ALT mode** —
-on **P22.0** and especially **P22.2/P22.3** (LVDS_TX + HSCT footprint stub, §4 — higher risk).
-Confirm pin high = 3.3 V (not 5 V) and V_OL ≤ 0.8 V. **Fallback if it fails:** one **74LVC1T45**
-per line (5 V↔3.3 V, push‑pull) instead of open‑drain.
+**✅ Verification closed 2026‑09‑18 (Chris, bench):** all four pads drive DShot300 in **open‑drain ALT1 from a GTM ATOM0 channel** with the external pull‑up to 3,3 V — P22.1 (2026‑09‑17) and P22.0 / P22.2 / P22.3 (2026‑09‑18), each tested one at a time with the same `Dshot.c` (only `atomChannel` + `outputPin` swapped) against ESC pad 1, KISS reply as the oracle. The **LVDS_TX pads P22.2/P22.3** (HSCT footprint stub, §4) sink correctly — the 74LVC1T45 fallback is **not needed**; the breakout PCB (`drone_breakoutv1`) stays open‑drain + 1,5 kΩ. Levels on P22.0/2/3 were not metered (P22.1: 3,3 V / 0,26 V). Observation worth keeping: with the analyzer probe on an **unconfigured neighbour pad** (P22.2 while P22.3 was driven) the trace shows the neighbour's edges — a floating tristate input picking up crosstalk, not the pad driving; this is why every DShot line on the breakout carries its pull‑up.
 
 **Why P22 + open‑drain, not the 3.3 V VFLEX pins.** The only native‑3.3 V pins are
 P11.13/14/15 (§5.1) — only **three**, and SLOW‑class; a 4‑channel driver can't fit and a 4th
