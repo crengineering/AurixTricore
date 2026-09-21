@@ -218,15 +218,15 @@ typedef char layout_assert_Xcp_FusionCal_sizeof[(sizeof(Xcp_FusionCal) == 0x40u)
 /* Xcp_Esc (Measurements.h) */
 typedef char layout_assert_Xcp_Esc_magic_offset[(offsetof(Xcp_Esc, magic) == 0x0u) ? 1 : -1];
 typedef char layout_assert_Xcp_Esc_tickMs_offset[(offsetof(Xcp_Esc, tickMs) == 0x4u) ? 1 : -1];
-typedef char layout_assert_Xcp_Esc_tlmCount_offset[(offsetof(Xcp_Esc, tlmCount) == 0x8u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_crcFail_offset[(offsetof(Xcp_Esc, crcFail) == 0x8u) ? 1 : -1];
 typedef char layout_assert_Xcp_Esc_tempC_offset[(offsetof(Xcp_Esc, tempC) == 0xCu) ? 1 : -1];
-typedef char layout_assert_Xcp_Esc_tlmFresh_offset[(offsetof(Xcp_Esc, tlmFresh) == 0x10u) ? 1 : -1];
-typedef char layout_assert_Xcp_Esc_reserved_offset[(offsetof(Xcp_Esc, reserved) == 0x11u) ? 1 : -1];
-typedef char layout_assert_Xcp_Esc_voltageCv_offset[(offsetof(Xcp_Esc, voltageCv) == 0x14u) ? 1 : -1];
-typedef char layout_assert_Xcp_Esc_currentCa_offset[(offsetof(Xcp_Esc, currentCa) == 0x16u) ? 1 : -1];
-typedef char layout_assert_Xcp_Esc_mAh_offset[(offsetof(Xcp_Esc, mAh) == 0x18u) ? 1 : -1];
-typedef char layout_assert_Xcp_Esc_eRpm100_offset[(offsetof(Xcp_Esc, eRpm100) == 0x1Au) ? 1 : -1];
-typedef char layout_assert_Xcp_Esc_rpm_offset[(offsetof(Xcp_Esc, rpm) == 0x1Cu) ? 1 : -1];
-typedef char layout_assert_Xcp_Esc_sizeof[(sizeof(Xcp_Esc) == 0x20u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_tlmCount_offset[(offsetof(Xcp_Esc, tlmCount) == 0x1Cu) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_tlmMissed_offset[(offsetof(Xcp_Esc, tlmMissed) == 0x2Cu) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_rpm_offset[(offsetof(Xcp_Esc, rpm) == 0x3Cu) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_eRpm100_offset[(offsetof(Xcp_Esc, eRpm100) == 0x4Cu) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_voltageCv_offset[(offsetof(Xcp_Esc, voltageCv) == 0x54u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_currentCa_offset[(offsetof(Xcp_Esc, currentCa) == 0x5Cu) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_mAh_offset[(offsetof(Xcp_Esc, mAh) == 0x64u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_sizeof[(sizeof(Xcp_Esc) == 0x6Cu) ? 1 : -1];
 
 #endif /* AURIXTRICORE_LAYOUT_ASSERT_GEN_H */

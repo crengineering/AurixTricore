@@ -221,18 +221,24 @@ void measurementsSetImu(boolean present, const float32 acc[3], const float32 gyr
     }
 }
 
-void measurementsSetEsc(uint32 count, boolean fresh, const Esc_telemetry *tlm)
+void measurementsSetEsc(const Dshot_TelemetryStatus tlm[DSHOT_MEND], uint32 crcFail)
 {
-    g_xcpEsc.tickMs    = g_xcpData.tickMs;
-    g_xcpEsc.tlmCount  = count;
-    g_xcpEsc.tlmFresh  = (fresh != FALSE) ? 1u : 0u;
-    g_xcpEsc.tempC     = (sint32)tlm->temperature;
-    g_xcpEsc.voltageCv = tlm->voltage;
-    g_xcpEsc.currentCa = tlm->current;
-    g_xcpEsc.mAh       = tlm->mAh;
-    g_xcpEsc.eRpm100   = tlm->eRPM;
-    /* eRPM counts electrical revolutions; one mechanical turn = poles/2 of them */
-    g_xcpEsc.rpm       = ((float32)tlm->eRPM * 100.0f) / ((float32)XCP_ESC_MOTOR_POLES / 2.0f);
+    uint8 m;
+
+    g_xcpEsc.tickMs  = g_xcpData.tickMs;
+    g_xcpEsc.crcFail = crcFail;
+    for (m = 0u; m < (uint8)DSHOT_MEND; m++)
+    {
+        g_xcpEsc.tempC[m]     = (sint32)tlm[m].packet.temperature;
+        g_xcpEsc.tlmCount[m]  = tlm[m].count;
+        g_xcpEsc.tlmMissed[m] = tlm[m].missed;
+        g_xcpEsc.eRpm100[m]   = tlm[m].packet.eRPM;
+        g_xcpEsc.voltageCv[m] = tlm[m].packet.voltage;
+        g_xcpEsc.currentCa[m] = tlm[m].packet.current;
+        g_xcpEsc.mAh[m]       = tlm[m].packet.mAh;
+        /* eRPM counts electrical revolutions; one mechanical turn = poles/2 of them */
+        g_xcpEsc.rpm[m]       = ((float32)tlm[m].packet.eRPM * 100.0f) / ((float32)XCP_ESC_MOTOR_POLES / 2.0f);
+    }
 }
 
 void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)

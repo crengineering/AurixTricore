@@ -344,47 +344,48 @@ typedef struct
 extern volatile Xcp_Fusion g_xcpFusion;
 
 /* ---------------------------------------------------------------------------
- * Xcp_Esc — ESC telemetry (KISS packet over pad T, decoded by Dshot.c) plus
- * the DShot link counters, in its own block at the next free 256-byte slot.
+ * Xcp_Esc — ESC telemetry of all four motors (KISS packets over the shared
+ * pad-T wire, requested round-robin and decoded by Dshot.c), in its own block
+ * at the next free 256-byte slot.
  *
  * SEPARATE BLOCK for the same reason as Xcp_Fusion: Xcp_Data is full. The
- * sensor task (SensorTask_esc) pulls the last CRC-valid packet from the
- * driver with Dshot_getTelemetry() and writes it here; the driver itself
- * never touches XCP.
+ * sensor task (SensorTask_esc) pulls the per-motor status from the driver
+ * with Dshot_getTelemetry() and writes it here; the driver never touches XCP.
  *
- * Block map (little-endian, 4-byte aligned groups — see Xcp_Fusion above):
+ * Block map (little-endian; per-motor arrays indexed M1..M4 = 0..3, the A2L
+ * names them EscM1..EscM4):
  *
- *   0x00  uint32  magic        0x31435345 ("ESC1")
- *   0x04  uint32  tickMs       uptime when this block was written
- *   0x08  uint32  tlmCount     CRC-valid telemetry packets since boot (driver counter)
- *   0x0C  sint32  tempC        ESC temperature [degC] (sint32: the A2L generator has no SBYTE layout)
- *   0x10  uint8   tlmFresh     1 = a new packet arrived since the previous task run
- *   0x11  uint8   reserved[3]
- *   0x14  uint16  voltageCv    pack voltage [cV] — INVALID on the GOKU G55M (floating ADC)
- *   0x16  uint16  currentCa    motor current [cA] — INVALID on the GOKU G55M (floating ADC)
- *   0x18  uint16  mAh          consumed charge [mAh] — integrates the invalid current
- *   0x1A  uint16  eRpm100      electrical rpm / 100, as sent by the ESC
- *   0x1C  float32 rpm          mechanical rpm = eRpm100 * 100 / (poles / 2), poles = 14
+ *   0x00  uint32  magic         0x32435345 ("ESC2")
+ *   0x04  uint32  tickMs        uptime when this block was written
+ *   0x08  uint32  crcFail       packets with a bad CRC-8 (shared wire, not attributable)
+ *   0x0C  sint32  tempC[4]      ESC temperature [degC] (sint32: no SBYTE layout in the generator)
+ *   0x1C  uint32  tlmCount[4]   CRC-valid packets per motor since boot
+ *   0x2C  uint32  tlmMissed[4]  requests per motor that got no packet in their slot
+ *   0x3C  float32 rpm[4]        mechanical rpm = eRpm100 * 100 / (poles / 2), poles = 14
+ *   0x4C  uint16  eRpm100[4]    electrical rpm / 100, raw KISS field
+ *   0x54  uint16  voltageCv[4]  pack voltage [cV] — INVALID on the GOKU G55M (floating ADC)
+ *   0x5C  uint16  currentCa[4]  motor current [cA] — INVALID on the GOKU G55M (floating ADC)
+ *   0x64  uint16  mAh[4]        consumed charge [mAh] — integrates the invalid current
  *
- * Total 0x20 = 32 bytes. One ESC for now (channel 1); channels 2..4 append
- * after rpm when the driver serves them, nothing above moves.
+ * Total 0x6C = 108 bytes. v1 (one motor, 32 bytes, 2026-09-17) was replaced
+ * in place on 2026-09-21 before any release carried it.
  * --------------------------------------------------------------------------- */
-#define XCP_ESC_MAGIC        0x31435345u
+#define XCP_ESC_MAGIC        0x32435345u
 #define XCP_ESC_MOTOR_POLES  14u        /* X2216-III 12N14P, docs/ESC_BRINGUP_2026-09-16.md */
 
 typedef struct
 {
     uint32  magic;
     uint32  tickMs;
-    uint32  tlmCount;
-    sint32  tempC;
-    uint8   tlmFresh;
-    uint8   reserved[3];
-    uint16  voltageCv;
-    uint16  currentCa;
-    uint16  mAh;
-    uint16  eRpm100;
-    float32 rpm;
+    uint32  crcFail;
+    sint32  tempC[4];
+    uint32  tlmCount[4];
+    uint32  tlmMissed[4];
+    float32 rpm[4];
+    uint16  eRpm100[4];
+    uint16  voltageCv[4];
+    uint16  currentCa[4];
+    uint16  mAh[4];
 } Xcp_Esc;
 
 extern volatile Xcp_Esc g_xcpEsc;
@@ -412,10 +413,10 @@ void measurementsSetImu(boolean present, const float32 acc[3], const float32 gyr
  * 100 ms task on CPU0; reads the other cores' slots in g_coreStats. */
 void measurementsSetSystemLoad(void);
 
-/* Publish the ESC telemetry packet the driver decoded last. `count` is the
- * driver's CRC-valid packet counter; `fresh` says whether it changed since
- * the sensor task last looked. Called by SensorTask_esc (CPU0, 20 ms). */
-void measurementsSetEsc(uint32 count, boolean fresh, const Esc_telemetry *tlm);
+/* Publish the per-motor ESC telemetry status the driver holds (last CRC-valid
+ * packet, packet count, miss count per motor) plus the shared-wire CRC failure
+ * count. Called by SensorTask_esc (CPU0, 20 ms). */
+void measurementsSetEsc(const Dshot_TelemetryStatus tlm[DSHOT_MEND], uint32 crcFail);
 
 /*
  * Publish the latest gnss sample into the XCP block. Called by the measurement task

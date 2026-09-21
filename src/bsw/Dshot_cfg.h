@@ -12,14 +12,6 @@
  * Per-pin Dshot motor configuration
  * ------------------------------------------------------------------------ */
 
-typedef enum {
-    DSHOT_M1 = 0,
-    DSHOT_M2,
-    DSHOT_M3,
-    DSHOT_M4,
-    DSHOT_MEND
-} Dshot_Motor_t;
-
 typedef struct
 {
     IfxGtm_Atom_Ch       atomChannel;

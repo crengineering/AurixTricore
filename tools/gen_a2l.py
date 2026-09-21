@@ -241,14 +241,16 @@ def expand(entry: dict, field: Field, index: int | None) -> dict:
     """Resolve the index placeholders for one array element.
 
     {i}  -> 0, 1, 2 ...      (Core{i}ExecTime  -> Core0ExecTime)
+    {i1} -> 1, 2, 3 ...      (EscM{i1}TempC    -> EscM1TempC, motors count from 1)
     {i2} -> 00, 01, 02 ...   (GPIO_P00_{i2}_state -> GPIO_P00_01_state)
     """
     out = dict(entry)
     i = "" if index is None else str(index)
+    i1 = "" if index is None else str(index + 1)
     i2 = "" if index is None else f"{index:02d}"
     for key in ("name", "desc"):
         if key in out:
-            out[key] = out[key].replace("{i2}", i2).replace("{i}", i)
+            out[key] = out[key].replace("{i2}", i2).replace("{i1}", i1).replace("{i}", i)
     if "name" not in out:
         out["name"] = field.name + ("" if index is None else f"_{index}")
     return out

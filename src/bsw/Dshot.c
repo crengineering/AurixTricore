@@ -31,12 +31,12 @@ uint32                        g_escTlmBytes;
 float32                       g_dshotClk0Hz;
 
 /* ESC Telemetrics */
-volatile uint8                g_escTlmRaw[ESC_T_MESSAGE_LENGTH];
-volatile uint8                g_escTlmIndex    = 0u;
-volatile boolean              g_escTlmComplete = FALSE;
-static   Esc_telemetry        g_esc_Tlm;
-static   uint32               g_escTlmCrcOk    = 0u;
-static   uint32               g_escTlmCrcFail  = 0u;
+volatile uint8                 g_escTlmRaw[ESC_T_MESSAGE_LENGTH];
+volatile uint8                 g_escTlmIndex    = 0u;
+volatile boolean               g_escTlmComplete = FALSE;
+static   Dshot_TelemetryStatus g_esc_Tlm[DSHOT_MEND];
+static   uint32                g_escTlmCrcOk    = 0u;
+static   uint32                g_escTlmCrcFail  = 0u;
 
 /******************************************************************************/
 /*--------------------------Function Declaration------------------------------*/
@@ -261,16 +261,33 @@ static boolean Dshot_interpret_ESC_Tlm(Esc_telemetry *esc_Tlm){
 void Dshot_task(void)
 {
     uint16 frames[DSHOT_MEND];
-    for (uint8 i = 0u; i < 4u; i++)
-    {
-        frames[i] = dshotBuild(0u, 1u);
-    }
-    /* telemetrics request */
     static boolean telem_requested = FALSE;
-    boolean telem = ((g_dshotFrames & 0xFFu) == 0u) ? TRUE : FALSE;
+    static Dshot_Motor_t dshot_motor = DSHOT_M1;
+    /* telemetrics request */
+    boolean telem = ((g_dshotFrames & 0x7u) == 0u) ? TRUE : FALSE;
     if (telem != FALSE)
     {
+        if (telem_requested != FALSE)
+        {
+            g_esc_Tlm[dshot_motor].missed++;
+        }
+
+        if (dshot_motor < (DSHOT_MEND-1u))
+        {
+            dshot_motor++;
+        }
+        else {
+            dshot_motor = DSHOT_M1;
+        }
+
+
         telem_requested = TRUE;
+    }
+
+    /* building frames */
+    for (uint8 motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
+    {
+        frames[motor_id] = dshotBuild(0u, (telem && (dshot_motor == motor_id)) ? TRUE : FALSE);
     }
 
     /* Dshot send Frames */
@@ -278,18 +295,27 @@ void Dshot_task(void)
 
 
     /* decode telemetrics*/
-    if ( (telem_requested  != FALSE) &&
+    if ( (telem_requested != FALSE) &&
          (g_escTlmComplete != FALSE) )
     {
-        (void)Dshot_interpret_ESC_Tlm(&g_esc_Tlm);
+        if (Dshot_interpret_ESC_Tlm(&g_esc_Tlm[dshot_motor].packet) != FALSE)
+        {
+            g_esc_Tlm[dshot_motor].count++;
+        }
         g_escTlmIndex    = 0u;
         g_escTlmComplete = FALSE;
         telem_requested  = FALSE;
     }
 }
 
-uint32 Dshot_getTelemetry(Esc_telemetry *out)
+uint32 Dshot_getTelemetry(Dshot_TelemetryStatus *out)
 {
-    *out = g_esc_Tlm;
-    return g_escTlmCrcOk;
+    for (uint8 motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
+    {
+        out[motor_id].packet = g_esc_Tlm[motor_id].packet;
+        out[motor_id].count  = g_esc_Tlm[motor_id].count;
+        out[motor_id].missed = g_esc_Tlm[motor_id].missed;
+    }
+
+    return g_escTlmCrcFail;
 }

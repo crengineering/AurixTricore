@@ -107,9 +107,9 @@ Pins are board‑fixed (see §4) but actively used by the firmware Ethernet stac
 | Pin | Motor | ATOM out | TIM in | Header·pin | Status |
 |---|---|---|---|---|---|
 | P22.1 | M1 | ATOM0.0 (TOUT48) | TIM0.0 / TIM7.2 | **X702·30 — hole proven 2026‑09‑08** | **impl, HW‑verified 2026‑09‑17** (open‑drain + 2 kΩ→3V3: 3,3 V / 0,26 V; ATOM0 SOMP DShot300 frames decoded by the Nano analyzer, ESC answers) |
-| P22.0 | M2 | ATOM0.1 (TOUT47) | TIM0.1 / TIM7.3 | **X702·32 — hole proven 2026‑09‑08** | **HW‑verified 2026‑09‑18** (same `Dshot.c`, ATOM0 ch1 open‑drain, ESC pad 1 rewired: frames decoded, ESC answers KISS) |
-| P22.2 | M3 | ATOM0.3 (TOUT49) | TIM0.3 / TIM7.1 | **X702·36 — hole proven 2026‑09‑08** | **HW‑verified 2026‑09‑18** (ATOM0 ch3 open‑drain, LVDS_TX pad class — sinks fine, ESC answers) |
-| P22.3 | M4 | ATOM0.4 (TOUT50) | TIM0.4 / TIM7.0 | **X702·34 — hole proven 2026‑09‑08** | **HW‑verified 2026‑09‑18** (ATOM0 ch4 open‑drain, LVDS_TX pad class — ESC answers) |
+| P22.0 | M2 | ATOM0.1 (TOUT47) | TIM0.1 / TIM7.3 | **X702·32 — hole proven 2026‑09‑08** | **impl, HW‑verified 2026‑09‑21** (open‑drain + 2 kΩ→3V3, DShot300 frames decoded by the Nano analyzer, ESC pad answers telemetry) |
+| P22.2 | M3 | ATOM0.3 (TOUT49) | TIM0.3 / TIM7.1 | **X702·36 — hole proven 2026‑09‑08** | **impl, HW‑verified 2026‑09‑21** (open‑drain + 2 kΩ→3V3, DShot300 frames decoded by the Nano analyzer, ESC pad answers telemetry) |
+| P22.3 | M4 | ATOM0.4 (TOUT50) | TIM0.4 / TIM7.0 | **X702·34 — hole proven 2026‑09‑08** | **impl, HW‑verified 2026‑09‑21** (open‑drain + 2 kΩ→3V3, DShot300 frames decoded by the Nano analyzer, ESC pad answers telemetry) |
 
 Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verification: §2.6).
 

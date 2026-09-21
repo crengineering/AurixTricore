@@ -110,11 +110,8 @@ void SensorTask_gnss(void)
 
 void SensorTask_esc(void)
 {
-    static uint32 s_escSeen = 0u;      /* driver packet count at the last publish */
-    Esc_telemetry tlm;
-    uint32        count = Dshot_getTelemetry(&tlm);
-    boolean       fresh = (count != s_escSeen) ? TRUE : FALSE;
+    Dshot_TelemetryStatus tlm[DSHOT_MEND];
+    uint32                crcFail = Dshot_getTelemetry(tlm);   /* fills all four, returns the wire's CRC failures */
 
-    s_escSeen = count;
-    measurementsSetEsc(count, fresh, &tlm);
+    measurementsSetEsc(tlm, crcFail);
 }
