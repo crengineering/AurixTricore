@@ -66,9 +66,9 @@ static boolean Motor_beep(uint16 dshot_command_set[DSHOT_MEND])
 
 
 
-Motor_states_t Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND]){
+Motor_states_t Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_command_set[DSHOT_MEND])
+{
     static Motor_states_t state                         = MOTOR_INIT;
-           uint16         dshot_command_set[DSHOT_MEND] = {0};
 
     // general transition for failsafe enter
     // if ethernet communication is lost then state = MOTOR_FAILSAFE;
@@ -99,8 +99,6 @@ Motor_states_t Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND]){
         default:
             break;
     }
-    /* feed forward of setpoint to Dshot module */
-
 
     return state;
 }

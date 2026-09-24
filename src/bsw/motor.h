@@ -29,6 +29,6 @@ typedef enum {
 /*-------------------------Global Function Prototypes-------------------------*/
 /******************************************************************************/
 
-Motor_states_t Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND]);
+Motor_states_t Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_command_set[DSHOT_MEND]);
 
 #endif /* MOTOR_H */
