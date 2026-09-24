@@ -15,6 +15,7 @@
 
 /* command codes (master -> slave) */
 #define XCP_CMD_CONNECT             0xFFu
+#define XCP_LINK_TIMEOUT_MS         500u   /* Xcp_linkAlive(): max age of the last command */
 #define XCP_CMD_DISCONNECT          0xFEu
 #define XCP_CMD_GET_STATUS          0xFDu
 #define XCP_CMD_SYNCH               0xFCu
@@ -598,4 +599,14 @@ void xcpInit(void)
 uint32 Xcp_getLastCommandMs(void)
 {
     return s_lastCmdMs;
+}
+
+/* Link-loss criterion for the arming state machine (SYS2-SAF-002): the master
+ * polls continuously while it is connected, so "no well-formed command for
+ * XCP_LINK_TIMEOUT_MS" is "the link is gone" -- GUI closed, cable pulled, PC
+ * asleep. Before the first command after boot the age is huge: not alive. */
+boolean Xcp_linkAlive(void)
+{
+    uint32 ageMs = g_TickCount_1ms - s_lastCmdMs;      /* unsigned: wraps correctly */
+    return ((s_lastCmdMs != 0u) && (ageMs < XCP_LINK_TIMEOUT_MS)) ? TRUE : FALSE;
 }

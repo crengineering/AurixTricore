@@ -19,5 +19,9 @@ void xcpDaqCycle(void);
 /* 1 ms tick at which the last well-formed XCP command arrived (0 = never).
  * Motor.c compares it with the current tick for the link-loss failsafe. */
 uint32 Xcp_getLastCommandMs(void);
+/* TRUE while a well-formed XCP command arrived within the last XCP_LINK_TIMEOUT_MS
+ * (500 ms): the master polls continuously, so this is "the operator's link is up".
+ * FALSE before the first command after boot. Motor.c's failsafe entry/exit. */
+boolean Xcp_linkAlive(void);
 
 #endif /* XCP_H_ */

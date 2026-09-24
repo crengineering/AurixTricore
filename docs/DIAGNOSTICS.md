@@ -137,9 +137,21 @@ bevor das Bit gesetzt wird (Auflösung 0,1 s, z. B. `1.5`). Sobald der Wert
 wieder im gültigen Bereich liegt, wird das Bit **sofort** gelöscht.
 `debounceSec` wird firmwareseitig auf 0…60 s begrenzt; `0.0` = sofort melden.
 
+## Link-Überwachung (Failsafe-Eingang, SYS2-SAF-002)
+
+`Xcp_linkAlive()` (Xcp.c) ist wahr, solange das letzte wohlgeformte XCP-Kommando
+jünger als `XCP_LINK_TIMEOUT_MS` = 500 ms ist; vor dem ersten Kommando nach dem
+Boot ist es falsch. Die Arming-Zustandsmaschine (Motor.c) geht aus ARMED nach
+FAILSAFE, wenn der Link fehlt, und zurück nach INIT, wenn er wieder da ist.
+**Konsequenz für jeden Master:** ein Master, der nach `START_STOP_DAQ` nur noch
+DTOs empfängt und selbst schweigt, gilt als abgerissen. AurixGUI sendet deshalb
+alle 200 ms ein `GET_STATUS` (0xFD) als Heartbeat (`KEEPALIVE_MS` in
+xcpclient.cpp); `tools/xcp_read.py --watch 0.2` genügt ebenfalls. Jeder neue
+GUI-Modus, der das Polling einstellt, muss den Heartbeat behalten (2026-09-24).
+
 ## Kalibrierblock (per XCP schreibbar)
 
-Basisadresse `0x70030100`, 68 Bytes, alle Werte `float32` little-endian (Ausnahme: `motorCmd`, `uint32`).
+Basisadresse `0x70030100`, 80 Bytes, alle Werte `float32` little-endian (Ausnahme: die Motor-Wörter am Ende, `uint32`/`uint16`).
 Schreibzugriffe per XCP (`DOWNLOAD`/`SHORT_DOWNLOAD`) sind **nur** innerhalb
 dieses Blocks und des NVM-Blocks (s. u.) erlaubt (jeweils ab Offset 0x04 —
 die Magic-Wörter setzt nur die Firmware). Alle anderen Adressen antworten
@@ -168,7 +180,9 @@ Defaults. Persistente Parameter leben strikt getrennt im NVM-Block.
 | 0x34 | `fsVdd` | V | 1.455 | Monitor-ADC-Endwert, empirisch 2026-07-02 |
 | 0x38 | `fsVddp3` | V | 3.825 | (Schienen auf Nominalwert angenommen) |
 | 0x3C | `fsVext` | V | 5.903 | |
-| 0x40 | `motorCmd` | – | 0 | Arming-Wort für Motor.c: `0x41524D31` ("ARM1") = ARMED, jeder andere Wert = DISARMED; die Firmware schreibt bei jedem Verlassen von ARMED 0 zurück |
+| 0x40 | `motorCmd` | – | 0 | Arming-Wort für Motor.c: 1 = ARMED, 0 = DISARMED; die Firmware schreibt bei jedem Verlassen von ARMED 0 zurück |
+| 0x44 | `motorManual` | – | 0 | 1 = `motorManualSp[]` statt Flugregler als Sollwertquelle (Inbetriebnahme); wird mit `motorCmd` bei jedem Verlassen von ARMED gelöscht |
+| 0x48 | `motorManualSp[4]` | DShot | 0 | manuelle DShot-Werte M1..M4 (`uint16`): 0 = Stopp, 48..2047 = Gas; nur wirksam mit `motorManual` und ARMED; bei jedem Verlassen von ARMED genullt |
 
 Die `fs*`-Werte skalieren die 8-Bit-Rohwerte in Volt
 (`U = raw · fs / 255`) — eine Änderung wirkt direkt auf die Messwerte

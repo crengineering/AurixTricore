@@ -49,6 +49,11 @@ static void diag_loadDefaults(void)
     g_xcpCal.fsVddp3      = 3.825f;     /* empirically 2026-07-02            */
     g_xcpCal.fsVext       = 5.903f;
     g_xcpCal.motorCmd     = 0u;          /* boot disarmed, always */
+    g_xcpCal.motorManual  = 0u;
+    g_xcpCal.motorManualSp[0] = 0u;
+    g_xcpCal.motorManualSp[1] = 0u;
+    g_xcpCal.motorManualSp[2] = 0u;
+    g_xcpCal.motorManualSp[3] = 0u;
     g_xcpCal.magic        = XCP_CAL_MAGIC;
 }
 

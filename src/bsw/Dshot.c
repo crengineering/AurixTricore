@@ -272,6 +272,8 @@ void Dshot_task(const uint16 dshot_command[DSHOT_MEND])
         if (telem_requested != FALSE)
         {
             g_esc_Tlm[dshot_motor].missed++;
+            g_escTlmIndex    = 0u;
+            g_escTlmComplete = FALSE;
             (dshot_tlm_miss_streak[dshot_motor] < 255u) ? (dshot_tlm_miss_streak[dshot_motor]++) : (dshot_tlm_miss_streak[dshot_motor] = 255u);
             (dshot_tlm_miss_streak[dshot_motor] >= 3u ) ? (g_esc_Tlm[dshot_motor].alive = FALSE) : (g_esc_Tlm[dshot_motor].alive = TRUE);
         }

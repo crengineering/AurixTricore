@@ -584,10 +584,24 @@
     },
     "motorCmd": {
       "name": "CAL_motorCmd",
-      "desc": "arming word: 0x41524D31 (1095650609) = ARM, anything else = DISARM; firmware clears it on every exit from ARMED",
-      "maxdiff": "4294967295",
+      "desc": "arming word: 1 = ARM, 0 = DISARM; the firmware clears it on every exit from ARMED",
+      "maxdiff": "1",
       "lo": "0",
-      "hi": "4294967295"
+      "hi": "1"
+    },
+    "motorManual": {
+      "name": "CAL_motorManual",
+      "desc": "1 = manual setpoint source (CAL_motorManualSp_n) instead of the flight controller; cleared with CAL_motorCmd on every exit from ARMED",
+      "maxdiff": "1",
+      "lo": "0",
+      "hi": "1"
+    },
+    "motorManualSp": {
+      "name": "CAL_motorManualSp_M{i1}",
+      "desc": "manual DShot value for motor M{i1}: 0 = stop, 48..2047 = throttle; only used while CAL_motorManual is set and the vehicle is ARMED; zeroed on every exit from ARMED",
+      "maxdiff": "2047",
+      "lo": "0",
+      "hi": "2047"
     }
   },
   "Xcp_Nvm": {

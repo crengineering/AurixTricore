@@ -82,6 +82,7 @@ static void Task_Dshot(void)
      * */
     state = Motor_task(speed_setpoints, dshot_command_set);
     Dshot_task(dshot_command_set);
+    measurementsSetMotorState((uint8)state);
 }
 
 
