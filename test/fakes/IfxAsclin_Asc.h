@@ -21,7 +21,7 @@
 typedef enum { IfxSrc_Tos_cpu0 = 0 } IfxSrc_Tos;
 
 /* Only the enumerators the driver names are needed. */
-typedef enum { IfxPort_InputMode_pullUp    = 0 } IfxPort_InputMode;
+typedef enum { IfxPort_InputMode_pullUp = 0, IfxPort_InputMode_noPullDevice = 1 } IfxPort_InputMode;
 typedef enum { IfxPort_OutputMode_pushPull = 0 } IfxPort_OutputMode;
 typedef enum { IfxPort_PadDriver_ttlSpeed1 = 0 } IfxPort_PadDriver;
 

@@ -28,9 +28,10 @@ typedef struct
 
 typedef struct
 {
-    Esc_telemetry packet;    /* last CRC-valid packet from this motor */
-    uint32        count;     /* CRC-valid packets from this motor since boot */
+    Esc_telemetry packet;    /* last CRC-valid packet from this motor                 */
+    uint32        count;     /* CRC-valid packets from this motor since boot          */
     uint32        missed;    /* requests to this motor without a packet in their slot */
+    boolean       alive;     /* fewer than 3 consecutive misses                       */
 } Dshot_TelemetryStatus;
 
 typedef enum {
@@ -49,6 +50,5 @@ void Dshot_task(void);
 /* Copies the last CRC-valid telemetry packet; returns the driver's CRC-ok packet
  * count so the caller can tell whether a new packet arrived since it last asked. */
 uint32 Dshot_getTelemetry(Dshot_TelemetryStatus *out);
-
 
 #endif /* DSHOT_H */

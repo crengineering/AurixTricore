@@ -139,7 +139,7 @@ wieder im gültigen Bereich liegt, wird das Bit **sofort** gelöscht.
 
 ## Kalibrierblock (per XCP schreibbar)
 
-Basisadresse `0x70030100`, 64 Bytes, alle Werte `float32` little-endian.
+Basisadresse `0x70030100`, 68 Bytes, alle Werte `float32` little-endian (Ausnahme: `motorCmd`, `uint32`).
 Schreibzugriffe per XCP (`DOWNLOAD`/`SHORT_DOWNLOAD`) sind **nur** innerhalb
 dieses Blocks und des NVM-Blocks (s. u.) erlaubt (jeweils ab Offset 0x04 —
 die Magic-Wörter setzt nur die Firmware). Alle anderen Adressen antworten
@@ -168,6 +168,7 @@ Defaults. Persistente Parameter leben strikt getrennt im NVM-Block.
 | 0x34 | `fsVdd` | V | 1.455 | Monitor-ADC-Endwert, empirisch 2026-07-02 |
 | 0x38 | `fsVddp3` | V | 3.825 | (Schienen auf Nominalwert angenommen) |
 | 0x3C | `fsVext` | V | 5.903 | |
+| 0x40 | `motorCmd` | – | 0 | Arming-Wort für Motor.c: `0x41524D31` ("ARM1") = ARMED, jeder andere Wert = DISARMED; die Firmware schreibt bei jedem Verlassen von ARMED 0 zurück |
 
 Die `fs*`-Werte skalieren die 8-Bit-Rohwerte in Volt
 (`U = raw · fs / 255`) — eine Änderung wirkt direkt auf die Messwerte

@@ -41,7 +41,7 @@ static boolean Motor_beep(uint16 dshot_command_set[DSHOT_MEND])
            boolean motor_beep_finished    = FALSE;
 
     if ( (motor_beep[motor_id] == FALSE)                                 &&
-         (motor_beep_counter   >= ((uint8) motor_id ) * DSHOT_BEEP_DELAY )  )
+         (motor_beep_counter   >= (DSHOT_BEEP_DELAY + ((uint8) motor_id ) * DSHOT_BEEP_DELAY ))  )
     {
         dshot_command_set[motor_id] = DSHOT_CMD_BEEP1;
         motor_beep[motor_id] = TRUE;
@@ -53,7 +53,7 @@ static boolean Motor_beep(uint16 dshot_command_set[DSHOT_MEND])
         {
             if (++motor_id >= DSHOT_MEND)
             {
-                motor_id = DSHOT_M1;
+                motor_id = 0u;
                 motor_beep[DSHOT_M1] = motor_beep[DSHOT_M2] = motor_beep[DSHOT_M3] = motor_beep[DSHOT_M4] = FALSE;
                 motor_beep_counter = 0u;
                 motor_beep_finished = TRUE;
@@ -67,8 +67,8 @@ static boolean Motor_beep(uint16 dshot_command_set[DSHOT_MEND])
 
 
 Motor_states_t Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND]){
-    static Motor_states_t state = MOTOR_INIT;
-    uint16 dshot_command_set[DSHOT_MEND] = {0};
+    static Motor_states_t state                         = MOTOR_INIT;
+           uint16         dshot_command_set[DSHOT_MEND] = {0};
 
     // general transition for failsafe enter
     // if ethernet communication is lost then state = MOTOR_FAILSAFE;
@@ -81,7 +81,6 @@ Motor_states_t Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND]){
             {
               state = MOTOR_DISARMED;
             }
-
             break;
         case MOTOR_DISARMED:
 

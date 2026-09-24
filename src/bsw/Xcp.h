@@ -10,9 +10,14 @@
  * Transport framing per XCP on Ethernet: 2-byte length + 2-byte counter
  * (both little-endian) in front of each XCP packet.
  */
+#include "Ifx_Types.h"
+
 void xcpInit(void);
 
 /* Transmit pending DAQ lists; call from the 100 ms task (event channel 0). */
 void xcpDaqCycle(void);
+/* 1 ms tick at which the last well-formed XCP command arrived (0 = never).
+ * Motor.c compares it with the current tick for the link-loss failsafe. */
+uint32 Xcp_getLastCommandMs(void);
 
 #endif /* XCP_H_ */

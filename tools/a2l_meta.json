@@ -581,6 +581,13 @@
       "maxdiff": "10",
       "lo": "0",
       "hi": "10"
+    },
+    "motorCmd": {
+      "name": "CAL_motorCmd",
+      "desc": "arming word: 0x41524D31 (1095650609) = ARM, anything else = DISARM; firmware clears it on every exit from ARMED",
+      "maxdiff": "4294967295",
+      "lo": "0",
+      "hi": "4294967295"
     }
   },
   "Xcp_Nvm": {
@@ -1324,6 +1331,21 @@
       "unit": "mAh",
       "lo": "0",
       "hi": "65535"
+    },
+    "motorState": {
+      "name": "EscMotorState",
+      "desc": "arming state machine: 0 init, 1 disarmed, 2 armed, 3 failsafe",
+      "lo": "0",
+      "hi": "3"
+    },
+    "alive": {
+      "name": "EscM{i1}Alive",
+      "desc": "1 = ESC M{i1} answered its recent telemetry requests",
+      "lo": "0",
+      "hi": "1"
+    },
+    "reserved": {
+      "skip": true
     }
   }
 }

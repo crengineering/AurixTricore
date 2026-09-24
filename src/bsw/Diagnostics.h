@@ -10,7 +10,7 @@
  * Calibration block, pinned at a fixed address, writable via XCP
  * DOWNLOAD/SHORT_DOWNLOAD. RAM only — after a reset the defaults apply
  * (persistent parameters live in the separate Xcp_Nvm block, see Nvm.h).
- * Little-endian, 64 bytes, all values float32:
+ * Little-endian, 68 bytes, float32 except the last word:
  *
  *   0x00  uint32   magic          0x4C414358 ("XCAL")
  *   0x04  float32  dtsMin         [degC]  PMS DTS lower limit
@@ -29,12 +29,15 @@
  *   0x34  float32  fsVdd          [V]     monitor-ADC full scale VDD
  *   0x38  float32  fsVddp3        [V]     monitor-ADC full scale VDDP3
  *   0x3C  float32  fsVext         [V]     monitor-ADC full scale VEXT
+ *   0x40  uint32   motorCmd       arming word for Motor.c: MOTOR_CMD_ARM keeps the
+ *                                  vehicle armed, any other value disarms; the firmware
+ *                                  writes 0 on every exit from ARMED (no silent re-arm)
  */
 /* XCP_CAL_ADDR deleted, T5 (docs/MEMORY_PLACEMENT.md): Xcp.c's whitelist
  * now uses (uint32)&g_xcpCal, so Lcf_Tasking_Tricore_Tc.lsl
  * (LCF_XCP_CAL_START) is the only place 0x70030100 is written down. */
 #define XCP_CAL_MAGIC   0x4C414358u
-#define XCP_CAL_SIZE    64u
+#define XCP_CAL_SIZE    68u
 
 typedef struct
 {
@@ -54,7 +57,12 @@ typedef struct
     float32 fsVdd;
     float32 fsVddp3;
     float32 fsVext;
+    uint32  motorCmd;
 } Xcp_Cal;
+
+/* Value of Xcp_Cal.motorCmd that arms ("ARM1"); chosen so no partial or stray
+ * write can arm. Read and cleared by Motor.c, written by the operator over XCP. */
+#define MOTOR_CMD_ARM   0x41524D31u
 
 /* diagStatus bits in Xcp_Data (see DIAGNOSTICS.md). Hex literals instead
  * of (1u << n): MISRA 12.2 sees 1u as essentially unsigned char, making

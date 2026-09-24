@@ -1,4 +1,5 @@
 #include "Xcp.h"
+#include "Ifx_Lwip.h"
 #include "Version.h"
 #include "Diagnostics.h"
 #include "Nvm.h"
@@ -137,6 +138,7 @@ static struct udp_pcb *s_xcpPcb;
 static uint16          s_resCtr;        /* response counter (transport header)  */
 static uint8          *s_mta;           /* memory transfer address              */
 static boolean         s_connected;
+static uint32          s_lastCmdMs;        /* 1 ms tick of the last well-formed command (link-alive for Motor.c) */
 
 /* DAQ state (single dynamic list, absolute ODT numbering) */
 typedef struct
@@ -229,6 +231,7 @@ static void xcpRecv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
         return;                                 /* malformed frame              */
     }
     cmd = &frame[4];
+    s_lastCmdMs = g_TickCount_1ms;          /* any well-formed command counts as link activity */
 
     switch (cmd[0])
     {
@@ -590,4 +593,9 @@ void xcpInit(void)
             s_xcpPcb = NULL;
         }
     }
+}
+
+uint32 Xcp_getLastCommandMs(void)
+{
+    return s_lastCmdMs;
 }

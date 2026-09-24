@@ -6,6 +6,7 @@
 #include "scheduler.h"
 #include "led.h"
 #include "Dshot.h"
+#include "motor.h"
 #include "IfxGeth_Eth.h"
 #include "Ifx_Console.h"
 #include "Configuration.h"
@@ -72,6 +73,12 @@ static void Task_XcpDaq(void)
 
 static void Task_Dshot(void)
 {
+    /* link to flight_ctrl for speed requests still open
+     * handle here if the user wants to send speed requests via GUI and XCP
+     * e.g. for testing or commissioning purposes
+     * */
+    uint16 speed_setpoints[DSHOT_MEND] = {0};
+    (void)Motor_task(speed_setpoints);
     Dshot_task();
 }
 

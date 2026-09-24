@@ -260,16 +260,20 @@ static boolean Dshot_interpret_ESC_Tlm(Esc_telemetry *esc_Tlm){
 /* 1 kHz task: zero throttle = the arming stream; every 256th frame asks for telemetry */
 void Dshot_task(void)
 {
-    uint16 frames[DSHOT_MEND];
-    static boolean telem_requested = FALSE;
-    static Dshot_Motor_t dshot_motor = DSHOT_M1;
+    static boolean       telem_requested    = FALSE;
+    static Dshot_Motor_t dshot_motor        = DSHOT_M1;
+    static uint8         dshot_tlm_miss_streak[DSHOT_MEND] = {0u};
+           uint16        frames[DSHOT_MEND] = {0u};
+           boolean       telem              = ((g_dshotFrames & 0x7u) == 0u) ? TRUE : FALSE;
+
     /* telemetrics request */
-    boolean telem = ((g_dshotFrames & 0x7u) == 0u) ? TRUE : FALSE;
     if (telem != FALSE)
     {
         if (telem_requested != FALSE)
         {
             g_esc_Tlm[dshot_motor].missed++;
+            (dshot_tlm_miss_streak[dshot_motor] < 255u) ? (dshot_tlm_miss_streak[dshot_motor]++) : (dshot_tlm_miss_streak[dshot_motor] = 255u);
+            (dshot_tlm_miss_streak[dshot_motor] >= 3u ) ? (g_esc_Tlm[dshot_motor].alive = FALSE) : (g_esc_Tlm[dshot_motor].alive = TRUE);
         }
 
         if (dshot_motor < (DSHOT_MEND-1u))
@@ -279,8 +283,6 @@ void Dshot_task(void)
         else {
             dshot_motor = DSHOT_M1;
         }
-
-
         telem_requested = TRUE;
     }
 
@@ -295,12 +297,14 @@ void Dshot_task(void)
 
 
     /* decode telemetrics*/
-    if ( (telem_requested != FALSE) &&
-         (g_escTlmComplete != FALSE) )
+    if ( (telem_requested  != FALSE) &&
+         (g_escTlmComplete != FALSE)  )
     {
         if (Dshot_interpret_ESC_Tlm(&g_esc_Tlm[dshot_motor].packet) != FALSE)
         {
             g_esc_Tlm[dshot_motor].count++;
+            g_esc_Tlm[dshot_motor].alive = TRUE;
+            dshot_tlm_miss_streak[dshot_motor] = 0u;
         }
         g_escTlmIndex    = 0u;
         g_escTlmComplete = FALSE;
@@ -315,6 +319,7 @@ uint32 Dshot_getTelemetry(Dshot_TelemetryStatus *out)
         out[motor_id].packet = g_esc_Tlm[motor_id].packet;
         out[motor_id].count  = g_esc_Tlm[motor_id].count;
         out[motor_id].missed = g_esc_Tlm[motor_id].missed;
+        out[motor_id].alive  = g_esc_Tlm[motor_id].alive;
     }
 
     return g_escTlmCrcFail;

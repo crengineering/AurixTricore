@@ -366,8 +366,11 @@ extern volatile Xcp_Fusion g_xcpFusion;
  *   0x54  uint16  voltageCv[4]  pack voltage [cV] — INVALID on the GOKU G55M (floating ADC)
  *   0x5C  uint16  currentCa[4]  motor current [cA] — INVALID on the GOKU G55M (floating ADC)
  *   0x64  uint16  mAh[4]        consumed charge [mAh] — integrates the invalid current
+ *   0x6C  uint8   motorState    Motor.c state: 0 init, 1 disarmed, 2 armed, 3 failsafe
+ *   0x6D  uint8   alive[4]      1 = the ESC answered its recent telemetry requests
+ *   0x71  uint8   reserved[3]
  *
- * Total 0x6C = 108 bytes. v1 (one motor, 32 bytes, 2026-09-17) was replaced
+ * Total 0x74 = 116 bytes. v1 (one motor, 32 bytes, 2026-09-17) was replaced
  * in place on 2026-09-21 before any release carried it.
  * --------------------------------------------------------------------------- */
 #define XCP_ESC_MAGIC        0x32435345u
@@ -386,6 +389,9 @@ typedef struct
     uint16  voltageCv[4];
     uint16  currentCa[4];
     uint16  mAh[4];
+    uint8   motorState;
+    uint8   alive[4];
+    uint8   reserved[3];
 } Xcp_Esc;
 
 extern volatile Xcp_Esc g_xcpEsc;
@@ -417,6 +423,9 @@ void measurementsSetSystemLoad(void);
  * packet, packet count, miss count per motor) plus the shared-wire CRC failure
  * count. Called by SensorTask_esc (CPU0, 20 ms). */
 void measurementsSetEsc(const Dshot_TelemetryStatus tlm[DSHOT_MEND], uint32 crcFail);
+/* Publish the arming state machine's state (Motor_states_t as a byte). Called by
+ * the 1 ms motor/DShot wrapper task after Motor_task(). */
+void measurementsSetMotorState(uint8 state);
 
 /*
  * Publish the latest gnss sample into the XCP block. Called by the measurement task

@@ -236,9 +236,15 @@ void measurementsSetEsc(const Dshot_TelemetryStatus tlm[DSHOT_MEND], uint32 crcF
         g_xcpEsc.voltageCv[m] = tlm[m].packet.voltage;
         g_xcpEsc.currentCa[m] = tlm[m].packet.current;
         g_xcpEsc.mAh[m]       = tlm[m].packet.mAh;
+        g_xcpEsc.alive[m]     = (tlm[m].alive != FALSE) ? 1u : 0u;
         /* eRPM counts electrical revolutions; one mechanical turn = poles/2 of them */
         g_xcpEsc.rpm[m]       = ((float32)tlm[m].packet.eRPM * 100.0f) / ((float32)XCP_ESC_MOTOR_POLES / 2.0f);
     }
+}
+
+void measurementsSetMotorState(uint8 state)
+{
+    g_xcpEsc.motorState = state;
 }
 
 void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)
