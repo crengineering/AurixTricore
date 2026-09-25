@@ -124,26 +124,17 @@ static void Motor_state_armed(boolean *dshot_stream_allowed, Motor_states_t *sta
     {
         *state = MOTOR_DISARMED;
         g_xcpCal.motorManual = 0u;
-        for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
-        {
-            g_xcpCal.motorManualSp[motor_id] = 0u;
-        }
+        for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++) {g_xcpCal.motorManualSp[motor_id] = 0u;}
     }
     else
     {
         if(g_xcpCal.motorManual == MOTOR_CMD_MANUAL)
         {
-            for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
-            {
-                setpoint[motor_id] = g_xcpCal.motorManualSp[motor_id];
-            }
+            for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++) {setpoint[motor_id] = g_xcpCal.motorManualSp[motor_id];}
         }
         else
         {
-            for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
-            {
-                setpoint[motor_id] = motor_speed_rqst[motor_id];
-            }
+            for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++) {setpoint[motor_id] = motor_speed_rqst[motor_id];}
         }
         Motor_calc_clamp( setpoint, dshot_command_set);
     }
@@ -153,16 +144,13 @@ static void Motor_state_failsafe(boolean *dshot_stream_allowed, Motor_states_t *
 {
     g_xcpCal.motorCmd    = 0u;
     g_xcpCal.motorManual = 0u;
-    for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
-    {
-        g_xcpCal.motorManualSp[motor_id] = 0u;
-    }
+    for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++) {g_xcpCal.motorManualSp[motor_id] = 0u;}
+
     if (eth_link_alive != FALSE)
     {
         *state = MOTOR_DISARMED;
     }
 }
-
 
 
 boolean Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_command_set[DSHOT_MEND], Motor_states_t *state)
