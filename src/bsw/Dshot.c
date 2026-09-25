@@ -20,15 +20,15 @@
 
 #define ESC_T_MESSAGE_LENGTH 10u
 
-static const Dshot_MotorCfg g_Dshot_MotorCfg[DSHOT_MEND] = DSHOT_MOTOR_CFG;
-static IfxGtm_Atom_Pwm_Driver g_atomMX[DSHOT_MEND];
+static const Dshot_MotorCfg    g_Dshot_MotorCfg[DSHOT_MEND] = DSHOT_MOTOR_CFG;
+static IfxGtm_Atom_Pwm_Driver  g_atomMX[DSHOT_MEND];
 
-static uint32                 g_t0hTicks;
-static uint32                 g_t1hTicks;
-uint32                        g_dshotFrames;
-uint32                        g_escTlmBytes;
+static uint32                  g_t0hTicks;
+static uint32                  g_t1hTicks;
+uint32                         g_dshotFrames;
+uint32                         g_escTlmBytes;
 
-float32                       g_dshotClk0Hz;
+float32                        g_dshotClk0Hz;
 
 /* ESC Telemetrics */
 volatile uint8                 g_escTlmRaw[ESC_T_MESSAGE_LENGTH];
@@ -41,7 +41,18 @@ static   uint32                g_escTlmCrcFail  = 0u;
 /******************************************************************************/
 /*--------------------------Function Declaration------------------------------*/
 /******************************************************************************/
-static uint16 dshotBuild(uint16 value, boolean telem);
+static void    Dshot_init_motors      (void);
+static void    Dshot_init_uart        (void);
+
+static uint16  dshotBuild             (uint16 value, boolean telem);
+static void    dshotSendFrame         (uint16 frame[DSHOT_MEND]);
+
+static boolean Dshot_ESC_T_crc        (void);
+static boolean Dshot_interpret_ESC_Tlm(Esc_telemetry *esc_Tlm);
+
+static void    Dshot_telem_request    (boolean *telem_requested, uint8 dshot_tlm_miss_streak[DSHOT_MEND], Dshot_Motor_t *dshot_motor, const boolean *telem);
+static void    Dshot_sending          (uint16 frames[DSHOT_MEND], const uint16 dshot_command[DSHOT_MEND], const Dshot_Motor_t *dshot_motor, const boolean *telem, const boolean dshot_stream_allowed);
+static void    Dshot_telem_decode     (boolean *telem_requested, uint8 dshot_tlm_miss_streak[DSHOT_MEND], Dshot_Motor_t *dshot_motor);
 
 /******************************************************************************/
 /*--------------------------Interrupts----------------------------------------*/
@@ -123,7 +134,8 @@ static void Dshot_init_motors(void)
     IfxGtm_Atom_Agc_trigger(agc);
 }
 
-static void Dshot_init_uart(void){
+static void Dshot_init_uart(void)
+{
     /* 
     init UART Telemetry from ESC on P23.3
     */
@@ -169,11 +181,7 @@ static void Dshot_init_uart(void){
     IfxAsclin_clearAllFlags(&MODULE_ASCLIN6);
 }
 
-void Dshot_init(void)
-{
-    Dshot_init_motors();
-    Dshot_init_uart();
-}
+
 
 /* throttle 0..2047 (0 = stop, 1..47 = commands), telem = request bit */
 static uint16 dshotBuild(uint16 value, boolean telem)
@@ -257,41 +265,53 @@ static boolean Dshot_interpret_ESC_Tlm(Esc_telemetry *esc_Tlm){
     return Tlm_success;
 }
 
-/* 1 kHz task: zero throttle = the arming stream; every 256th frame asks for telemetry */
-void Dshot_task(const uint16 dshot_command[DSHOT_MEND], boolean dshot_stream_allowed)
+static void Dshot_telem_request(boolean *telem_requested, uint8 dshot_tlm_miss_streak[DSHOT_MEND], Dshot_Motor_t *dshot_motor, const boolean *telem)
 {
-    static boolean       telem_requested    = FALSE;
-    static Dshot_Motor_t dshot_motor        = DSHOT_M1;
-    static uint8         dshot_tlm_miss_streak[DSHOT_MEND] = {0u};
-           uint16        frames[DSHOT_MEND] = {0u};
-           boolean       telem              = ((g_dshotFrames & 0x7u) == 0u) ? TRUE : FALSE;
-
-    /* telemetrics request */
-    if (telem != FALSE)
+    if (*telem != FALSE)
     {
-        if (telem_requested != FALSE)
+        if (*telem_requested != FALSE)
         {
-            g_esc_Tlm[dshot_motor].missed++;
+            g_esc_Tlm[*dshot_motor].missed++;
             g_escTlmIndex    = 0u;
             g_escTlmComplete = FALSE;
-            (dshot_tlm_miss_streak[dshot_motor] < 255u) ? (dshot_tlm_miss_streak[dshot_motor]++) : (dshot_tlm_miss_streak[dshot_motor] = 255u);
-            (dshot_tlm_miss_streak[dshot_motor] >= 3u ) ? (g_esc_Tlm[dshot_motor].alive = FALSE) : (g_esc_Tlm[dshot_motor].alive = TRUE);
+            (dshot_tlm_miss_streak[*dshot_motor] < 255u) ? (dshot_tlm_miss_streak[*dshot_motor]++) : (dshot_tlm_miss_streak[*dshot_motor] = 255u);
+            (dshot_tlm_miss_streak[*dshot_motor] >= 3u ) ? (g_esc_Tlm[*dshot_motor].alive = FALSE) : (g_esc_Tlm[*dshot_motor].alive = TRUE);
         }
 
-        if (dshot_motor < (DSHOT_MEND-1u))
+        if (*dshot_motor < (DSHOT_MEND-1u))
         {
-            dshot_motor++;
+            (*dshot_motor)++;
         }
         else {
-            dshot_motor = DSHOT_M1;
+            *dshot_motor = DSHOT_M1;
         }
-        telem_requested = TRUE;
+        *telem_requested = TRUE;
     }
+}
 
-    /* building frames */
+static void Dshot_telem_decode(boolean *telem_requested, uint8 dshot_tlm_miss_streak[DSHOT_MEND], Dshot_Motor_t *dshot_motor)
+{
+    if ( (*telem_requested  != FALSE) &&
+         (g_escTlmComplete != FALSE)  )
+    {
+        if (Dshot_interpret_ESC_Tlm(&g_esc_Tlm[*dshot_motor].packet) != FALSE)
+        {
+            g_esc_Tlm[*dshot_motor].count++;
+            g_esc_Tlm[*dshot_motor].alive = TRUE;
+            dshot_tlm_miss_streak[*dshot_motor] = 0u;
+        }
+        g_escTlmIndex    = 0u;
+        g_escTlmComplete = FALSE;
+        *telem_requested  = FALSE;
+    }
+}
+
+static void Dshot_sending(uint16 frames[DSHOT_MEND], const uint16 dshot_command[DSHOT_MEND], const Dshot_Motor_t *dshot_motor, const boolean *telem, const boolean dshot_stream_allowed)
+{
+    /* building the frame */
     for (uint8 motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
     {
-        frames[motor_id] = dshotBuild(dshot_command[motor_id], (telem && (dshot_motor == motor_id)) ? TRUE : FALSE);
+        frames[motor_id] = dshotBuild(dshot_command[motor_id], (*telem && (*dshot_motor == motor_id)) ? TRUE : FALSE);
     }
 
     /* Dshot send Frames */
@@ -299,21 +319,34 @@ void Dshot_task(const uint16 dshot_command[DSHOT_MEND], boolean dshot_stream_all
     {
         dshotSendFrame(frames);
     }
+}
+
+/******************************************************************************/
+/*--------------------------Global Functions----------------------------------*/
+/******************************************************************************/
+
+void Dshot_init(void)
+{
+    Dshot_init_motors();
+    Dshot_init_uart();
+}
+
+/* 1 kHz task: zero throttle = the arming stream; every 256th frame asks for telemetry */
+void Dshot_task(const uint16 dshot_command[DSHOT_MEND], boolean dshot_stream_allowed)
+{
+    static boolean       telem_requested    = FALSE;
+    static Dshot_Motor_t dshot_motor        = DSHOT_M1;
+    static uint8         dshot_tlm_miss_streak[DSHOT_MEND] = {0u};
+           uint16        frames[DSHOT_MEND] = {0u};
+           boolean       telem = ((g_dshotFrames & 0x7u) == 0u) ? TRUE : FALSE;
+    /* telemetrics request */
+    Dshot_telem_request(&telem_requested, dshot_tlm_miss_streak, &dshot_motor, &telem);
+
+    /* sending dshot */
+    Dshot_sending(frames, dshot_command, &dshot_motor, &telem, dshot_stream_allowed);
 
     /* decode telemetrics*/
-    if ( (telem_requested  != FALSE) &&
-         (g_escTlmComplete != FALSE)  )
-    {
-        if (Dshot_interpret_ESC_Tlm(&g_esc_Tlm[dshot_motor].packet) != FALSE)
-        {
-            g_esc_Tlm[dshot_motor].count++;
-            g_esc_Tlm[dshot_motor].alive = TRUE;
-            dshot_tlm_miss_streak[dshot_motor] = 0u;
-        }
-        g_escTlmIndex    = 0u;
-        g_escTlmComplete = FALSE;
-        telem_requested  = FALSE;
-    }
+    Dshot_telem_decode(&telem_requested, dshot_tlm_miss_streak, &dshot_motor);
 }
 
 uint32 Dshot_getTelemetry(Dshot_TelemetryStatus *out)
