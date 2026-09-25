@@ -258,7 +258,7 @@ static boolean Dshot_interpret_ESC_Tlm(Esc_telemetry *esc_Tlm){
 }
 
 /* 1 kHz task: zero throttle = the arming stream; every 256th frame asks for telemetry */
-void Dshot_task(const uint16 dshot_command[DSHOT_MEND])
+void Dshot_task(const uint16 dshot_command[DSHOT_MEND], boolean dshot_stream_allowed)
 {
     static boolean       telem_requested    = FALSE;
     static Dshot_Motor_t dshot_motor        = DSHOT_M1;
@@ -295,8 +295,10 @@ void Dshot_task(const uint16 dshot_command[DSHOT_MEND])
     }
 
     /* Dshot send Frames */
-    dshotSendFrame(frames);
-
+    if (dshot_stream_allowed != FALSE)
+    {
+        dshotSendFrame(frames);
+    }
 
     /* decode telemetrics*/
     if ( (telem_requested  != FALSE) &&

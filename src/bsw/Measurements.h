@@ -366,7 +366,7 @@ extern volatile Xcp_Fusion g_xcpFusion;
  *   0x54  uint16  voltageCv[4]  pack voltage [cV] — INVALID on the GOKU G55M (floating ADC)
  *   0x5C  uint16  currentCa[4]  motor current [cA] — INVALID on the GOKU G55M (floating ADC)
  *   0x64  uint16  mAh[4]        consumed charge [mAh] — integrates the invalid current
- *   0x6C  uint8   motorState    Motor.c state: 0 init, 1 disarmed, 2 armed, 3 failsafe
+ *   0x6C  uint8   motorState    Motor.c state (Motor_states_t): 0 disarmed, 1 init, 2 armed, 3 failsafe
  *   0x6D  uint8   alive[4]      1 = the ESC answered its recent telemetry requests
  *   0x71  uint8   reserved[3]
  *

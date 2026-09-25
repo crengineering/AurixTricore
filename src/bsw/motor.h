@@ -19,8 +19,8 @@
 /******************************************************************************/
 
 typedef enum {
-    MOTOR_INIT = 0,
-    MOTOR_DISARMED,
+    MOTOR_DISARMED = 0,
+    MOTOR_INIT,
     MOTOR_ARMED,
     MOTOR_FAILSAFE,
     MOTOR_END
@@ -29,6 +29,6 @@ typedef enum {
 /*-------------------------Global Function Prototypes-------------------------*/
 /******************************************************************************/
 
-Motor_states_t Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_command_set[DSHOT_MEND]);
+boolean Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_command_set[DSHOT_MEND], Motor_states_t *state);
 
 #endif /* MOTOR_H */

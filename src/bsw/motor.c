@@ -29,7 +29,7 @@
 /*--------------------------Function Declaration------------------------------*/
 /******************************************************************************/
 static boolean Motor_beep(uint16 dshot_command_set[DSHOT_MEND]);
-void           Motor_calc_clamp(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_command_set[DSHOT_MEND]);
+static void    Motor_calc_clamp(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_command_set[DSHOT_MEND]);
 /******************************************************************************/
 /*--------------------------Interrupts----------------------------------------*/
 /******************************************************************************/
@@ -68,7 +68,7 @@ static boolean Motor_beep(uint16 dshot_command_set[DSHOT_MEND])
     return motor_beep_finished;
 }
 
-void Motor_calc_clamp(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_command_set[DSHOT_MEND])
+static void Motor_calc_clamp(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_command_set[DSHOT_MEND])
 {
     for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
     {
@@ -90,63 +90,65 @@ void Motor_calc_clamp(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_co
     }
 }
 
-Motor_states_t Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_command_set[DSHOT_MEND])
+boolean Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_command_set[DSHOT_MEND], Motor_states_t *state)
 {
-    static Motor_states_t state                         = MOTOR_INIT;
-           boolean        eth_link_alive                = Xcp_linkAlive();
-           uint16         setpoint[DSHOT_MEND]   = {0};
-    // general transition for failsafe enter
-    if (eth_link_alive == FALSE)
-    {
-        state = MOTOR_FAILSAFE;
-    }
+    boolean eth_link_alive       = Xcp_linkAlive();
+    uint16  setpoint[DSHOT_MEND] = {0};
+    boolean dshot_stream_allowed = FALSE;
 
-    switch(state)
+    switch(*state)
     {
-        case MOTOR_INIT:
-            // add a check for valid telemetrics packets received
-            // tbd do only when esc gives feedback
-            if (Motor_beep(dshot_command_set) != FALSE)
-            {
-              state = MOTOR_DISARMED;
-            }
-            break;
         case MOTOR_DISARMED:
+            dshot_stream_allowed = TRUE;
             if (g_xcpCal.motorCmd == MOTOR_CMD_ARM)
             {
-                state = MOTOR_ARMED;
+                *state = MOTOR_INIT;
             }
             break;
-        case MOTOR_ARMED:
-            if (g_xcpCal.motorCmd != MOTOR_CMD_ARM)
+
+        case MOTOR_INIT:
+            dshot_stream_allowed = TRUE;
+            if (Motor_beep(dshot_command_set) != FALSE)
             {
-                state = MOTOR_DISARMED;
+              *state = MOTOR_ARMED;
+            }
+            break;
+
+        case MOTOR_ARMED:
+            dshot_stream_allowed = TRUE;
+            if (eth_link_alive == FALSE)
+            {
+                *state = MOTOR_FAILSAFE;
+            }
+            else if (g_xcpCal.motorCmd != MOTOR_CMD_ARM)
+            {
+                *state = MOTOR_DISARMED;
                 g_xcpCal.motorManual = 0u;
                 for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
                 {
                     g_xcpCal.motorManualSp[motor_id] = 0u;
                 }
             }
-
-            if(g_xcpCal.motorManual == MOTOR_CMD_MANUAL)
-            {
-                for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
-                {
-                    setpoint[motor_id] = g_xcpCal.motorManualSp[motor_id];
-                }
-            }
             else
             {
-                for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
+                if(g_xcpCal.motorManual == MOTOR_CMD_MANUAL)
                 {
-                    setpoint[motor_id] = motor_speed_rqst[motor_id];
+                    for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
+                    {
+                        setpoint[motor_id] = g_xcpCal.motorManualSp[motor_id];
+                    }
                 }
+                else
+                {
+                    for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
+                    {
+                        setpoint[motor_id] = motor_speed_rqst[motor_id];
+                    }
+                }
+                Motor_calc_clamp( setpoint, dshot_command_set);
             }
-
-
-            Motor_calc_clamp( setpoint, dshot_command_set);
-
             break;
+
         case MOTOR_FAILSAFE:
             g_xcpCal.motorCmd    = 0u;
             g_xcpCal.motorManual = 0u;
@@ -156,12 +158,12 @@ Motor_states_t Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dsho
             }
             if (eth_link_alive != FALSE)
             {
-                state = MOTOR_INIT;
+                *state = MOTOR_DISARMED;
             }
             break;
         default:
             break;
     }
 
-    return state;
+    return dshot_stream_allowed;
 }
