@@ -1696,5 +1696,10 @@ ASAP2_VERSION 1 61
       ECU_ADDRESS 0x70030770
     /end MEASUREMENT
 
+    /begin MEASUREMENT EscM1ReplyEdges "bidir DShot proof of concept: edges on M1 (TIM0 ch0) in the last reply window"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x70030771
+    /end MEASUREMENT
+
   /end MODULE
 /end PROJECT

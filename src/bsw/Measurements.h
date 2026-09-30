@@ -368,7 +368,8 @@ extern volatile Xcp_Fusion g_xcpFusion;
  *   0x64  uint16  mAh[4]        consumed charge [mAh] — integrates the invalid current
  *   0x6C  uint8   motorState    Motor.c state (Motor_states_t): 0 disarmed, 1 init, 2 armed, 3 failsafe
  *   0x6D  uint8   alive[4]      1 = the ESC answered its recent telemetry requests
- *   0x71  uint8   reserved[3]
+ *   0x71  uint8   replyEdgesM1  bidir DShot proof of concept: edges seen on M1 in the last reply window
+ *   0x72  uint8   reserved[2]
  *
  * Total 0x74 = 116 bytes. v1 (one motor, 32 bytes, 2026-09-17) was replaced
  * in place on 2026-09-21 before any release carried it.
@@ -391,7 +392,8 @@ typedef struct
     uint16  mAh[4];
     uint8   motorState;
     uint8   alive[4];
-    uint8   reserved[3];
+    uint8   replyEdgesM1;
+    uint8   reserved[2];
 } Xcp_Esc;
 
 extern volatile Xcp_Esc g_xcpEsc;
@@ -426,6 +428,7 @@ void measurementsSetEsc(const Dshot_TelemetryStatus tlm[DSHOT_MEND], uint32 crcF
 /* Publish the arming state machine's state (Motor_states_t as a byte). Called by
  * the 1 ms motor/DShot wrapper task after Motor_task(). */
 void measurementsSetMotorState(uint8 state);
+void measurementsSetEscReplyEdges(uint8 edges);
 
 /*
  * Publish the latest gnss sample into the XCP block. Called by the measurement task

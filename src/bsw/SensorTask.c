@@ -114,4 +114,5 @@ void SensorTask_esc(void)
     uint32                crcFail = Dshot_getTelemetry(tlm);   /* fills all four, returns the wire's CRC failures */
 
     measurementsSetEsc(tlm, crcFail);
+    measurementsSetEscReplyEdges(Dshot_getReplyEdges());
 }

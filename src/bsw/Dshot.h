@@ -50,5 +50,7 @@ void Dshot_task(const uint16 dshot_command[DSHOT_MEND], boolean dshot_stream_all
 /* Copies the last CRC-valid telemetry packet; returns the driver's CRC-ok packet
  * count so the caller can tell whether a new packet arrived since it last asked. */
 uint32 Dshot_getTelemetry(Dshot_TelemetryStatus *out);
+/* Bidir reply proof of concept: edges counted on M1 in the last reply window. */
+uint8  Dshot_getReplyEdges(void);
 
 #endif /* DSHOT_H */

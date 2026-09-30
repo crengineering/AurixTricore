@@ -247,6 +247,11 @@ void measurementsSetMotorState(uint8 state)
     g_xcpEsc.motorState = state;
 }
 
+void measurementsSetEscReplyEdges(uint8 edges)
+{
+    g_xcpEsc.replyEdgesM1 = edges;
+}
+
 void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)
 {
     if (present != FALSE)

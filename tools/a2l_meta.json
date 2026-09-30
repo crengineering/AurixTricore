@@ -1358,6 +1358,12 @@
       "lo": "0",
       "hi": "1"
     },
+    "replyEdgesM1": {
+      "name": "EscM1ReplyEdges",
+      "desc": "bidir DShot proof of concept: edges on M1 (TIM0 ch0) in the last reply window",
+      "lo": "0",
+      "hi": "255"
+    },
     "reserved": {
       "skip": true
     }

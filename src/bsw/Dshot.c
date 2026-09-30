@@ -17,6 +17,7 @@
 #include "IfxAsclin.h"
 #include "ConfigurationIsr.h"
 #include "Dshot_cfg.h"
+#include "IfxStm.h"
 
 #define ESC_T_MESSAGE_LENGTH 10u
 
@@ -29,6 +30,10 @@ uint32                         g_dshotFrames;
 uint32                         g_escTlmBytes;
 
 float32                        g_dshotClk0Hz;
+
+static float32                 g_tbu_clock_frequency;
+static uint8                   g_dshot_reply_counter;
+static sint32                  g_ticks_for_100us;
 
 /* ESC Telemetrics */
 volatile uint8                 g_escTlmRaw[ESC_T_MESSAGE_LENGTH];
@@ -43,9 +48,12 @@ static   uint32                g_escTlmCrcFail  = 0u;
 /******************************************************************************/
 static void    Dshot_init_motors      (void);
 static void    Dshot_init_uart        (void);
+static void    Dshot_init_motor_reply (void);
 
 static uint16  dshotBuild             (uint16 value, boolean telem);
 static void    dshotSendFrame         (uint16 frame[DSHOT_MEND]);
+
+static void    dshotReadReply         (void);
 
 static boolean Dshot_ESC_T_crc        (void);
 static boolean Dshot_interpret_ESC_Tlm(Esc_telemetry *esc_Tlm);
@@ -112,7 +120,7 @@ static void Dshot_init_motors(void)
         cfg.clock                    = IfxGtm_Cmu_Clk_0;
         cfg.period                   = ticksPerBit;
         cfg.dutyCycle                = 0u;
-        cfg.signalLevel              = Ifx_ActiveState_high;
+        cfg.signalLevel              = Ifx_ActiveState_low;
         cfg.synchronousUpdateEnabled = TRUE;
         cfg.immediateStartEnabled    = FALSE;      /* all channels start together below */
         cfg.pin.outputPin            = g_Dshot_MotorCfg[motor_id].pin;
@@ -182,12 +190,41 @@ static void Dshot_init_uart(void)
 }
 
 
+static void Dshot_init_motor_reply (void)
+{
+    Ifx_GTM       *gtm      = &MODULE_GTM;
+    Ifx_GTM_TIM   *gtm_tim  = &gtm->TIM[0];
+    Dshot_Motor_t  motor_id = DSHOT_M1;
+
+    g_ticks_for_100us = IfxStm_getTicksFromMicroseconds(&MODULE_STM0, 100u);
+
+    IfxGtm_Tbu_setChannelClockSource(gtm, IfxGtm_Tbu_Ts_0, IfxGtm_Tbu_ClkSrc_0);
+    IfxGtm_Tbu_enableChannel(gtm, IfxGtm_Tbu_Ts_0);
+    g_tbu_clock_frequency = IfxGtm_Tbu_getClockFrequency(gtm, IfxGtm_Tbu_Ts_0);
+    for (motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
+    {
+        Ifx_GTM_TIM_CH *gtm_tim_ch = IfxGtm_Tim_getChannel(gtm_tim, g_Dshot_MotorCfg[motor_id].timChannel);
+
+        gtm_tim_ch->CTRL.B.TIM_EN   = 0u;
+
+        IfxGtm_PinMap_setTimTin(g_Dshot_MotorCfg[motor_id].pinIn, IfxPort_InputMode_undefined);
+        gtm_tim_ch->CTRL.B.TIM_MODE = IfxGtm_Tim_Mode_inputEvent;
+        gtm_tim_ch->CTRL.B.ISL      = 1u;
+        gtm_tim_ch->CTRL.B.DSL      = 0u;
+        gtm_tim_ch->CTRL.B.TBU0_SEL = 0u;
+        gtm_tim_ch->CTRL.B.GPR0_SEL = IfxGtm_Tim_GprSel_tbuTs0;
+
+        gtm_tim_ch->CTRL.B.TIM_EN   = 1u;
+
+    }
+}
+
 
 /* throttle 0..2047 (0 = stop, 1..47 = commands), telem = request bit */
 static uint16 dshotBuild(uint16 value, boolean telem)
 {
     uint16 v   = (uint16)(((value & 0x7FFu) << 1) | ((telem != FALSE) ? 1u : 0u));
-    uint16 crc = (uint16)((v ^ (v >> 4) ^ (v >> 8)) & 0x0Fu);
+    uint16 crc = (uint16)(( ~(v ^ (v >> 4) ^ (v >> 8))) & 0x0Fu);
     return (uint16)((v << 4) | crc);
 }
 
@@ -218,9 +255,42 @@ static void dshotSendFrame(uint16 frame[DSHOT_MEND])
     {
         IfxGtm_Atom_Ch_setCompareOneShadow(atom, g_atomMX[motor_id].atomChannel, 0u);         /* back to idle low */
     }
+    while (regs->IRQ.NOTIFY.B.CCU0TC == 0u) { }
+    IfxGtm_Atom_Ch_clearZeroNotification(atom, refCh);
+
+    dshotReadReply();
 
     IfxCpu_restoreInterrupts(irq);
     g_dshotFrames++;
+}
+
+static void dshotReadReply(void)
+{
+    Ifx_GTM        *gtm      = &MODULE_GTM;
+    Ifx_GTM_TIM    *gtm_tim  = &gtm->TIM[0];
+    Ifx_GTM_TIM_CH *channel = IfxGtm_Tim_getChannel(gtm_tim, g_Dshot_MotorCfg[DSHOT_M1].timChannel);
+    uint32          start_count = 0u;
+    g_dshot_reply_counter = 0u;
+
+    //g_dshot_reply_counter = 0u;
+    IfxGtm_Tim_Ch_clearNewValueEvent(channel);
+    uint8    edge_counter = 0u;
+
+    // get current time stamp
+    start_count = IfxStm_getLower(&MODULE_STM0);
+    // while loop until 100us for response (current timestamp  + 100us)
+    while (IfxStm_getLower(&MODULE_STM0) - start_count < g_ticks_for_100us)
+    {
+        if ( IfxGtm_Tim_Ch_isNewValueEvent(channel) != FALSE)
+        {
+            // get value
+            //channel->GPR0.B.GPR0;
+            edge_counter++;
+            IfxGtm_Tim_Ch_clearNewValueEvent(channel);
+        }
+    }
+
+    g_dshot_reply_counter = edge_counter;
 }
 
 static boolean Dshot_ESC_T_crc(void)
@@ -329,6 +399,7 @@ void Dshot_init(void)
 {
     Dshot_init_motors();
     Dshot_init_uart();
+    Dshot_init_motor_reply();
 }
 
 /* 1 kHz task: zero throttle = the arming stream; every 256th frame asks for telemetry */
@@ -360,4 +431,9 @@ uint32 Dshot_getTelemetry(Dshot_TelemetryStatus *out)
     }
 
     return g_escTlmCrcFail;
+}
+
+uint8 Dshot_getReplyEdges(void)
+{
+    return g_dshot_reply_counter;
 }
