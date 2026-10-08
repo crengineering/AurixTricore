@@ -118,7 +118,10 @@ typedef char layout_assert_Xcp_Cal_debounceSec_offset[(offsetof(Xcp_Cal, debounc
 typedef char layout_assert_Xcp_Cal_fsVdd_offset[(offsetof(Xcp_Cal, fsVdd) == 0x34u) ? 1 : -1];
 typedef char layout_assert_Xcp_Cal_fsVddp3_offset[(offsetof(Xcp_Cal, fsVddp3) == 0x38u) ? 1 : -1];
 typedef char layout_assert_Xcp_Cal_fsVext_offset[(offsetof(Xcp_Cal, fsVext) == 0x3Cu) ? 1 : -1];
-typedef char layout_assert_Xcp_Cal_sizeof[(sizeof(Xcp_Cal) == 0x40u) ? 1 : -1];
+typedef char layout_assert_Xcp_Cal_motorCmd_offset[(offsetof(Xcp_Cal, motorCmd) == 0x40u) ? 1 : -1];
+typedef char layout_assert_Xcp_Cal_motorManual_offset[(offsetof(Xcp_Cal, motorManual) == 0x44u) ? 1 : -1];
+typedef char layout_assert_Xcp_Cal_motorManualSp_offset[(offsetof(Xcp_Cal, motorManualSp) == 0x48u) ? 1 : -1];
+typedef char layout_assert_Xcp_Cal_sizeof[(sizeof(Xcp_Cal) == 0x50u) ? 1 : -1];
 
 /* Xcp_Nvm (Nvm.h) */
 typedef char layout_assert_Xcp_Nvm_magic_offset[(offsetof(Xcp_Nvm, magic) == 0x0u) ? 1 : -1];
@@ -214,5 +217,23 @@ typedef char layout_assert_Xcp_FusionCal_gateMinM_offset[(offsetof(Xcp_FusionCal
 typedef char layout_assert_Xcp_FusionCal_sigmaAccRw_offset[(offsetof(Xcp_FusionCal, sigmaAccRw) == 0x34u) ? 1 : -1];
 typedef char layout_assert_Xcp_FusionCal_reserved_offset[(offsetof(Xcp_FusionCal, reserved) == 0x38u) ? 1 : -1];
 typedef char layout_assert_Xcp_FusionCal_sizeof[(sizeof(Xcp_FusionCal) == 0x40u) ? 1 : -1];
+
+/* Xcp_Esc (Measurements.h) */
+typedef char layout_assert_Xcp_Esc_magic_offset[(offsetof(Xcp_Esc, magic) == 0x0u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_tickMs_offset[(offsetof(Xcp_Esc, tickMs) == 0x4u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_crcFail_offset[(offsetof(Xcp_Esc, crcFail) == 0x8u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_tempC_offset[(offsetof(Xcp_Esc, tempC) == 0xCu) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_tlmCount_offset[(offsetof(Xcp_Esc, tlmCount) == 0x1Cu) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_tlmMissed_offset[(offsetof(Xcp_Esc, tlmMissed) == 0x2Cu) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_rpm_offset[(offsetof(Xcp_Esc, rpm) == 0x3Cu) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_eRpm100_offset[(offsetof(Xcp_Esc, eRpm100) == 0x4Cu) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_voltageCv_offset[(offsetof(Xcp_Esc, voltageCv) == 0x54u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_currentCa_offset[(offsetof(Xcp_Esc, currentCa) == 0x5Cu) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_mAh_offset[(offsetof(Xcp_Esc, mAh) == 0x64u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_motorState_offset[(offsetof(Xcp_Esc, motorState) == 0x6Cu) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_alive_offset[(offsetof(Xcp_Esc, alive) == 0x6Du) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_replyEdgesM1_offset[(offsetof(Xcp_Esc, replyEdgesM1) == 0x71u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_reserved_offset[(offsetof(Xcp_Esc, reserved) == 0x72u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_sizeof[(sizeof(Xcp_Esc) == 0x74u) ? 1 : -1];
 
 #endif /* AURIXTRICORE_LAYOUT_ASSERT_GEN_H */

@@ -1,4 +1,5 @@
 #include "Xcp.h"
+#include "Ifx_Lwip.h"
 #include "Version.h"
 #include "Diagnostics.h"
 #include "Nvm.h"
@@ -14,6 +15,7 @@
 
 /* command codes (master -> slave) */
 #define XCP_CMD_CONNECT             0xFFu
+#define XCP_LINK_TIMEOUT_MS         500u   /* Xcp_linkAlive(): max age of the last command */
 #define XCP_CMD_DISCONNECT          0xFEu
 #define XCP_CMD_GET_STATUS          0xFDu
 #define XCP_CMD_SYNCH               0xFCu
@@ -137,6 +139,7 @@ static struct udp_pcb *s_xcpPcb;
 static uint16          s_resCtr;        /* response counter (transport header)  */
 static uint8          *s_mta;           /* memory transfer address              */
 static boolean         s_connected;
+static uint32          s_lastCmdMs;        /* 1 ms tick of the last well-formed command (link-alive for Motor.c) */
 
 /* DAQ state (single dynamic list, absolute ODT numbering) */
 typedef struct
@@ -229,6 +232,7 @@ static void xcpRecv(void *arg, struct udp_pcb *pcb, struct pbuf *p,
         return;                                 /* malformed frame              */
     }
     cmd = &frame[4];
+    s_lastCmdMs = g_TickCount_1ms;          /* any well-formed command counts as link activity */
 
     switch (cmd[0])
     {
@@ -590,4 +594,19 @@ void xcpInit(void)
             s_xcpPcb = NULL;
         }
     }
+}
+
+uint32 Xcp_getLastCommandMs(void)
+{
+    return s_lastCmdMs;
+}
+
+/* Link-loss criterion for the arming state machine (SYS2-SAF-002): the master
+ * polls continuously while it is connected, so "no well-formed command for
+ * XCP_LINK_TIMEOUT_MS" is "the link is gone" -- GUI closed, cable pulled, PC
+ * asleep. Before the first command after boot the age is huge: not alive. */
+boolean Xcp_linkAlive(void)
+{
+    uint32 ageMs = g_TickCount_1ms - s_lastCmdMs;      /* unsigned: wraps correctly */
+    return ((s_lastCmdMs != 0u) && (ageMs < XCP_LINK_TIMEOUT_MS)) ? TRUE : FALSE;
 }

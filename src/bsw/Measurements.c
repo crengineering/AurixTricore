@@ -50,6 +50,15 @@ volatile Xcp_Fusion g_xcpFusion;
 #pragma section farbss restore
 #endif
 
+/* ESC telemetry block, next free slot (0x70030700) -- see Measurements.h. */
+#if defined(__TASKING__)
+#pragma section farbss "xcp_esc"
+#endif
+volatile Xcp_Esc g_xcpEsc;
+#if defined(__TASKING__)
+#pragma section farbss restore
+#endif
+
 void measurementsInit(void)
 {
     IfxDts_Dts_Config dtsConfig;
@@ -212,6 +221,37 @@ void measurementsSetImu(boolean present, const float32 acc[3], const float32 gyr
     }
 }
 
+void measurementsSetEsc(const Dshot_TelemetryStatus tlm[DSHOT_MEND], uint32 crcFail)
+{
+    uint8 m;
+
+    g_xcpEsc.tickMs  = g_xcpData.tickMs;
+    g_xcpEsc.crcFail = crcFail;
+    for (m = 0u; m < (uint8)DSHOT_MEND; m++)
+    {
+        g_xcpEsc.tempC[m]     = (sint32)tlm[m].packet.temperature;
+        g_xcpEsc.tlmCount[m]  = tlm[m].count;
+        g_xcpEsc.tlmMissed[m] = tlm[m].missed;
+        g_xcpEsc.eRpm100[m]   = tlm[m].packet.eRPM;
+        g_xcpEsc.voltageCv[m] = tlm[m].packet.voltage;
+        g_xcpEsc.currentCa[m] = tlm[m].packet.current;
+        g_xcpEsc.mAh[m]       = tlm[m].packet.mAh;
+        g_xcpEsc.alive[m]     = (tlm[m].alive != FALSE) ? 1u : 0u;
+        /* eRPM counts electrical revolutions; one mechanical turn = poles/2 of them */
+        g_xcpEsc.rpm[m]       = ((float32)tlm[m].packet.eRPM * 100.0f) / ((float32)XCP_ESC_MOTOR_POLES / 2.0f);
+    }
+}
+
+void measurementsSetMotorState(uint8 state)
+{
+    g_xcpEsc.motorState = state;
+}
+
+void measurementsSetEscReplyEdges(uint8 edges)
+{
+    g_xcpEsc.replyEdgesM1 = edges;
+}
+
 void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)
 {
     if (present != FALSE)
@@ -293,6 +333,7 @@ void measurementsSetFusion(const FusionValues *fusion, const Ahrs_Values *ahrs,
 
     /* --- the full state ------------------------------------------------ */
     g_xcpFusion.magic  = XCP_FUSION_MAGIC;
+    g_xcpEsc.magic     = XCP_ESC_MAGIC;
     g_xcpFusion.tickMs = g_TickCount_1ms;
 
     /* Angles are published in DEGREES. The filter works in radians and always

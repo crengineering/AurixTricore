@@ -5,6 +5,8 @@
 #include "Uart.h"
 #include "scheduler.h"
 #include "led.h"
+#include "Dshot.h"
+#include "motor.h"
 #include "IfxGeth_Eth.h"
 #include "Ifx_Console.h"
 #include "Configuration.h"
@@ -45,6 +47,7 @@ static void Task_LedToggle(void)
 
 }
 
+
 /* Was a free-running poll in the while(TRUE) body; scheduled here (T8,
  * docs/REFACTORING_PLAN.md) so its cost is accounted like every other task
  * instead of being invisible in the load figures. lwIP's own tick is already
@@ -66,6 +69,22 @@ static void Task_Nvm(void)
 static void Task_XcpDaq(void)
 {
     xcpDaqCycle();
+}
+
+static void Task_Dshot(void)
+{
+    static Motor_states_t state                         = MOTOR_DISARMED;
+           uint16         speed_setpoints[DSHOT_MEND]   = {0};
+           uint16         dshot_command_set[DSHOT_MEND] = {0};
+           boolean        dshot_stream_allowed          = FALSE;
+
+    /* link to flight_ctrl for speed requests still open
+     * handle here if the user wants to send speed requests via GUI and XCP
+     * e.g. for testing or commissioning purposes
+     * */
+    dshot_stream_allowed = Motor_task(speed_setpoints, dshot_command_set, &state);
+    Dshot_task(dshot_command_set, dshot_stream_allowed);
+    measurementsSetMotorState((uint8)state);
 }
 
 
@@ -135,12 +154,16 @@ int core0_main(void)
     init_gpio_pins();
     gpio_calInit();         /* XCP GPIO control block: all pins firmware-owned */
 
+    /* init Dshot */
+    Dshot_init();
+
     /* init scheduler */
     Scheduler_init(&g_sched, &MODULE_STM0, 0u);
     Scheduler_addTask(&g_sched, Task_LedToggle, SCHED_MS(500u));
     (void)Scheduler_addTask(&g_sched, Task_Lwip,       SCHED_MS(1u));    /* 1 kHz lwIP poll */
     (void)Scheduler_addTask(&g_sched, SensorTask_baro, SCHED_MS(20u));   /* 50 Hz barometer */
     (void)Scheduler_addTask(&g_sched, SensorTask_mag,  SCHED_MS(20u));   /* 50 Hz magnetometer */
+    (void)Scheduler_addTask(&g_sched, SensorTask_esc,  SCHED_MS(20u));   /* 50 Hz ESC telemetry publish */
     /* NavTask_step moved to core1_main's own scheduler (T12,
      * docs/REFACTORING_PLAN.md): the flight core gets nothing else, ever. */
     /* Registration order preserves the original dispatch order within a
@@ -153,6 +176,7 @@ int core0_main(void)
     (void)Scheduler_addTask(&g_sched, SensorTask_gnss,     SCHED_MS(100u));  /* 10 Hz GNSS */
     (void)Scheduler_addTask(&g_sched, Housekeeping_100ms,  SCHED_MS(100u));
     (void)Scheduler_addTask(&g_sched, Task_XcpDaq,         SCHED_MS(100u));
+    (void)Scheduler_addTask(&g_sched, Task_Dshot,          SCHED_MS(1u));
 
     /* init persistent memory*/
     Nvm_bootInit();         /* load persistent parameters from DFLASH       */

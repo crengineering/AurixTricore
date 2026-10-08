@@ -172,6 +172,7 @@
 #define LCF_XCP_I2CDBG_START    0x70030400
 #define LCF_XCP_FUSION_START    0x70030500
 #define LCF_XCP_FUSIONCAL_START 0x70030600
+#define LCF_XCP_ESC_START       0x70030700
 
 #define RESET LCF_STARTPTR_NC_CPU0
 
@@ -1323,6 +1324,10 @@ derivative tc39
                 group xcp_fusioncal (run_addr = LCF_XCP_FUSIONCAL_START)
                 {
                     select "(.bss.xcp_fusioncal|.bss.xcp_fusioncal.*)";
+                }
+                group xcp_esc (run_addr = LCF_XCP_ESC_START)
+                {
+                    select "(.bss.xcp_esc|.bss.xcp_esc.*)";
                 }
             }
         }

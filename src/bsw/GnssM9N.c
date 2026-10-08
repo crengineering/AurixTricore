@@ -579,7 +579,7 @@ boolean GnssM9N_init(void)
     static const IfxAsclin_Asc_Pins pins = {
         .cts       = NULL_PTR,                        /* no hardware flow control */
         .rx        = &IfxAsclin4_RXC_P22_6_IN,
-        .rxMode    = IfxPort_InputMode_pullUp,
+        .rxMode    = IfxPort_InputMode_noPullDevice,   /* pad pull-up would go to 5 V (PINNING.md 2.4) */
         .rts       = NULL_PTR,                        /* no hardware flow control */
         .tx        = &IfxAsclin4_TX_P22_5_OUT,
         .txMode    = IfxPort_OutputMode_pushPull,

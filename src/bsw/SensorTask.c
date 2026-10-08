@@ -11,6 +11,7 @@
 #include "Bmp581.h"
 #include "Mmc5983.h"
 #include "GnssM9N.h"
+#include "Dshot.h"
 #include "Atmosphere.h"
 #include "fusion.h"
 #include "Ahrs.h"
@@ -105,4 +106,13 @@ void SensorTask_gnss(void)
                    gnss_sample.hAccM, gnss_sample.iTOW,
                    (gnssPresent != FALSE) && (gnss_sample.navOk != 0u));
     PeriphDiag_report(PERIPH_DIAG_GNSS, gnssPresent, gnssPlausible, (float)gnss_sample.rxBytes);
+}
+
+void SensorTask_esc(void)
+{
+    Dshot_TelemetryStatus tlm[DSHOT_MEND];
+    uint32                crcFail = Dshot_getTelemetry(tlm);   /* fills all four, returns the wire's CRC failures */
+
+    measurementsSetEsc(tlm, crcFail);
+    measurementsSetEscReplyEdges(Dshot_getReplyEdges());
 }
