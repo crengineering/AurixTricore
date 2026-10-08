@@ -35,9 +35,103 @@
 
 /* Accelerometer trust window [g]. Outside it the vector is contaminated by
  * real acceleration and no longer points at gravity, so the filter coasts on
- * the gyro. At rest this board measures |a| = 0.998 g. */
+ * the gyro. At rest this board measures |a| = 0.998 g. Still used verbatim
+ * for the one-shot ahrs_align() gate (a clean, unambiguous reading to start
+ * from); the RUNNING correction below no longer uses it as a hard cut --
+ * see AHRS_ACC_TRUST_FULL_G. */
 #define AHRS_ACC_MIN_G        (0.85f)
 #define AHRS_ACC_MAX_G        (1.15f)
+
+/* B3.4 (SYS1-001 strand B, SWE1-FW-006): a hard |a| window alone accepted a
+ * lateral disturbance at full gain right up to its edge -- 0.15 g sideways
+ * on a 1 g reading gives |a| = 1.011 g, comfortably INSIDE [0.85, 1.15],
+ * while tilting the apparent vertical by 8.5 deg (B2(b)). Two continuous
+ * weights replace the single hard cut, multiplied together into w_acc,
+ * which scales twoKpAcc's P AND I contribution (both go through eAcc, so
+ * scaling eAcc scales both integrator paths that read it):
+ *   w_norm  ramps from 1 (|dev| <= AHRS_ACC_TRUST_FULL_G, +/-5%) down to 0
+ *           at |dev| == AHRS_ACC_MAX_G - 1 (+/-15%, TODAY's outer edge --
+ *           nothing previously rejected is newly accepted).
+ *   w_rate  ramps from 1 (|gyro| <= AHRS_ACC_RATE_FULL_DPS) down to 0 at
+ *           AHRS_ACC_RATE_FULL_DPS + AHRS_ACC_RATE_SPAN_DPS -- fast handling
+ *           rides the gyro path already (no lag there); this is about not
+ *           trusting the accel DURING it.
+ * accTrusted (Ahrs_Values) becomes (w_acc > 0), the same outer edge as
+ * before; accWeightPct (0..100) publishes w_acc itself.
+ *
+ * Task 11 (review round 1): the constants moved (30/90 -> 15/45, zero trust
+ * at 60 deg/s instead of 120) and w_rate now reads a 50 ms low-passed |gyro|
+ * (s_gyroLpDps below), not the instantaneous sample, for two reasons:
+ *   - mean vs. peak vibration: an instantaneous |gyro| sample on a real
+ *     airframe is dominated by vibration spikes riding on top of the real
+ *     angular rate; gating on the INSTANTANEOUS value chatters the weight
+ *     tick-to-tick on noise the accelerometer correction never actually
+ *     needed protecting against -- the low-pass tracks the real motion,
+ *     not the noise floor on top of it.
+ *   - ~150 ms re-engagement hold-off: tau = 0.05 s means roughly 3 tau
+ *     (~150 ms) after a fast rotation ends before the low-passed value
+ *     decays back under AHRS_ACC_RATE_FULL_DPS and the accel correction
+ *     re-engages at full weight -- deliberate: the vertical estimate right
+ *     after a fast manoeuvre is exactly when the accelerometer is least
+ *     trustworthy (settling structural vibration, residual specific force),
+ *     so re-arming instantly would undo the point of gating on rate at all.
+ */
+#define AHRS_ACC_TRUST_FULL_G     (0.05f)
+#define AHRS_ACC_TRUST_SPAN_G     ((AHRS_ACC_MAX_G - 1.0f) - AHRS_ACC_TRUST_FULL_G)
+#define AHRS_ACC_RATE_FULL_DPS    (15.0f)
+#define AHRS_ACC_RATE_SPAN_DPS    (45.0f)
+
+/* Task 11: time constant of the |gyro| low-pass that feeds w_rate -- see the
+ * block comment above for why 50 ms (not the instantaneous sample). */
+#define AHRS_GYRO_LP_TAU_S        (0.05f)
+
+/* B6.5 (SYS1-001 strand B task 12b, SWE1-FW-006): a half-sine roll spends
+ * 7.7x longer than a trapezoid of the same angle and duration inside the
+ * PARTIAL-weight band (0 < w_rate < 1), because it accelerates/decelerates
+ * slowly at both ends instead of stepping straight to a constant rate. The
+ * rate gate alone (AHRS_ACC_RATE_FULL_DPS/SPAN_DPS) cannot see that: at the
+ * low-rate tail ends of the motion the ANGULAR ACCELERATION -- and with it
+ * the tangential accelerometer disturbance -- is at its maximum, exactly
+ * where w_rate is largest. A partially-weighted eAcc computed against that
+ * disturbed reading still charges s_fbI every tick it is nonzero (Ahrs.c
+ * task 11b measured 2.837 deg at motion end against the 2.0 deg clause).
+ *
+ * The upper knee of the w_rate ramp -- ARM only above this, a manoeuvre,
+ * not vibration or a gust. */
+#define AHRS_ACC_RATE_ZERO_DPS    (AHRS_ACC_RATE_FULL_DPS + AHRS_ACC_RATE_SPAN_DPS) /* = 60 deg/s */
+
+/* Fix: make the accel weight's return to trust ASYMMETRIC IN TIME rather
+ * than adding a third rate-based parameter. Once the low-passed |gyro| has
+ * reached AHRS_ACC_RATE_ZERO_DPS, the accelerometer is held OUT of the P
+ * and I paths for AHRS_ACC_HOLDOFF_S -- closing exactly the window the
+ * half-sine's tail ends open.
+ *
+ * B6.6 (review round 2 major, task 12c): the hold's EXPIRY is wall-clock
+ * time since the rate was last AT OR ABOVE AHRS_ACC_RATE_ZERO_DPS, not
+ * "until the rate falls back below AHRS_ACC_RATE_FULL_DPS" as task 12b
+ * first had it -- that release condition is a LATCH, not a hold-off: a
+ * sustained coordinated turn at 30 deg/s (inside the 15-60 deg/s band,
+ * where the old code held with NO countdown) never satisfies "rate below
+ * 15 deg/s", so accWeightPct measured 0 for 60913 of 60913 ticks over 60 s
+ * -- the accelerometer locked out of both the P and I path for the whole
+ * turn, an unbounded regression against SWE1-FW-007 and the pre-strand-B
+ * behaviour. No gate on this chain may depend on a condition the vehicle
+ * can simply decline to meet; the bound must be a DURATION, for every
+ * input. Rule, two branches, no band in between:
+ *   gyroLp >= AHRS_ACC_RATE_ZERO_DPS  -> s_accHoldS = AHRS_ACC_HOLDOFF_S
+ *   otherwise                         -> s_accHoldS -= dt, floored at 0
+ * A slower manoeuvre that keeps dwelling in the 15-60 deg/s band AFTER the
+ * hold expires is then covered by the ordinary w_rate ramp, which is
+ * correct rather than merely tolerable: the tangential disturbance is
+ * proportional to the angular ACCELERATION, so a manoeuvre slow enough to
+ * dwell in the band has a small disturbance -- the budget only binds when
+ * the motion is fast, and a fast motion leaves the band quickly. The
+ * half-sine's falling end (60 -> 15 deg/s) takes 0.236 s, still inside the
+ * 0.3 s bound, so INTEGRAL(w dt) and the motion-end error are unchanged;
+ * the +1s figure IMPROVES (re-engages ~0.24 s earlier). Still bounded by
+ * AHRS_FBI_MAX_DPS's own 2.0 deg/s clamp (at most 0.6 deg of coasting
+ * error) and still armed only above 60 deg/s, so hover is untouched. */
+#define AHRS_ACC_HOLDOFF_S        (0.3f)
 
 /* Magnetometer trust window [gauss]. Earth's field is 0.25..0.65 G worldwide
  * (~0.48 G in Munich); the band is widened to tolerate a residual hard-iron
@@ -85,15 +179,69 @@
 #define AHRS_DT_MIN_S         (0.0001f)
 #define AHRS_DT_MAX_S         (0.2f)
 
+/* SYS1-001: how long invalid input must PERSIST before the sensor is
+ * presumed actually gone. Below this, one rejected tick (or a short run of
+ * them) freezes the estimate and waits for the next good sample; only once
+ * bad input has accumulated this much do we declare AHRS_NO_SENSOR and let
+ * the next good tick re-align. The dispatched defect was a single one-tick
+ * glitch (a duplicate DRDY edge, ~1 per 2400 edges) re-initialising the
+ * whole attitude and zeroing the gyro-bias integral on the spot; the fix is
+ * this debounce, not a faster sensor. Chosen well above one glitch (~1 ms)
+ * and well below a flight-relevant reaction time (100 ms): a genuine outage
+ * this long already means the last 50 ms of yaw is stale regardless of what
+ * this estimator does about it. */
+#define AHRS_FAULT_HOLD_S     (0.05f)
+
+/* Upper bound for a dt COUNTED TOWARD THE FAULT-HOLD CLOCK -- deliberately
+ * NOT AHRS_DT_MAX_S (flight-reviewer FAIL, SYS1-001 regression): that bound
+ * exists to keep a nonsense interval out of the INTEGRATOR, and reusing it
+ * here silently excluded the one dt that most needs to count -- a LONG
+ * NavTask.c edge (a genuine gap the sensor took to answer again) reports the
+ * real gap as dt, e.g. 0.5 s, and 0.5 s >= AHRS_DT_MAX_S (0.2 s) made the old
+ * guard throw it away, so s_faultHoldS never moved and AHRS_NO_SENSOR never
+ * fired -- a dead IMU / broken INT1 left the estimator reporting
+ * AHRS_RUNNING on a frozen quaternion forever. This bound instead only
+ * rejects what must never be trusted as a real duration: <= 0, NaN (compares
+ * false against every relational operator here, same discipline as
+ * navTask_dtValid()), or a corrupted/absurd value -- 60 s is generous
+ * headroom over any interval NavTask.c can legitimately report (a uint32
+ * STM0 tick delta at 100 MHz cannot even represent a gap past ~42.9 s). A
+ * dt this large clears AHRS_FAULT_HOLD_S in one step, which is the point: a
+ * gap that long already IS the outage. */
+#define AHRS_FAULT_DT_MAX_S   (60.0f)
+
+/* B3.3 (SYS1-001 strand B, SWE1-FW-005): a backstop, not the fix -- 1-2
+ * remove the mechanism that let the integrals wind up in the first place,
+ * this bounds what a REMAINING one can do (e.g. a calibration/alignment
+ * residual too small to trip the plausibility checks). twoKi is already
+ * slow (tau ~ 50 s) so an unbounded integral only ever loses slowly, but
+ * "only ever loses slowly" is not the same guarantee as "cannot exceed a
+ * known worst case" -- this makes it the latter. 2.0 deg/s per body axis
+ * matches the worst standing roll/pitch error this defect produced (B1
+ * evidence: 2.8 deg over 45 s -- one twoKi time constant's worth); 1.0 deg/s
+ * on the heading integral is 4x the observed 0.5 deg/s boot-to-boot spread
+ * (SWE1-FW-002's own status note). */
+#define AHRS_FBI_MAX_DPS      (2.0f)
+#define AHRS_FBI_YAW_MAX_DPS  (1.0f)
+
 #define AHRS_DEG_TO_RAD       (0.017453293f)
 #define AHRS_RAD_TO_DEG       (57.29578f)
 #define AHRS_GRAVITY          (9.80665f)
 #define AHRS_TWO_PI           (6.2831853f)
 
-/* Admissible band for a raw sensor sample. Generous: this rejects garbage and
- * non-finite values, it does not police physics. The ICM-42688-P is configured
- * for +/-16 g and +/-2000 deg/s, so anything past this is a corrupt transfer. */
-#define AHRS_INPUT_MAX        (1.0e6f)
+/* SYS1-001 strand B task 15 (SWE1-FW-009): AHRS_INPUT_MAX (1.0e6f) was never
+ * a plausibility bound -- it rejected only NaN and infinity, and every one
+ * of the observed corrupt-sample events (evidence rows 7D13E62A0B428BE3,
+ * 1E1CC203E9702454: 1918-1967 deg/s, 95.9-98.3% of full scale) sailed
+ * through it untouched. Replaced by bounds the sensor and the airframe
+ * actually have: 1.5x the configured full scale on each channel, which
+ * additionally catches a scaling or mounting error, not only a corrupt
+ * transfer. Neither bound alone catches the near-full-scale defect (1967
+ * deg/s is still well under 3000) -- that is what NavTask_gyroSlewOk()
+ * (NavTask.c) and Icm42688_read()'s sentinel check (task 14) are for; this
+ * is the last, cheapest backstop, not the first line of defence. */
+#define AHRS_GYRO_MAX_DPS     (3000.0f)   /* 1.5x the configured +/-2000 dps */
+#define AHRS_ACC_MAX_INPUT_G  (25.0f)     /* 1.5x the configured +/-16 g     */
 
 /* --- mounting transforms -------------------------------------------------
  * Sensor axes to BODY axes (x forward, y right, z DOWN).
@@ -125,12 +273,32 @@
  * evidence for this sensor.
  *
  * MAG — the MMC5983MA is a SEPARATE breakout in its own orientation and gets
- * its own transform. This one is still a HYPOTHESIS: it cannot be measured
- * until the hard-iron offsets are calibrated, because uncalibrated |B| swings
- * by a factor of two with orientation (0.428..0.984 G measured) and swamps any
- * axis check. Run tools/mag_cal.py first, then verify that yaw tracks a
- * physical 90 degree rotation. A wrong mag transform shows as yaw that runs
- * backwards or refuses to settle, while roll and pitch stay perfect. */
+ * its own transform. MEASURED 2026-09-13 (SYS1-001 B9): a yaw-independent
+ * search over all 48 signed axis permutations against three six-position
+ * recordings (hard-iron corrected first, tools/mag_cal.py) found angle(mag
+ * field, gravity-down) constant only for X_SRC=sensor X (+1), Y_SRC=sensor Y
+ * (-1), Z_SRC=sensor Z (+1): spread 3.4-4.9 deg across the three datasets,
+ * mean 33 deg from down (Munich dip 64 deg => 26 deg expected, 7 deg residual
+ * = soft/hard-iron). The previous mapping (+sensorY, +sensorX, -sensorZ)
+ * ranked 31st-32nd of 48 (tied, spread 29.5 deg) with the field pointing UP
+ * instead of down.
+ *
+ * This table has determinant -1 and that is INTENTIONAL, unlike the IMU
+ * mount above: the magnetometer is a polar vector, not a pseudovector, so the
+ * zero-or-two-negations rule does not apply to it (Ahrs.h). Mmc5983.c applies
+ * no per-axis sign of its own and there is no datasheet naming which axis the
+ * silicon reports mirrored (docs/MMC5983MA.md SS7/SS9) — the reflection in
+ * this table cancels a reflection already present in the delivered data, so
+ * the net physical-to-body map is proper. That the mirror is in the DATA, not
+ * a free choice of table, is not merely assumed: the 48-permutation search
+ * covers every determinant-+1 (proper) candidate too, and the best of THOSE
+ * still puts the field pointing UP at Munich's +64 deg dip -- physically
+ * impossible for a correctly-oriented sensor. No proper mount fits the data;
+ * a driver-side mirror is the only hypothesis the search leaves standing.
+ * The real fix is a driver sign once a datasheet exists to name the mirrored
+ * axis; that would invalidate the NVM/board.json hard-iron offsets (magOffZ
+ * or magOffY, whichever axis turns out to be mirrored) and require
+ * re-calibration, so it is deferred (SYS1-001 B9 alt 1). */
 #define AHRS_MOUNT_X_SRC      (1u)        /* body forward <- sensor Y */
 #define AHRS_MOUNT_X_SGN      ( 1.0f)
 #define AHRS_MOUNT_Y_SRC      (0u)        /* body right   <- sensor X */
@@ -138,12 +306,12 @@
 #define AHRS_MOUNT_Z_SRC      (2u)        /* body down    <- -sensor Z */
 #define AHRS_MOUNT_Z_SGN      (-1.0f)
 
-#define AHRS_MAG_MOUNT_X_SRC  (1u)
+#define AHRS_MAG_MOUNT_X_SRC  (0u)        /* body forward <- +sensor X */
 #define AHRS_MAG_MOUNT_X_SGN  ( 1.0f)
-#define AHRS_MAG_MOUNT_Y_SRC  (0u)
-#define AHRS_MAG_MOUNT_Y_SGN  ( 1.0f)
-#define AHRS_MAG_MOUNT_Z_SRC  (2u)
-#define AHRS_MAG_MOUNT_Z_SGN  (-1.0f)
+#define AHRS_MAG_MOUNT_Y_SRC  (1u)        /* body right   <- -sensor Y */
+#define AHRS_MAG_MOUNT_Y_SGN  (-1.0f)
+#define AHRS_MAG_MOUNT_Z_SRC  (2u)        /* body down    <- +sensor Z */
+#define AHRS_MAG_MOUNT_Z_SGN  ( 1.0f)
 
 /* Apply the IMU mounting transform. Used for the accelerometer AND the gyro —
  * both must go through the same mapping or the filter tears itself apart. */
@@ -168,7 +336,19 @@ static float32 s_q1;
 static float32 s_q2;
 static float32 s_q3;
 
-static float32 s_fbI[3];           /* Mahony integral feedback [rad/s]        */
+static float32 s_fbI[3];           /* Mahony integral feedback [rad/s], BODY --
+                                     * B3.2 (SYS1-001 strand B): fed ONLY by
+                                     * eAcc now, never by the magnetometer     */
+static float32 s_fbIYaw;           /* Mahony integral feedback [rad/s], about
+                                     * the estimated vertical (d_b) -- fed
+                                     * ONLY by eMagD. Applied as s_fbIYaw*dB,
+                                     * same "one degree of freedom" split as
+                                     * the proportional term (B3.1)           */
+static float32 s_gyroLpDps;        /* Task 11: 50 ms low-passed |gyro| [deg/s],
+                                     * feeds w_rate -- see AHRS_GYRO_LP_TAU_S */
+static float32 s_accHoldS;         /* B6.5 (task 12b): seconds remaining in
+                                     * the post-manoeuvre accel hold-off --
+                                     * see AHRS_ACC_HOLDOFF_S                  */
 static float32 s_bias[3];          /* boot gyro bias, body frame [deg/s]      */
 static float32 s_calSum[3];
 static float32 s_calMin[3];
@@ -183,6 +363,11 @@ static float32 s_calElapsedS;   /* elapsed dt since calibration STARTED [s];
                                   * AHRS_CAL_DEADLINE_S gate is measured against */
 static boolean s_biasDegraded;  /* deadline hit before a clean window */
 
+/* SYS1-001: accumulated dt of CONSECUTIVE invalid ticks [s], reset the
+ * instant a good one arrives. Same "accumulate a duration, not a count"
+ * idiom as s_calWindowS above -- see AHRS_FAULT_HOLD_S for what it gates. */
+static float32 s_faultHoldS;
+
 /* Named s_ahrsState rather than the obvious s_state: MISRA 5.9 wants
  * internal-linkage identifiers unique across the whole program, and
  * fusion.c and src/asw/CtrlReplay.c each had their own s_state. */
@@ -194,6 +379,26 @@ static Ahrs_State s_ahrsState;
  * directly, same T12 discipline as fusion.c's baro/GNSS latches. */
 static float32 s_magB[3];          /* latched sample, BODY frame, corrected   */
 static float32 s_magNorm;
+
+/* cppcheck-suppress misra-c2012-8.7 ; deviation: read over XCP SHORT_UPLOAD
+ * by raw address (tools/xcp_read.py), never referenced by C code outside
+ * this file -- same class of deviation as g_imuDrdy* (ImuInt.c). SYS1-001
+ * task 0 instrumentation: see Ahrs.h for what it counts. */
+volatile uint32 g_dbgAhrsRealigns;
+
+/* cppcheck-suppress-begin misra-c2012-8.7 ; deviation: read over XCP
+ * SHORT_UPLOAD by raw address (tools/xcp_read.py), never referenced by C
+ * code outside this file -- same class of deviation as g_dbgAhrsRealigns
+ * above. SYS1-001 task 13 instrumentation: see Ahrs.h for what each one
+ * captures. */
+volatile uint32              g_dbgAhrsBigStep;
+volatile Ahrs_BigStepSnapshot g_dbgAhrsBigStepSnapshot;
+/* cppcheck-suppress-end misra-c2012-8.7 */
+
+/* Guards g_dbgAhrsBigStepSnapshot: written once, on the FIRST big-step tick
+ * only -- see Ahrs.h. Not reachable from outside this file, so a plain
+ * (non-volatile) static is correct, same as every other s_* flag here. */
+static boolean s_bigStepLatched;
 
 /* Inverse square root. The plain form, not the famous bit-trick approximation:
  * this core has an FPU, the trick's 0.2 percent error would land straight in
@@ -209,6 +414,59 @@ static float32 ahrs_invSqrt(float32 x)
     else
     {
         /* zero or NaN: the caller re-aligns */
+    }
+
+    return r;
+}
+
+/* B3.3: clamp a scalar into [-limit, +limit]. A NaN fails both comparisons
+ * below and falls through unclamped -- matching this file's own discipline
+ * elsewhere (ahrs_invSqrt, navTask_dtValid): the caller (Ahrs_update) only
+ * ever calls this with a value it just computed from finite inputs times a
+ * bounded gain and a bounded dt, so a NaN here would already mean the
+ * upstream AHRS_GYRO_MAX_DPS/AHRS_ACC_MAX_INPUT_G/dt-window checks were
+ * bypassed, not something
+ * this clamp is the right place to paper over. */
+static float32 ahrs_clamp(float32 v, float32 limit)
+{
+    float32 r = v;
+
+    if (v > limit)
+    {
+        r = limit;
+    }
+    else if (v < -limit)
+    {
+        r = -limit;
+    }
+    else
+    {
+        /* already inside the band */
+    }
+
+    return r;
+}
+
+/* B3.4: clamp a scalar into [0, 1] -- the weight-ramp shape both w_norm and
+ * w_rate share. A NaN input (e.g. an accNorm computed from a NaN sample --
+ * already excluded upstream by AHRS_ACC_MAX_INPUT_G, same reasoning as
+ * ahrs_clamp above) falls through both comparisons and returns v itself
+ * unclamped, same discipline as the rest of this file. */
+static float32 ahrs_clamp01(float32 v)
+{
+    float32 r = v;
+
+    if (v > 1.0f)
+    {
+        r = 1.0f;
+    }
+    else if (v < 0.0f)
+    {
+        r = 0.0f;
+    }
+    else
+    {
+        /* already inside [0,1] */
     }
 
     return r;
@@ -285,12 +543,35 @@ void Ahrs_init(void)
         s_magB[i]   = 0.0f;
     }
 
+    s_fbIYaw       = 0.0f;
+    s_gyroLpDps    = 0.0f;
+    s_accHoldS     = 0.0f;
     s_calCount     = 0u;
     s_calWindowS   = 0.0f;
     s_calElapsedS  = 0.0f;
     s_biasDegraded = FALSE;
     s_ahrsState    = AHRS_CALIBRATING;
     s_magNorm  = 0.0f;
+    s_faultHoldS = 0.0f;
+    g_dbgAhrsRealigns = 0u;
+
+    /* SYS1-001 task 13 instrumentation -- see Ahrs.h. */
+    g_dbgAhrsBigStep = 0u;
+    s_bigStepLatched = FALSE;
+    for (i = 0u; i < 3u; i++)
+    {
+        g_dbgAhrsBigStepSnapshot.gyroRaw[i] = 0.0f;
+        g_dbgAhrsBigStepSnapshot.accRaw[i]  = 0.0f;
+        g_dbgAhrsBigStepSnapshot.fbI[i]     = 0.0f;
+    }
+    g_dbgAhrsBigStepSnapshot.dt      = 0.0f;
+    g_dbgAhrsBigStepSnapshot.eMagD   = 0.0f;
+    g_dbgAhrsBigStepSnapshot.fbIYaw  = 0.0f;
+    g_dbgAhrsBigStepSnapshot.q[0]    = 0.0f;
+    g_dbgAhrsBigStepSnapshot.q[1]    = 0.0f;
+    g_dbgAhrsBigStepSnapshot.q[2]    = 0.0f;
+    g_dbgAhrsBigStepSnapshot.q[3]    = 0.0f;
+    g_dbgAhrsBigStepSnapshot.magNorm = 0.0f;
 
     /* g_magLatch (AhrsLatch.h): the PRODUCER's state, zeroed here even though
      * Ahrs_init() runs on CPU1 (via NavTask_init, T12) -- safe by
@@ -474,53 +755,72 @@ static void ahrs_align(const float32 accBody[3], float32 accNorm)
     ahrs_setEuler(roll, pitch, yaw);
 }
 
-/* The Mahony correction: a rotation-error vector built from whichever
- * drift-free references are usable this sample. */
+/* The Mahony correction. B3.2 (SYS1-001 strand B, SWE1-FW-004) splits what
+ * used to be one combined e[3] into the two pieces the two integrators
+ * (s_fbI, s_fbIYaw -- Ahrs_update) need kept apart:
+ *   eAcc[3]  the accelerometer's full body-frame correction, unprojected --
+ *            it is already perpendicular to d_b by construction (it IS the
+ *            correction that keeps d_b aligned with gravity).
+ *   eMagD    the magnetometer's correction, ALREADY projected onto d_b and
+ *            ALREADY scaled by kp -- a single scalar along the one axis
+ *            (heading, about d_b) the magnetometer is allowed to touch.
+ *   dB       the current estimated vertical in body frame (nedToBody(0,0,1)),
+ *            returned on EVERY call regardless of magUsed: Ahrs_update needs
+ *            it to apply s_fbIYaw*dB even on a tick where the field itself
+ *            is untrusted, same as s_fbI[i] keeps contributing through an
+ *            accel dropout. */
 static void ahrs_errorVector(const float32 accBody[3], float32 accNorm,
-                             float32 e[3], boolean *accUsed, boolean *magUsed)
+                             float32 wAcc, float32 eAcc[3], float32 dB[3],
+                             float32 *eMagD, boolean *accUsed, boolean *magUsed)
 {
-    e[0] = 0.0f;
-    e[1] = 0.0f;
-    e[2] = 0.0f;
+    const float32 downNed[3] = { 0.0f, 0.0f, 1.0f };
+
+    eAcc[0] = 0.0f;
+    eAcc[1] = 0.0f;
+    eAcc[2] = 0.0f;
+    *eMagD  = 0.0f;
     *accUsed = FALSE;
     *magUsed = FALSE;
 
-    if ((accNorm > AHRS_ACC_MIN_G) && (accNorm < AHRS_ACC_MAX_G))
+    ahrs_nedToBody(downNed, dB);
+
+    if (wAcc > 0.0f)
     {
         /* Where the filter BELIEVES the specific force points: minus the NED
          * down axis, expressed in body. The cross product with what the
          * accelerometer actually measured is the rotation that reconciles the
-         * two — small-angle, so no trigonometry is needed. */
-        const float32 down[3] = { 0.0f, 0.0f, -1.0f };
+         * two — small-angle, so no trigonometry is needed. B3.4: wAcc (the
+         * continuous weight, Ahrs_update) scales the WHOLE correction here,
+         * so both the proportional (this) and integral (s_fbI, fed by eAcc)
+         * paths see it together. */
+        const float32 up[3] = { 0.0f, 0.0f, -1.0f };
         const float32 recip = 1.0f / accNorm;
         const float32 ax = accBody[0] * recip;
         const float32 ay = accBody[1] * recip;
         const float32 az = accBody[2] * recip;
         float32 v[3];
 
-        ahrs_nedToBody(down, v);
+        ahrs_nedToBody(up, v);
 
         const float32 kp = FusionCal_positive(g_fusionCal.twoKpAcc, 0.0f,
-                                             AHRS_TWO_KP_ACC);
+                                             AHRS_TWO_KP_ACC) * wAcc;
 
-        e[0] += kp * ((ay * v[2]) - (az * v[1]));
-        e[1] += kp * ((az * v[0]) - (ax * v[2]));
-        e[2] += kp * ((ax * v[1]) - (ay * v[0]));
+        eAcc[0] = kp * ((ay * v[2]) - (az * v[1]));
+        eAcc[1] = kp * ((az * v[0]) - (ax * v[2]));
+        eAcc[2] = kp * ((ax * v[1]) - (ay * v[0]));
 
         *accUsed = TRUE;
     }
     else
     {
-        /* Contaminated by real acceleration — coast on the gyro. */
+        /* w_acc == 0: past the old hard edge (|a|-1| >= 15%) either way --
+         * contaminated by real acceleration, coast on the gyro. */
     }
 
     if ((s_magNorm > AHRS_MAG_MIN_G) && (s_magNorm < AHRS_MAG_MAX_G))
     {
         /* Rotate the measured field into NED, then flatten it: whatever the
-         * horizontal part turns out to be, DEFINE it as pointing north. The
-         * difference between that reference and the measurement is then a
-         * rotation about the vertical only — which is the point, since the
-         * magnetometer must not be allowed to touch roll or pitch. */
+         * horizontal part turns out to be, DEFINE it as pointing north. */
         const float32 recip = 1.0f / s_magNorm;
         const float32 mx = s_magB[0] * recip;
         const float32 my = s_magB[1] * recip;
@@ -541,9 +841,27 @@ static void ahrs_errorVector(const float32 accBody[3], float32 accNorm,
         const float32 kp = FusionCal_positive(g_fusionCal.twoKpMag, 0.0f,
                                              AHRS_TWO_KP_MAG);
 
-        e[0] += kp * ((my * w[2]) - (mz * w[1]));
-        e[1] += kp * ((mz * w[0]) - (mx * w[2]));
-        e[2] += kp * ((mx * w[1]) - (my * w[0]));
+        /* B3.1 (dispatch B2(a)): the raw cross product mn x w is NOT a
+         * rotation about the vertical -- for a heading error psi its NED
+         * components are (h_r*h_z*sinPsi, h_r*h_z*(1-cosPsi), -h_r^2*sinPsi),
+         * dominant along NORTH (docs/FUSION.md documents the corrected pole
+         * arithmetic; the false "rotation about the vertical only" claim
+         * this comment used to make is deleted). Projecting onto d_b keeps
+         * exactly the one degree of freedom (heading) the magnetometer is
+         * allowed: *eMagD = raw . d_b is exactly -h_r^2*sinPsi, the same
+         * kp_eff,mag = twoKpMag*h_r^2 the 7.1 s time-constant fit already
+         * measures (docs/FUSION.md section 5), so yaw dynamics are
+         * unchanged. At level d_b = [0,0,1] exactly, so this reduces to
+         * raw[2] alone -- bit-identical to the pre-B3.1 e[2] term. */
+        {
+            float32 raw[3];
+
+            raw[0] = (my * w[2]) - (mz * w[1]);
+            raw[1] = (mz * w[0]) - (mx * w[2]);
+            raw[2] = (mx * w[1]) - (my * w[0]);
+
+            *eMagD = kp * ((raw[0] * dB[0]) + (raw[1] * dB[1]) + (raw[2] * dB[2]));
+        }
 
         *magUsed = TRUE;
     }
@@ -598,20 +916,65 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
 
     ahrs_refreshMag();
 
+    if (valid != FALSE)
+    {
+        /* SYS1-001 debounce: the caller says this tick's input is usable --
+         * the hold clock resets regardless of what the dt/NaN checks below
+         * make of it, same as a healthy sample answering a doubt. */
+        s_faultHoldS = 0.0f;
+    }
+    else
+    {
+        /* accumulated below, in the valid==FALSE branch */
+    }
+
     if ((valid == FALSE) || (dt <= AHRS_DT_MIN_S) || (dt >= AHRS_DT_MAX_S))
     {
         /* Freeze. A stale sample or a nonsense interval integrated as though
          * it were real is how an estimator ends up confidently wrong. */
         if (valid == FALSE)
         {
-            s_ahrsState = AHRS_NO_SENSOR;
-            out->accNed[0] = 0.0f;
-            out->accNed[1] = 0.0f;
-            out->accNed[2] = 0.0f;
-            out->rate[0]   = 0.0f;
-            out->rate[1]   = 0.0f;
-            out->rate[2]   = 0.0f;
-            out->accMagG   = 0.0f;
+            /* SYS1-001 debounce: one rejected tick must freeze the estimate,
+             * not re-initialise it -- re-aligning on every one-tick glitch is
+             * what turned a duplicate DRDY edge into a yaw sawtooth (see
+             * AHRS_FAULT_HOLD_S). Only once bad input has PERSISTED that long
+             * is the sensor presumed actually gone. */
+            if ((dt > 0.0f) && (dt < AHRS_FAULT_DT_MAX_S))
+            {
+                /* A genuinely measured, bounded interval -- count it toward
+                 * the hold window, WHATEVER its size (see AHRS_FAULT_DT_MAX_S
+                 * -- this is deliberately not AHRS_DT_MAX_S, the integration
+                 * bound). A nonsense dt (<=0, NaN, or absurdly large; NaN
+                 * compares false against every relational operator here,
+                 * same discipline as navTask_dtValid()) contributes nothing,
+                 * so a corrupt caller can neither race the debounce shut nor
+                 * freeze it open forever. */
+                s_faultHoldS += dt;
+            }
+            else
+            {
+                /* not a usable interval -- do not advance the hold clock */
+            }
+
+            if (s_faultHoldS >= AHRS_FAULT_HOLD_S)
+            {
+                s_ahrsState = AHRS_NO_SENSOR;
+            }
+            else
+            {
+                /* still within the hold window: frozen, not yet declared
+                 * gone -- s_ahrsState (and s_fbI, untouched below) stay
+                 * exactly as they were. */
+            }
+
+            out->accNed[0]     = 0.0f;
+            out->accNed[1]     = 0.0f;
+            out->accNed[2]     = 0.0f;
+            out->rate[0]       = 0.0f;
+            out->rate[1]       = 0.0f;
+            out->rate[2]       = 0.0f;
+            out->accMagG       = 0.0f;
+            out->accWeightPct  = 0u;
         }
         else
         {
@@ -619,18 +982,19 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
              * single scheduler hiccup does not blank the channel filters. */
         }
     }
-    else if (!((acc[0] > -AHRS_INPUT_MAX) && (acc[0] < AHRS_INPUT_MAX)
-            && (acc[1] > -AHRS_INPUT_MAX) && (acc[1] < AHRS_INPUT_MAX)
-            && (acc[2] > -AHRS_INPUT_MAX) && (acc[2] < AHRS_INPUT_MAX)
-            && (gyro[0] > -AHRS_INPUT_MAX) && (gyro[0] < AHRS_INPUT_MAX)
-            && (gyro[1] > -AHRS_INPUT_MAX) && (gyro[1] < AHRS_INPUT_MAX)
-            && (gyro[2] > -AHRS_INPUT_MAX) && (gyro[2] < AHRS_INPUT_MAX)))
+    else if (!((acc[0] > -AHRS_ACC_MAX_INPUT_G) && (acc[0] < AHRS_ACC_MAX_INPUT_G)
+            && (acc[1] > -AHRS_ACC_MAX_INPUT_G) && (acc[1] < AHRS_ACC_MAX_INPUT_G)
+            && (acc[2] > -AHRS_ACC_MAX_INPUT_G) && (acc[2] < AHRS_ACC_MAX_INPUT_G)
+            && (gyro[0] > -AHRS_GYRO_MAX_DPS) && (gyro[0] < AHRS_GYRO_MAX_DPS)
+            && (gyro[1] > -AHRS_GYRO_MAX_DPS) && (gyro[1] < AHRS_GYRO_MAX_DPS)
+            && (gyro[2] > -AHRS_GYRO_MAX_DPS) && (gyro[2] < AHRS_GYRO_MAX_DPS)))
     {
-        /* A NaN or infinite sample is dropped exactly like a failed read. The
-         * positive form matters: every comparison against NaN is false, so
-         * negating a positive test is what rejects it. Without this, an
-         * absurd acceleration propagates into accNed and out to the channel
-         * filters as +/-inf. */
+        /* A NaN or infinite sample -- or, since task 15, anything past 1.5x
+         * either sensor's configured full scale -- is dropped exactly like a
+         * failed read. The positive form matters: every comparison against
+         * NaN is false, so negating a positive test is what rejects it.
+         * Without this, an absurd acceleration propagates into accNed and
+         * out to the channel filters as +/-inf. */
     }
     else
     {
@@ -684,8 +1048,24 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
                 {
                     s_fbI[i] = 0.0f;
                 }
+                s_fbIYaw = 0.0f;
+
+                /* Task 11: seed the low-pass from the INSTANTANEOUS |gyro|
+                 * on entry to RUNNING, not 0 -- a re-align after a genuine
+                 * outage says nothing about the rate the board is moving at
+                 * right now, and starting the filter at 0 would report full
+                 * accel trust for one time constant regardless of reality. */
+                s_gyroLpDps = sqrtf((gyroBody[0] * gyroBody[0])
+                                   + (gyroBody[1] * gyroBody[1])
+                                   + (gyroBody[2] * gyroBody[2]));
+
+                /* B6.5 (task 12b): a re-align says nothing about a
+                 * manoeuvre in progress -- start untrusted-free, same
+                 * reasoning as seeding s_gyroLpDps above rather than 0. */
+                s_accHoldS = 0.0f;
 
                 s_ahrsState = AHRS_RUNNING;
+                g_dbgAhrsRealigns++;
             }
             else
             {
@@ -699,31 +1079,116 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
 
         if (s_ahrsState == AHRS_RUNNING)
         {
-            float32 e[3];
+            float32 eAcc[3];
+            float32 dB[3];
+            float32 eMagD;
+            float32 wAcc;
             float32 wx;
             float32 wy;
             float32 wz;
             float32 recipNorm;
 
-            ahrs_errorVector(accBody, accNorm, e, &accUsed, &magUsed);
+            /* B3.4: the continuous accel weight, computed once here (both
+             * accBody/accNorm and gyroBody are in scope) and threaded
+             * through ahrs_errorVector rather than recomputed there. */
+            {
+                const float32 devNormG = fabsf(accNorm - 1.0f);
+                const float32 gyroNormDps = sqrtf((gyroBody[0] * gyroBody[0])
+                                                 + (gyroBody[1] * gyroBody[1])
+                                                 + (gyroBody[2] * gyroBody[2]));
+                const float32 wNorm = ahrs_clamp01(1.0f
+                    - ((devNormG - AHRS_ACC_TRUST_FULL_G) / AHRS_ACC_TRUST_SPAN_G));
+                float32 wRate;
 
-            /* Gains are read every tick from the calibration block, so a tuning
-             * write takes effect on the next update rather than the next flash. */
+                /* Task 11: w_rate reads the LOW-PASSED |gyro|, not the
+                 * instantaneous sample -- see AHRS_GYRO_LP_TAU_S's block
+                 * comment for the two reasons (mean-vs-peak vibration,
+                 * ~150 ms re-engagement hold-off). One-pole update, same
+                 * "duration, not a count" arithmetic as every other dt-scaled
+                 * accumulator in this file. The coefficient is capped at 1.0:
+                 * dt is bounded above by NAVTASK_DT_MAX_S (0.2 s), 4x
+                 * AHRS_GYRO_LP_TAU_S, and an uncapped one-pole update
+                 * overshoots (and can even go transiently negative -- an
+                 * unphysical "rate" that would then read back as spurious
+                 * full trust) once dt/tau exceeds the [0,1] BIBO-stable,
+                 * non-overshooting range. Capping to 1.0 makes a rare
+                 * near-boundary LONG dt behave as an instant re-seed
+                 * (k=1 -> s_gyroLpDps = gyroNormDps exactly) instead --
+                 * still correct, never an overshoot. */
+                {
+                    const float32 lpK = (dt < AHRS_GYRO_LP_TAU_S)
+                                       ? (dt / AHRS_GYRO_LP_TAU_S) : 1.0f;
+                    s_gyroLpDps += (gyroNormDps - s_gyroLpDps) * lpK;
+                }
+
+                wRate = ahrs_clamp01(1.0f
+                    - ((s_gyroLpDps - AHRS_ACC_RATE_FULL_DPS) / AHRS_ACC_RATE_SPAN_DPS));
+
+                /* B6.5/B6.6 (task 12b/12c): the hold-off is a THIRD gate,
+                 * applied on top of w_norm*w_rate rather than folded into
+                 * either ramp -- see AHRS_ACC_HOLDOFF_S for why, and for why
+                 * this is a DURATION since the rate was last at or above the
+                 * knee, not a band the rate must fall back below (task 12b's
+                 * original three-way form was exactly that latch: a
+                 * sustained 30 deg/s turn never released it -- 60913/60913
+                 * ticks at w_acc = 0 over 60 s). Two branches, no band. */
+                if (s_gyroLpDps >= AHRS_ACC_RATE_ZERO_DPS)
+                {
+                    s_accHoldS = AHRS_ACC_HOLDOFF_S;
+                }
+                else
+                {
+                    s_accHoldS -= dt;
+                    if (s_accHoldS < 0.0f)
+                    {
+                        s_accHoldS = 0.0f;
+                    }
+                    else
+                    {
+                        /* still counting down */
+                    }
+                }
+
+                wAcc = (s_accHoldS > 0.0f) ? 0.0f : (wNorm * wRate);
+            }
+
+            ahrs_errorVector(accBody, accNorm, wAcc, eAcc, dB, &eMagD, &accUsed, &magUsed);
+            out->accWeightPct = (uint8)(wAcc * 100.0f);
+
+            /* B3.2: two independent integrators, never mixed. Gains are read
+             * every tick from the calibration block, so a tuning write takes
+             * effect on the next update rather than the next flash. */
             {
                 const float32 ki = FusionCal_positive(g_fusionCal.twoKi,
                                                       0.0f, AHRS_TWO_KI);
+                /* B3.3: a backstop bound on each integral, applied right
+                 * where it is produced -- see AHRS_FBI_MAX_DPS/
+                 * AHRS_FBI_YAW_MAX_DPS above for why these numbers and why
+                 * this is not the primary fix (1-2 are). */
+                const float32 fbiMaxRad    = AHRS_FBI_MAX_DPS * AHRS_DEG_TO_RAD;
+                const float32 fbiYawMaxRad = AHRS_FBI_YAW_MAX_DPS * AHRS_DEG_TO_RAD;
+
                 for (i = 0u; i < 3u; i++)
                 {
-                    s_fbI[i] += ki * e[i] * dt;
+                    s_fbI[i] = ahrs_clamp(s_fbI[i] + (ki * eAcc[i] * dt), fbiMaxRad);
                 }
+                s_fbIYaw = ahrs_clamp(s_fbIYaw + (ki * eMagD * dt), fbiYawMaxRad);
             }
 
-            /* The integral term IS the gyro-bias estimate: a rotation error
-             * that keeps pointing the same way can only be a rate offset. */
+            /* The integral terms ARE the gyro-bias estimate: a rotation error
+             * that keeps pointing the same way can only be a rate offset.
+             * The proportional terms stay combined (eAcc + eMagD*dB spans
+             * the same three axes eAcc alone used to, exactly as before
+             * B3.1/B3.2 -- only which INTEGRATOR accumulates each piece
+             * changed), and so does s_fbIYaw's contribution: applied along
+             * dB on every axis, same as the integral always was. */
 
-            wx = ((gyroBody[0] - s_bias[0]) * AHRS_DEG_TO_RAD) + e[0] + s_fbI[0];
-            wy = ((gyroBody[1] - s_bias[1]) * AHRS_DEG_TO_RAD) + e[1] + s_fbI[1];
-            wz = ((gyroBody[2] - s_bias[2]) * AHRS_DEG_TO_RAD) + e[2] + s_fbI[2];
+            wx = ((gyroBody[0] - s_bias[0]) * AHRS_DEG_TO_RAD)
+               + eAcc[0] + (eMagD * dB[0]) + s_fbI[0] + (s_fbIYaw * dB[0]);
+            wy = ((gyroBody[1] - s_bias[1]) * AHRS_DEG_TO_RAD)
+               + eAcc[1] + (eMagD * dB[1]) + s_fbI[1] + (s_fbIYaw * dB[1]);
+            wz = ((gyroBody[2] - s_bias[2]) * AHRS_DEG_TO_RAD)
+               + eAcc[2] + (eMagD * dB[2]) + s_fbI[2] + (s_fbIYaw * dB[2]);
 
             /* q_dot = 0.5 * q (x) [0, w]; the half is folded into h. */
             {
@@ -763,15 +1228,66 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
                 s_q3 = 0.0f;
             }
 
+            /* SYS1-001 task 13 (SWE1-FW-009): name a corrupt/near-full-scale
+             * gyro sample on the tick it happens, before the bounds of tasks
+             * 14/15 land -- see Ahrs.h. Uses the RAW (pre-mount) gyro, the
+             * function argument, exactly "as delivered": the mount transform
+             * is a permutation of signed axes (Ahrs.c top-of-file comment),
+             * so it changes which component the corrupt word ends up in but
+             * not the vector's magnitude -- checking the raw value points
+             * straight at the sensor word without waiting for that mapping. */
+            {
+                const float32 gyroRawNormDps = sqrtf((gyro[0] * gyro[0])
+                                                    + (gyro[1] * gyro[1])
+                                                    + (gyro[2] * gyro[2]));
+
+                if ((gyroRawNormDps * dt) > 0.5f)
+                {
+                    g_dbgAhrsBigStep++;
+
+                    if (s_bigStepLatched == FALSE)
+                    {
+                        g_dbgAhrsBigStepSnapshot.gyroRaw[0] = gyro[0];
+                        g_dbgAhrsBigStepSnapshot.gyroRaw[1] = gyro[1];
+                        g_dbgAhrsBigStepSnapshot.gyroRaw[2] = gyro[2];
+                        g_dbgAhrsBigStepSnapshot.accRaw[0]  = acc[0];
+                        g_dbgAhrsBigStepSnapshot.accRaw[1]  = acc[1];
+                        g_dbgAhrsBigStepSnapshot.accRaw[2]  = acc[2];
+                        g_dbgAhrsBigStepSnapshot.dt         = dt;
+                        g_dbgAhrsBigStepSnapshot.eMagD       = eMagD;
+                        g_dbgAhrsBigStepSnapshot.fbIYaw      = s_fbIYaw;
+                        g_dbgAhrsBigStepSnapshot.fbI[0]      = s_fbI[0];
+                        g_dbgAhrsBigStepSnapshot.fbI[1]      = s_fbI[1];
+                        g_dbgAhrsBigStepSnapshot.fbI[2]      = s_fbI[2];
+                        g_dbgAhrsBigStepSnapshot.q[0]        = s_q0;
+                        g_dbgAhrsBigStepSnapshot.q[1]        = s_q1;
+                        g_dbgAhrsBigStepSnapshot.q[2]        = s_q2;
+                        g_dbgAhrsBigStepSnapshot.q[3]        = s_q3;
+                        g_dbgAhrsBigStepSnapshot.magNorm     = s_magNorm;
+
+                        s_bigStepLatched = TRUE;
+                    }
+                    else
+                    {
+                        /* already latched -- keep counting, do not overwrite */
+                    }
+                }
+                else
+                {
+                    /* ordinary tick -- nothing to latch */
+                }
+            }
+
             out->rate[0] = (gyroBody[0] - s_bias[0]) * AHRS_DEG_TO_RAD;
             out->rate[1] = (gyroBody[1] - s_bias[1]) * AHRS_DEG_TO_RAD;
             out->rate[2] = (gyroBody[2] - s_bias[2]) * AHRS_DEG_TO_RAD;
         }
         else
         {
-            out->rate[0] = 0.0f;
-            out->rate[1] = 0.0f;
-            out->rate[2] = 0.0f;
+            out->rate[0]      = 0.0f;
+            out->rate[1]      = 0.0f;
+            out->rate[2]      = 0.0f;
+            out->accWeightPct = 0u;
         }
 
         /* The whole reason this file exists: specific force out of the body
@@ -845,12 +1361,32 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
 
         out->yawRad = yaw;
 
-        for (i = 0u; i < 3u; i++)
+        /* B3.2: gyroBias keeps the SAME meaning and the SAME publish
+         * formula shape -- s_fbI[i] + s_fbIYaw*dB[i] is simply the total
+         * integral feedback now split across two accumulators instead of
+         * one, so this is still "the constant found at boot plus whatever
+         * the integral has tracked since". dB is recomputed fresh here
+         * (cheap, one nedToBody call) rather than carried out of the
+         * RUNNING block above, since it must reflect the ATTITUDE JUST
+         * PUBLISHED (post quaternion update), not the one the correction
+         * was computed against a moment earlier -- the two agree to within
+         * one integration step regardless, but this keeps the invariant
+         * exact rather than approximate. */
         {
-            /* Report the total: the constant found at boot plus whatever the
-             * integral has tracked since. The sign is flipped because the
-             * integral is ADDED to the gyro, so it holds minus the bias. */
-            out->gyroBias[i] = s_bias[i] - (s_fbI[i] * AHRS_RAD_TO_DEG);
+            float32 dBPub[3];
+            const float32 downNed[3] = { 0.0f, 0.0f, 1.0f };
+
+            ahrs_nedToBody(downNed, dBPub);
+
+            for (i = 0u; i < 3u; i++)
+            {
+                /* Report the total: the constant found at boot plus whatever
+                 * the integral has tracked since. The sign is flipped
+                 * because the integral is ADDED to the gyro, so it holds
+                 * minus the bias. */
+                out->gyroBias[i] = s_bias[i]
+                                 - ((s_fbI[i] + (s_fbIYaw * dBPub[i])) * AHRS_RAD_TO_DEG);
+            }
         }
 
         out->biasDegraded = (s_biasDegraded != FALSE) ? 1u : 0u;

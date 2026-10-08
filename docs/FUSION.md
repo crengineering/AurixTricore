@@ -244,6 +244,32 @@ orientation-dependent amount, so it cannot hold yaw — it only replaces gyro
 drift with its own. Roll and pitch are unaffected, which is the signature: the
 mag correction is confined to the vertical axis by construction.
 
+> ⚠️ **Retracted, 2026-09-13 (SYS1-001 B9).** "The transform is validated"
+> above only ever checked the horizontal rotation SENSE at level — and the old
+> and new mappings both preserve that sense, so the clean 360° sweep never
+> distinguished them. It did not check the VERTICAL component, which only
+> shows up once the board is tilted: rolled 90° the old mapping put yaw
+> ~180° off (Chris, bench, 2026-09-13).
+>
+> **Measured mount (SYS1-001 B9):** a yaw-independent search over all 48
+> signed axis permutations against three six-position recordings found
+> angle(magnetic field, gravity-down) constant only for **body = (+sensor X,
+> −sensor Y, +sensor Z)** — spread 3.4–4.9° across the three datasets, mean
+> 33° from down (Munich dip 64° ⇒ 26° expected, 7° residual is soft/hard-iron
+> leftover). The old mapping (+sensor Y, +sensor X, −sensor Z, i.e. the same
+> table as the IMU mount above) ranked 32nd of 48, spread 29.5°, field
+> pointing UP instead of down. See `docs/MMC5983MA.md` §7 for why the fix
+> lives in this table (determinant −1, legitimate for a polar vector) rather
+> than in `Mmc5983.c` — there is no datasheet to name which axis the driver
+> actually mirrors.
+>
+> **Level heading shifts by +90°** relative to every number quoted above
+> (the rotation SENSE is unchanged, so `magTrusted`/sweep-smoothness evidence
+> above still holds). Declination (3.9°, Munich) is unaffected — it is
+> applied after the mount, at the AHRS output. **Any "yaw points north"
+> claim needs a handheld-compass re-check at level; this is not yet done**
+> (SYS1-001 B9 task 4, bench, Chris).
+
 ---
 
 ## 5. Failure modes that are already handled
@@ -293,6 +319,331 @@ infinity. `varD` now settles around 0.42 m².
 GNSS fix the filter genuinely does not know where it is. It clamps at
 `FUSION_P_MAX` rather than resetting, because resetting would falsely claim the
 estimate had improved.
+
+**One rejected IMU sample re-initialising the whole attitude (SYS1-001).**
+`Ahrs_update()`'s `valid` parameter used to have exactly two states: usable, or
+`AHRS_NO_SENSOR` on the spot. At the measured ~1014 Hz DRDY rate a duplicate
+edge (`deltaTicks` under `NAVTASK_DT_MIN_S`, ~1 per 2400 edges — the sibling of
+the ERU `LDEN` double-trigger documented in `docs/ILLD_NOTES.md`) produced
+exactly that: one tick with `valid == FALSE`, `AHRS_NO_SENSOR`, then the next
+good tick re-aligned — `ahrs_align()` sets yaw **deadbeat** from the latched
+magnetometer and zeroes all three Mahony integrals. Two ticks, ~2 ms; at 100 ms
+GUI polling only the jump survives. Evidence row `65E61FC20BD73055`
+(2026-09-11, fw v1.19.13): 52 of these in 125 s stationary, a 40-step yaw
+sawtooth (0.33–2.59°) riding a +0.5°/s residual gyro-z rate, all three
+`gyroBias*` collapsing to ≈0 at every step.
+
+**Fix: separate "no usable input this tick" from "the sensor is gone."**
+`Ahrs_update()` now debounces the fault instead of latching it on the first bad
+tick:
+
+```
+good tick  ──────────────────────────────────────────────┐
+   │                                                       │ s_faultHoldS = 0
+   ▼                                                       │
+ RUNNING ──invalid tick──▶ FROZEN (still RUNNING) ─────────┘
+   ▲            s_faultHoldS += dt         │
+   │                                       │ s_faultHoldS >= AHRS_FAULT_HOLD_S
+   │                                       ▼
+   └──── ahrs_align(), s_fbI = 0 ──── AHRS_NO_SENSOR
+              (exactly once)
+```
+
+Below `AHRS_FAULT_HOLD_S` (0.05 s) an invalid tick **freezes**: the quaternion
+and the Mahony integral `s_fbI` are left untouched, `rate`/`accTrusted`/
+`magTrusted` publish as zero for that tick, and the state stays whatever it
+was. Only once bad input has *persisted* for `AHRS_FAULT_HOLD_S` — a duration
+accumulated from `dt`, the same "duration not a sample count" idiom
+`ahrs_calibrate()`'s window already uses (§9, T14) — does the estimator declare
+`AHRS_NO_SENSOR` and let the next good sample re-align. A single glitch, or a
+short run of them, never reaches that; a genuine outage (IMU unplugged, SPI
+wedged) still does, just 0.05 s later than before. Consequence: after a
+genuine ≥ 50 ms outage, yaw is corrected over the ~7 s time constant below
+instead of instantly — the trade this fix makes on purpose. Bench, same
+protocol as the evidence row above but fw v1.19.15: `g_dbgAhrsRealigns` = 1 in
+125 s (the boot alignment only), 0 steps > 0.3°, 0 bias-collapse events, yaw
+p2p 0.18° (was 2.78°).
+
+**Why the residual yaw error decays with τ ≈ 7 s.** Between a re-align and the
+next one (pre-fix), or after a genuine outage (post-fix), yaw error decays as
+`A·(1 − e^(−T/τ))` under the magnetometer correction alone. The correction's
+authority is not the nominal `twoKpMag` (`AHRS_TWO_KP_MAG = 0.5`, `Ahrs.c`) —
+only the *horizontal* component of the field can rotate yaw
+(`ahrs_errorVector()` builds the reference from
+`ref = [sqrt(h0²+h1²), 0, h2]`, i.e. the horizontal magnitude flattened to a
+reference bearing, so only that horizontal part ever disagrees with the
+measured field about bearing), so the effective gain is
+`kp_eff = twoKpMag · h_r²`, where `h_r` is the horizontal fraction of the
+total field (`h_r = sqrt(h0²+h1²) / |B|`, set by the local magnetic
+inclination — µ well under 1 away from the magnetic equator). Measured on this
+board (dispatch `SYS1-001`, fit over the 40 pre-fix steps): `A = 3.00°`,
+`τ = 7.10 s`, rms 0.17° — worked example at a 13.2 s gap predicts 2.53°,
+measured 2.59°. This time constant is a property of the mounting/site
+geometry and `AHRS_TWO_KP_MAG`, **unchanged by the debounce fix** — the fix
+changes how *often* the estimator restarts this decay, not how fast the decay
+itself runs.
+
+**Correction (round 2):** an earlier status note here quoted `ωn = 0.075
+rad/s, ζ ≈ 0.94` for this pole. That pair describes a critically-damped
+*second-order* system and does not apply — the debounce fix touches neither
+gain nor pole, only how often the single first-order yaw pole above restarts;
+there is no ωn/ζ to quote for it. The editorial error is corrected here, not
+in the requirement text (no stale-parent).
+
+**One rejected mag heading writing a false roll/pitch bias (SYS1-001 strand
+B).** The debounce fix above stops the estimator from *re-initialising*, but
+the residual defect was structural, not transient: `ahrs_errorVector()`'s mag
+term built `e_mag = kp · (m × w)` and summed it, unprojected, into the same
+`e[]` the accelerometer uses — and `m × w` is **not** a rotation about the
+vertical. For a heading error `ψ` its NED components are
+
+```
+(h_r·h_z·sinψ,  h_r·h_z·(1−cosψ),  −h_r²·sinψ)
+```
+
+— dominant along **NORTH**, not DOWN. (An earlier version of this file's
+sibling comment in `Ahrs.c` at the mag block claimed the opposite — "a
+rotation about the vertical only" — which is the false claim this fix
+deletes.) Summed into the single Mahony integral `s_fbI[3]`, a standing
+heading error therefore wrote a false ROLL/PITCH gyro-bias at
+`twoKi · kp · h_r · h_z · sinψ`: measured on this board, 15 s at a
+20° heading error moved `gyroBias0` by +1.17 °/s; back at level the standing
+error `θ_ss = s_fbI/kp_eff` reached 2.8°, decaying on the slow `twoKi` root
+(τ ≈ 45–50 s measured, 44.6–50 s fit). Evidence: `AEA6EC75E42AE1B5`,
+`FB1CDAC83CFA37B0`.
+
+**Fix — three parts, in `Ahrs.c`:**
+
+1. **Project `e_mag` onto the estimated vertical.** `d_b = nedToBody(0,0,1)`;
+   `eMagD = (m×w)·d_b`; the correction becomes `kp·eMagD·d_b` instead of the
+   raw cross product. `eMagD` **is** exactly `−h_r²·sinψ` — the same
+   `kp_eff,mag = twoKpMag·h_r²` the τ ≈ 7.1 s fit above already measures — so
+   yaw dynamics are bit-identical and the north-axis parasite is deleted. At
+   level, `d_b = [0,0,1]` exactly, so the projection reduces to keeping only
+   the z-component of the raw cross product — algebraically identical to the
+   pre-fix formula there, host-tested bit-for-bit.
+2. **Split the integrator.** `s_fbI[3]` (body-frame gyro-bias, unchanged
+   name/meaning) is now fed **only** by the accelerometer's `eAcc`; a new
+   scalar `s_fbIYaw` (about `d_b`, i.e. heading) is fed **only** by `eMagD`,
+   applied as `s_fbIYaw · d_b`. Published `gyroBias[i] = s_bias[i] −
+   (s_fbI[i] + s_fbIYaw·d_b[i])·RAD_TO_DEG` — same field, same meaning, no
+   A2L move, bit-identical at level. Without this, task 1 alone still left a
+   heading error's *transient* (while yaw converges) baked into the
+   body-frame-fixed `s_fbI`, which does not rotate back when the board
+   returns to level.
+3. **Clamp both integrals, as a backstop, not the fix.** `s_fbI` ≤ 2.0°/s per
+   body axis (the worst standing error this defect produced), `s_fbIYaw` ≤
+   1.0°/s (4× the observed boot-to-boot heading spread). Bounds a residual
+   too small to trip the plausibility checks; does not address the mechanism.
+
+**Continuous accelerometer weight, same file.** The hard `|a|` window
+(`AHRS_ACC_MIN_G`/`MAX_G`, §3) accepted a lateral disturbance at full gain
+right up to its edge: 0.15 g sideways on 1 g gives `|a| = 1.011` g,
+comfortably inside `[0.85, 1.15]`, while tilting the apparent vertical by
+8.5°. Two continuous weights replace the single cut:
+
+| weight | formula | full trust | zero trust |
+|---|---|---|---|
+| `w_norm` | `clamp(1 − (\|\|a\|−1\| − 0.05)/0.10, 0, 1)` | within ±5 % of 1 g | at ±15 % (today's old hard edge, `AHRS_ACC_MAX_G`) |
+| `w_rate` | `clamp(1 − (gyroLp − 15°/s)/45, 0, 1)` | `gyroLp` ≤ 15°/s | at 60°/s |
+| `w_acc` | `w_norm · w_rate` | — scales `twoKpAcc`'s P **and** I contribution together | |
+
+`accTrusted` is `(w_acc > 0)` — the same outer edge as before; the weight
+itself publishes as `accWeightPct` (0–100) in `Xcp_Fusion`'s previously
+reserved byte at `0x53` (zero offset change). Hover (slow, near-1 g) is
+bit-identical to before this change (`w_acc = 1`). Task 12b (below) adds a
+third, time-asymmetric hold-off gate on top of `w_norm · w_rate` — see that
+section for why `w_rate` alone is not enough.
+
+**Round 1 (2026-09-12): `w_rate` retuned, and reads a low-pass, not the
+instantaneous sample.** `gyroLp` is a 50 ms one-pole low-pass of `|gyro|`
+(`s_gyroLpDps`, `AHRS_GYRO_LP_TAU_S`), seeded from the instantaneous rate on
+every re-align so a recovery does not start the filter from a stale zero.
+Two reasons for filtering rather than reading the raw sample:
+
+1. **Mean vs. peak vibration.** An instantaneous `|gyro|` sample on a real
+   airframe is dominated by vibration spikes riding on top of the genuine
+   angular rate — gating on the instantaneous value chatters the weight
+   tick-to-tick on noise the accelerometer correction never needed
+   protecting against. The low-pass tracks the real motion, not the noise
+   floor sitting on top of it.
+2. **~150 ms re-engagement hold-off.** `τ = 0.05 s` means roughly 3τ
+   (~150 ms) after a fast rotation ends before the filtered value decays
+   back under the full-trust threshold and the accel correction re-engages
+   at full weight. Deliberate: right after a fast manoeuvre is exactly when
+   the accelerometer is least trustworthy (settling structural vibration,
+   residual specific force), so re-arming instantly would undo the point of
+   gating on rate at all. Measured (host test): fully suppressed through a
+   sustained fast tumble, back to full trust within 150 ms of it stopping,
+   not on the very next tick.
+
+The original constants (30/90°/s, zero at 120°/s, instantaneous sample)
+were too permissive at a sustained 60°/s roll: `w_norm` stayed at full trust
+(1.1 % deviation, inside the 5 % band) and `w_rate` alone only reached 0.667
+— comfortably nonzero — so 5.4°/2.0°/0.28° passed through against a
+≤2.0°/1.0°/0.5° target (baseline pre-fix: 6.7°/2.5°/0.35°). The retuned
+constants (15/45°/s, zero at 60°/s) with the low-pass measure
+**0.52°/0.20°/0.03°** on the same constant-60°/s scenario — comfortably
+inside target and close to the architect's own ≈0.5° prediction.
+
+**Finding, round 1 (closed by task 12b, below): the half-sine (smooth
+accel/decel) profile still fails.** A smoother velocity profile over the same
+90°/1.5 s motion (peak
+~94°/s, *higher* than the constant-rate case's 60°/s, so not a softer test)
+measures 2.84°/1.06°/0.15° — failing the first two clauses, worse than the
+constant-rate result despite the higher peak rate. Traced (roll-vs-time
+trace, not left in the test suite): not accel lag — with `w_acc = 0` for the
+whole high-rate middle portion, the attitude free-integrates the commanded
+gyro rate essentially exactly. The excess is a small but *persistent* rate
+bias charged into the body integrator (`s_fbI`) during the transition
+windows at the START and END of the motion, where `w_acc` sits strictly
+between 0 and 1 (the low-pass has not yet suppressed it, or has already let
+it back up) — a proportionally-reduced but still nonzero `eAcc`, computed
+against a *disturbed* accel reading, still integrates `ki·eAcc·dt` into
+`s_fbI` on every one of those ticks. A half-sine accelerates/decelerates far
+more slowly than a trapezoid, so it spends roughly 2–3× longer in that
+partial-trust band at each end — more time to charge the slow integrator,
+which does not un-charge before the motion ends. This is an emergent
+property of the two-parameter (gain, low-pass) design as specified here, not
+an implementation defect; a fix (e.g. gating the *integral* path on a
+stricter trust threshold than the proportional path, or reshaping `w_acc`'s
+own transition) is a design decision for the flight-architect, same
+footing as the constants themselves — not made unilaterally here.
+
+**Task 12b (B6.5, 2026-09-12): the half-sine finding closed with a hold-off,
+not a third rate parameter.** The residual after a manoeuvre follows a single
+exponential, `residual = 8.53°·(1 − e^(−twoKpAcc·∫w dt))`, so the ≤2.0° clause
+at motion end is exactly a **budget on `∫w dt` over the whole motion:
+`∫w dt ≤ 0.267 s`**. A trapezoidal 90°/1.5 s roll spends `∫w dt = 0.062 s`
+there — comfortable margin. The half-sine of the same angle and duration
+spends **0.246 s** — not in the middle, where the rate is highest and `w = 0`
+already, but at the two *ends*, where the rate is genuinely low (so `w_rate`
+is non-zero) while the angular *acceleration*, and with it the tangential
+accelerometer disturbance, is at its maximum — a blind spot structural to any
+weight `w(|ω|)` with `w(0) = 1`, closed by making the gate asymmetric in time
+rather than adding a third parameter:
+
+```
+AHRS_ACC_HOLDOFF_S = 0.3 s
+s_accHoldS: set to 0.3 s whenever gyroLp >= 60°/s (the upper knee);
+            held flat, no countdown, while 15 < gyroLp < 60°/s;
+            counted down by dt only while gyroLp <= 15°/s.
+wAcc = (s_accHoldS > 0) ? 0 : w_norm * w_rate
+```
+
+Once the low-passed rate has reached the upper knee — a manoeuvre, not
+vibration or a gust — the accelerometer is held out of **both** the P and I
+paths (they share `wAcc`) for a flat 0.3 s regardless of how quickly the rate
+then falls back through the partial-weight band, which is exactly the window
+the half-sine's tail ends open. The hold can only **arm** above 60°/s, a rate
+hover never reaches, so hover is untouched, and it resets to 0 on every
+re-align (`AHRS_ALIGNING`, beside `s_gyroLpDps`) so a recovery does not start
+artificially held off.
+
+| profile (90°/1.5 s + 0.15 g lateral) | `∫w dt` | motion end | +1 s | +3 s | clause (≤2.0/1.0/0.5°) |
+|---|---|---|---|---|---|
+| trapezoid (round 1, no hold-off) | 0.062 s | 0.52° | 0.20° | 0.03° | pass |
+| half-sine (round 1, no hold-off) | 0.498 s | 2.84° | 1.06° | 0.15° | **fail** (clauses 1–2) |
+| trapezoid (task 12b, hold-off) | 0.062 s | 0.52° | 0.20° | 0.03° | pass (limits only, not pinned bit-identical — see below) |
+| half-sine (task 12b, hold-off) | 0.246 s | 1.92° | 0.95° | 0.13° | pass |
+
+The trapezoid's own `∫w dt` barely moves (0.062 s here vs the architect's
+0.064 s prediction; a sustained rate sitting almost exactly on the 60°/s knee
+is a floating-point knife-edge — measured host results are asserted against
+the ≤2.0/1.0/0.5° limits, not pinned to the pre-task-12b values, per the
+dispatch). Hover (`|ω|_lp50 < 15°/s`, `||a|−1| < 0.05 g`) never arms the hold
+and stays bit-identical to task 11. A 300 s stationary run (`|ω| ≈ 0`
+throughout) never arms it either, so `s_fbI` remains exactly as free to move
+as before task 12b (host-tested: the 45°-persistent-error anti-windup test
+runs at zero gyro rate for 300 s and is unaffected).
+
+**Task 12c (B6.6, review round 2 major, 2026-09-12): the 15–60°/s band was a
+LATCH, not a hold-off — fixed to a wall-clock duration.** Task 12b's middle
+branch ("held flat, no countdown, while 15 < gyroLp < 60°/s") has a release
+condition — "the rate falls back under 15°/s" — that a vehicle can simply
+decline to meet: a **sustained 30°/s turn** (squarely inside that band)
+never satisfies it, so `accWeightPct` measured **0 for 60913 of 60913 ticks
+over 60 s** — the accelerometer locked out of both the P and I path for the
+whole turn, an unbounded regression against SWE1-FW-007 and against the
+pre-strand-B behaviour on exactly the manoeuvre the hold-off was never meant
+to touch. No gate on this chain may depend on a condition the vehicle can
+decline to meet; the bound must be a duration, for every input. Fix — two
+branches, no band:
+
+```
+AHRS_ACC_RATE_ZERO_DPS = AHRS_ACC_RATE_FULL_DPS + AHRS_ACC_RATE_SPAN_DPS   /* = 60 deg/s */
+if (gyroLp >= AHRS_ACC_RATE_ZERO_DPS) { s_accHoldS = AHRS_ACC_HOLDOFF_S; }
+else                                  { s_accHoldS -= dt; floor at 0; }
+wAcc = (s_accHoldS > 0) ? 0 : w_norm * w_rate
+```
+
+The hold now **expires 0.3 s of wall clock after the rate was last at or
+above the arming knee** — not after it has returned to the full-trust band.
+A manoeuvre that keeps dwelling in the 15–60°/s band *after* the hold
+expires is then covered by the ordinary `w_rate` ramp, which is *correct*
+rather than merely tolerable: the tangential disturbance is proportional to
+the angular *acceleration*, so a manoeuvre slow enough to linger in the band
+has a small disturbance — the 0.3 s budget only has to bind while the motion
+is fast, and a fast motion leaves the band quickly. The half-sine's own
+falling end (60 → 15°/s) takes 0.236 s, still inside the 0.3 s bound, so
+`∫w dt` and the motion-end error are unchanged; the +1 s figure *improves*
+(re-engages ~0.24 s earlier, since the countdown now starts at the 60°/s
+crossing instead of waiting for the 15°/s one).
+
+| profile | motion end | +1 s | +3 s | note |
+|---|---|---|---|---|
+| half-sine (task 12b, latching band) | 1.921° | 0.946° | 0.132° | |
+| half-sine (task 12c, wall-clock expiry) | 1.921° | **0.732°** | **0.102°** | |
+| trapezoid (task 12c) | 0.520° | 0.200° | 0.028° | unaffected — the trapezoid's rate never lingers in the band long enough to show a difference |
+
+**Coverage added for the fixed rule** (host, `test/test_ahrs.c`):
+arm-then-linger (0.5 s at 80°/s then a *sustained* 30°/s turn — the exact
+regression scenario) recovers to the ramp value (`w_rate(30°/s)` = 66.7 %)
+within 0.5 s of leaving ≥60°/s and never drops back to 0 over a further
+60 s, with `s_fbI` resuming motion; a randomised (seeded) sequence of
+sustained rate segments alternating arming (70–150°/s) and non-arming
+(0–50°/s) bursts never shows `w_acc = 0` for more than 0.35 s after the
+low-passed rate was last ≥60°/s (checked against a shadow replica of the
+one-pole low-pass, away from the ±2°/s band around the knee where the
+*ordinary ramp itself* — not the hold — genuinely publishes a rounded 0 %);
+hover and the 300 s stationary case are unaffected (the hold can still only
+arm above 60°/s).
+
+**A third profile, below the arming knee entirely.** The two profiles above
+both peak above 60°/s and so exercise the hold-off; SWE1-FW-006's clause (a)
+now adds a **sub-60 half-sine** (peak 45°/s, 90° in `rampS = π ≈ 3.14 s`) that
+never arms the hold at all — the only case exercising the bare `w_rate` ramp
+end to end. Its lateral disturbance is *derived*, not copied, from its own
+peak angular acceleration at a **0.43 m lever arm** (`a_t = α·r`): the
+existing 94°/s half-sine's peak `α = rollDeg·π²/(2·rampS²) = 197°/s²`, and
+`a_t = α_rad·r = 0.15 g` at `r = 0.43 m` — the same arm the trapezoid and
+half-sine's shared 0.15 g already imply, made explicit rather than copied
+verbatim into a slower case where it would imply an unphysical 1.9 m arm.
+For the 45°/s half-sine, `α = 90·π²/(2·π²) = 45°/s² → a_t = 0.0344 g`.
+Measured: 1.766° / 0.661° / 0.091° against the same ≤2.0/1.0/0.5° limits
+(architect's prediction ≈1.6/0.59/0.08°), `s_accHoldS` never armed (host
+tests it via `accWeightPct` never reading exactly 0 during the motion).
+
+Bench, 125 s stationary, fw v1.19.18 (tasks 1–4, calibration restored from
+`calibration/board.json` after the reflash): `g_dbgAhrsRealigns` = 1
+throughout multiple back-to-back recordings, 0 stuck-presence drops, all
+samples `state = RUNNING`/`accTrusted`/`magTrusted` = 1, `gyroBias0`/
+`gyroBias1` (roll/pitch) peak-to-peak under 0.05 °/s. Yaw itself showed two
+real, single-tick heading shifts (1.9–8.7°) uncorrelated with any re-align
+(`g_dbgAhrsRealigns` never moved) or with a visible change in the polled raw
+magnetometer reading — consistent with a genuine, brief environmental
+magnetic disturbance on the open bench rather than an estimator defect (the
+flight-architect separately traced run 1's 8.7° shift to bench motion and
+`_r2`'s 1.9° shift to a single out-of-range gyro-z word integrated for one
+tick — a pre-existing gap, no gyro-word bound anywhere in `Ahrs.c`, tracked
+separately, not fixed here); a third, back-to-back recording without an
+intervening disturbance measured yaw p2p 0.56°, roll p2p 0.33°, pitch p2p
+1.97° (two isolated single-tick outliers, likely bench vibration), 0
+sawtooth steps.
+
+**Mag calibration is a bench prerequisite for the remaining yaw-while-tilted
+sensitivity, not code** (deferred, needs Chris's hands): remount, full 3D
+`tools/mag_cal.py`, corrected `|B|` spread < 5 % across six positions.
 
 ---
 

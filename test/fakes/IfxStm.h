@@ -21,6 +21,12 @@ void IfxStm_waitTicks(Ifx_STM *stm, uint32 ticks);
 void   FakeStm_setTicks(uint32 ticks);
 void   FakeStm_advance(uint32 delta);
 
+/* SYS1-001 strand B task 17: how many times IfxStm_waitTicks() (i.e.
+ * Icm42688_delayMs()) was actually called since the last FakeStm_reset() --
+ * the acceptance is "never called outside the boot pump", and a no-op stub
+ * cannot show that on its own without counting calls. */
+uint32 FakeStm_waitTicksCallCount(void);
+
 /* Laesst die Uhr bei JEDEM Lesen um delta weiterlaufen.
  *
  * Noetig fuer Code, der in einer Schleife auf eine Deadline wartet: mit einer

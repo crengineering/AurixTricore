@@ -51,6 +51,50 @@
  * spare. */
 #define NAVTASK_NO_EDGE_TIMEOUT_S   (0.02f)
 
+/* B4b (SYS1-001 strand B, evidence 952275AD99001303): how long DRDY may stay
+ * silent before this task starts actively probing WHO_AM_I
+ * (Icm42688_verifyPresence()), deliberately LONGER than
+ * NAVTASK_NO_EDGE_TIMEOUT_S above -- that fallback already re-reads the bus
+ * every dispatch once silent, which is what catches a genuine SPI failure;
+ * this one exists for the case that read keeps SUCCEEDING (a frozen frame),
+ * so it must not fire on every ordinary short gap the first fallback already
+ * handles cleanly. */
+#define NAVTASK_STUCK_VERIFY_TIMEOUT_S   (0.2f)
+
+/* flight-reviewer FAIL, SYS1-001 regression: the no-new-edge (timed out)
+ * branch below reports elapsedTime = 0.0f -- deliberately, so it stays
+ * outside the dt window and ahrsInputOk/fusionInputOk are never tricked into
+ * TRUE by a stale-but-in-range value (see that branch's own comment). But
+ * Ahrs_update()'s fault-hold clock (AHRS_FAULT_HOLD_S, Ahrs.c) needs to see
+ * SOME real, positive dt on every invalid tick, or a fully silent sensor
+ * (dead IMU, broken INT1) never crosses the hold and AHRS_NO_SENSOR never
+ * fires -- the estimator is left reporting AHRS_RUNNING on a frozen
+ * quaternion forever, which is what the GUI's Attitude view gates "live" on.
+ * This is that dt, used ONLY for that one purpose (see its call site) --
+ * NOT elapsedTime itself, which must stay 0.0f for the reasons above. Set to
+ * this task's own registered dispatch period, NAVTASK_DISPATCH_PERIOD_US
+ * (NavTask.h; Cpu1_Main.c registers NavTask_step at
+ * SCHED_US(NAVTASK_DISPATCH_PERIOD_US), the SAME macro, not a second number
+ * that merely happens to match today): each timed-out dispatch really is
+ * ~500 us after the previous one, so summing this in on every such dispatch
+ * reconstructs real elapsed wall time to within the scheduler's own jitter
+ * -- comfortably good enough against a 50 ms threshold, and errs toward
+ * declaring the outage LATE (safe) rather than early if CPU1 ever falls
+ * behind its own poll rate. */
+#define NAVTASK_TIMEDOUT_FAULT_DT_S   ((float32)NAVTASK_DISPATCH_PERIOD_US * 1.0e-6f)
+
+/* SYS1-001 strand B task 15 (SWE1-FW-009): bound on how fast the gyro may
+ * change, per axis, between two ACCEPTED samples -- 197 deg/s over one
+ * measured 985 us tick. A quad's airframe angular acceleration is under
+ * 10 000 deg/s^2 (20x headroom); the observed defect (a near-full-scale
+ * word appearing between two ordinary ticks, evidence rows
+ * 7D13E62A0B428BE3/1E1CC203E9702454) implies ~2 000 000 deg/s^2, 10x above
+ * this bound. Scaled by dt, not an absolute delta: a genuine LONG gap (the
+ * sensor answering late) widens the allowance in proportion, so a real
+ * manoeuvre spanning a longer interval is never mistaken for a corrupt
+ * sample. */
+#define NAVTASK_GYRO_SLEW_DPS_PER_S   (200000.0f)
+
 /* NaN-safe by construction: written as "is dtS INSIDE the window", not "is
  * dtS outside the window". NaN compares false against every relational
  * operator, so the ORIGINAL Cpu0_Main.c form -- `(dt < lo) || (dt > hi)` to
@@ -85,6 +129,66 @@ boolean NavTask_inputValid(float32 dtS, boolean imuPresent, uint8 ahrsState)
     return valid;
 }
 
+/* SYS1-001 task 1: see NavTask.h for the contract. Kept in the same style as
+ * navTask_dtValid()/NavTask_inputValid() -- a chain of POSITIVE tests into a
+ * local that starts at the "nothing usable" answer, so a NaN dtS (false
+ * against every relational operator) falls straight through to NONE instead
+ * of being accepted by omission. */
+NavTask_DtClass NavTask_classifyDt(float32 dtS)
+{
+    NavTask_DtClass result = NAVTASK_DT_NONE;
+
+    if ((dtS >= NAVTASK_DT_MIN_S) && (dtS <= NAVTASK_DT_MAX_S))
+    {
+        result = NAVTASK_DT_OK;
+    }
+    else if ((dtS > 0.0f) && (dtS < NAVTASK_DT_MIN_S))
+    {
+        result = NAVTASK_DT_SHORT;
+    }
+    else if (dtS > NAVTASK_DT_MAX_S)
+    {
+        result = NAVTASK_DT_LONG;
+    }
+    else
+    {
+        /* dtS <= 0.0f, or NaN -- NAVTASK_DT_NONE, the initial value */
+    }
+
+    return result;
+}
+
+/* SYS1-001 strand B task 15 (SWE1-FW-009): see NavTask.h for the contract.
+ * Pure (no bus access, no state) -- the caller owns "the previous ACCEPTED
+ * sample" (NavTask_step's s_lastGyroSensor below), same separation as
+ * NavTask_classifyDt()/navTask_dtValid() above. Written as a positive
+ * "is inside the band" test per axis, not a negated "outside" one: a NaN
+ * delta or a NaN bound (dtS itself NaN) compares false against BOTH
+ * relational operators, so the positive form is what rejects it -- the same
+ * discipline as every other bound in this file and in Ahrs.c. */
+boolean NavTask_gyroSlewOk(const float32 gyro[3], const float32 prev[3], float32 dtS)
+{
+    boolean       ok    = TRUE;
+    const float32 bound = NAVTASK_GYRO_SLEW_DPS_PER_S * dtS;
+    uint8         i;
+
+    for (i = 0u; i < 3u; i++)
+    {
+        const float32 delta = gyro[i] - prev[i];
+
+        if ((delta <= bound) && (delta >= -bound))
+        {
+            /* this axis is within bound */
+        }
+        else
+        {
+            ok = FALSE;
+        }
+    }
+
+    return ok;
+}
+
 /* Running total of Icm42688_plausible()'s per-sample liveness, published
  * verbatim in NavState_t.imuLiveness (NEVER reset here after boot) -- see
  * that field's comment. Housekeeping_100ms does the resetting-by-diffing;
@@ -100,6 +204,31 @@ static float32 s_imuLivenessAccum;
 static uint32 s_lastEdgeSeq;
 static uint32 s_lastEdgeTicks;
 
+/* Task 15: the gyro (raw, sensor frame, as delivered by Icm42688_read()) of
+ * the last tick NavTask_gyroSlewOk() actually accepted -- updated ONLY on
+ * acceptance, so a run of rejected ticks keeps comparing against the last
+ * KNOWN GOOD reading rather than chaining off a previous bad one (the same
+ * reason a rejected sample must not update the reference at all). */
+static float32 s_lastGyroSensor[3];
+
+/* cppcheck-suppress-begin misra-c2012-8.7 ; deviation: read over XCP
+ * SHORT_UPLOAD by raw address (tools/xcp_read.py), never referenced by C
+ * code outside this file -- same class of deviation as g_imuDrdy* (ImuInt.c).
+ * SYS1-001 task 0 instrumentation: see NavTask.h for what each one counts. */
+volatile uint32 g_dbgNavInvalidTicks;
+volatile uint32 g_dbgNavDtShort;
+volatile uint32 g_dbgNavDtLong;
+volatile uint32 g_dbgNavDtShortMinTicks;
+volatile uint32 g_dbgImuReadFail;
+/* cppcheck-suppress-end misra-c2012-8.7 */
+
+/* cppcheck-suppress-begin misra-c2012-8.7 ; deviation: read over XCP
+ * SHORT_UPLOAD by raw address (tools/xcp_read.py), never referenced by C
+ * code outside this file -- same class of deviation as g_imuSpiBurstMaxTicks
+ * (Icm42688.c). SYS1-001 task 17 instrumentation: see NavTask.h. */
+volatile uint32 g_dbgNavStepMaxTicks;
+/* cppcheck-suppress-end misra-c2012-8.7 */
+
 void NavTask_init(void)
 {
     NavState_init();        /* the publish target, before anything publishes */
@@ -107,6 +236,20 @@ void NavTask_init(void)
     Ahrs_init();              /* start the gyro-bias calibration; hold still  */
     Fusion_init();            /* zero every channel state and covariance      */
     s_imuLivenessAccum = 0.0f;
+
+    /* SYS1-001 task 0 instrumentation -- see NavTask.h. */
+    g_dbgNavInvalidTicks    = 0u;
+    g_dbgNavDtShort         = 0u;
+    g_dbgNavDtLong          = 0u;
+    g_dbgNavDtShortMinTicks = 0xFFFFFFFFu;
+    g_dbgImuReadFail        = 0u;
+
+    /* Task 15: no prior accepted sample yet -- zero is a safe reference
+     * (the slew bound scaled by even one nominal tick's dt is 197 deg/s,
+     * comfortably above any boot-time gyro bias). */
+    s_lastGyroSensor[0] = 0.0f;
+    s_lastGyroSensor[1] = 0.0f;
+    s_lastGyroSensor[2] = 0.0f;
 
     /* T16 (docs/REFACTORING_PLAN.md §3.6, missedEdges investigation): seed
      * the baseline from whatever the ISR has already produced during
@@ -121,12 +264,20 @@ void NavTask_init(void)
     ImuEdge_snapshot(&s_lastEdgeSeq, &s_lastEdgeTicks);
 }
 
-/* T15 (docs/REFACTORING_PLAN.md §3.6): registered at SCHED_US(500), a 2 kHz
- * poll well above the sensor's measured ~1014.2 Hz -- deliberately faster
+/* T15 (docs/REFACTORING_PLAN.md §3.6): registered at
+ * SCHED_US(NAVTASK_DISPATCH_PERIOD_US), a 2 kHz poll well above the
+ * sensor's measured ~1014.2 Hz -- deliberately faster
  * than the data it waits for, so the edge sequence counter (not the poll
  * period) is the real clock. See the body below for the gate. */
 void NavTask_step(void)
 {
+    /* SYS1-001 strand B task 17 (B6.4, SWE1-FW-008 clause g): bracket the
+     * WHOLE dispatch, the same way g_imuSpiBurstTicks (Icm42688.c) brackets
+     * exactly the SPI transfer -- this is the number the clause's own
+     * "no single NavTask_step dispatch exceeds NAVTASK_DISPATCH_PERIOD_US"
+     * bound is checked against, and none existed before this task. */
+    const uint32 stepStartTicks = (uint32)SysTime_getTicks();
+    uint32  stepTicks;
     uint32  edgeSeq;
     uint32  edgeTicks;
     boolean newSample;
@@ -177,6 +328,7 @@ void NavTask_step(void)
         FusionValues    fusion;
         Ahrs_Values     ahrs;
         float32         elapsedTime;
+        boolean         duplicateEdge = FALSE;
 
         if (newSample != FALSE)
         {
@@ -191,6 +343,7 @@ void NavTask_step(void)
              * type categories (unsigned -> floating). Same idiom Ahrs.c uses
              * (`s_calSum[i] / (float32)n`). */
             uint32 deltaTicks = edgeTicks - s_lastEdgeTicks;
+            NavTask_DtClass dtClass;
 
             if (missed > 1u)
             {
@@ -207,9 +360,51 @@ void NavTask_step(void)
              * jitter -- T15, docs/REFACTORING_PLAN.md §3.6). Correct even
              * across a missed edge -- two edges missed gives dt ~= 2 * period,
              * area preserved. */
-            elapsedTime     = (float32)deltaTicks * NAVTASK_TICKS_TO_S;
-            s_lastEdgeSeq   = edgeSeq;
-            s_lastEdgeTicks = edgeTicks;
+            elapsedTime = (float32)deltaTicks * NAVTASK_TICKS_TO_S;
+            dtClass     = NavTask_classifyDt(elapsedTime);
+
+            /* SYS1-001 task 0 instrumentation: name which side of the window
+             * a genuine new edge's interval fell on -- see NavTask.h. */
+            switch (dtClass)
+            {
+                case NAVTASK_DT_SHORT:
+                    g_dbgNavDtShort++;
+                    if (deltaTicks < g_dbgNavDtShortMinTicks)
+                    {
+                        g_dbgNavDtShortMinTicks = deltaTicks;
+                    }
+                    break;
+                case NAVTASK_DT_LONG:
+                    g_dbgNavDtLong++;
+                    break;
+                case NAVTASK_DT_OK:
+                case NAVTASK_DT_NONE:
+                default:
+                    break;
+            }
+
+            if (dtClass == NAVTASK_DT_SHORT)
+            {
+                /* SYS1-001 task 3: a duplicate DRDY edge, not a fault (the
+                 * dispatch's own recommendation, §3 point 2) -- consume the
+                 * sequence number so this edge is not seen again, but leave
+                 * s_lastEdgeTicks at the last GOOD edge: the next genuine
+                 * edge's interval is then measured across the duplicate,
+                 * coming out as the full ~985 us period instead of being
+                 * truncated by it. No AHRS/fusion update, no publish, and no
+                 * fault signalled to Ahrs_update -- previously this ran the
+                 * tick through as ahrsInputOk == FALSE, which is exactly the
+                 * one-tick glitch that used to re-initialise the estimator
+                 * (see Ahrs.c's AHRS_FAULT_HOLD_S for the other half of the
+                 * fix). */
+                s_lastEdgeSeq = edgeSeq;
+                duplicateEdge = TRUE;
+            }
+            else
+            {
+                s_lastEdgeSeq   = edgeSeq;
+                s_lastEdgeTicks = edgeTicks;
+            }
         }
         else
         {
@@ -222,66 +417,156 @@ void NavTask_step(void)
             elapsedTime = 0.0f;
         }
 
-        /* Called whenever this block runs, like the other sensor tasks:
-         * Icm42688_read() owns the presence state and uses these calls to
-         * probe for a reconnected sensor -- including the timed-out branch
-         * above, where there is no new edge at all: a fully silent sensor
-         * (power lost, INT1 wire broken) would never call this again if the
-         * call were gated on newSample alone, since ITS OWN edges are what
-         * would be missing. */
-        present = Icm42688_read(&sample);
-
-        /* Attitude first, then navigation: the channel filters need
-         * acceleration resolved into NED, and only the AHRS can do that.
-         * ahrs.state does not exist yet at this point, so this first gate is
-         * dt+presence only -- NavTask_inputValid's AHRS_RUNNING check applies
-         * below, once ahrs.state is an output rather than an unknown. */
-        /* Written as an if/else into a boolean local, not a direct `&&`
-         * assignment: cppcheck's MISRA 10.3 does not recognise `boolean` as
-         * an essentially-Boolean type, so it flags a `&&`/comparison result
-         * stored straight into one as a different essential type category.
-         * Same idiom as navTask_dtValid()/NavTask_inputValid(). */
-        ahrsInputOk = FALSE;
-        if ((navTask_dtValid(elapsedTime) != FALSE) && (present != FALSE))
+        if (duplicateEdge != FALSE)
         {
-            ahrsInputOk = TRUE;
+            /* Nothing else to do for a duplicate edge -- see above. */
         }
-        Ahrs_update(&ahrs, sample.acc, sample.gyro, elapsedTime, ahrsInputOk);
-
-        /* Gate the navigation filter on the attitude being usable, not
-         * merely on the IMU answering. While the AHRS is still averaging the
-         * gyro bias or waiting to align, its projection is meaningless and
-         * integrating it would put a real offset into the velocity before
-         * the barometer ever sees it. */
-        fusionInputOk = NavTask_inputValid(elapsedTime, present, ahrs.state);
-        Fusion_update(&fusion, ahrs.accNed, elapsedTime, fusionInputOk);
-
-        /* Raw sample + an accumulated liveness sum ride along in the SAME
-         * publish as the fusion output (T12 blocker,
-         * docs/REFACTORING_PLAN.md 3.7): measurementsSetImu() writes
-         * g_xcpData (CPU0 DSPR) and PeriphDiag_report() writes PeriphDiag's
-         * plain non-volatile s_periph[] -- calling either one from here would
-         * make both a two-writer object racing against CPU0's
-         * Housekeeping_100ms/PeriphDiag_update. So this task only accumulates
-         * and publishes; Housekeeping_100ms (CPU0) makes those calls from
-         * the NavState snapshot. Icm42688_plausible()'s instantaneous
-         * liveness is summed, never reset, so Housekeeping's diff of two
-         * reads sees every consumed tick's contribution -- see
-         * NavState_t.imuLiveness. */
+        else
         {
-            float32 sampleLiveness = 0.0f;
+            /* Called whenever this block runs, like the other sensor tasks:
+             * Icm42688_read() owns the presence state and uses these calls to
+             * probe for a reconnected sensor -- including the timed-out
+             * branch above, where there is no new edge at all: a fully
+             * silent sensor (power lost, INT1 wire broken) would never call
+             * this again if the call were gated on newSample alone, since
+             * ITS OWN edges are what would be missing. */
+            present = Icm42688_read(&sample);
+            if (present == FALSE)
+            {
+                g_dbgImuReadFail++;
+            }
 
-            (void)Icm42688_plausible(&sample, &sampleLiveness);
-            s_imuLivenessAccum += sampleLiveness;
+            /* B4b trigger 1: DRDY has been silent for a while (longer than
+             * the dt-window fallback above, which already re-reads the bus
+             * every dispatch) -- ask the sensor directly whether it is still
+             * there. Only relevant on the pure-timeout path: a genuine new
+             * edge (even a LONG one) means DRDY is not silent at all. Updates
+             * `present` in place so a drop is visible to ahrsInputOk/
+             * fusionInputOk on THIS same tick, not one tick late. */
+            if ((newSample == FALSE)
+                && (((float32)g_imuDrdyStaleTicks * NAVTASK_TICKS_TO_S)
+                    >= NAVTASK_STUCK_VERIFY_TIMEOUT_S))
+            {
+                present = Icm42688_verifyPresence(NAVTASK_TIMEDOUT_FAULT_DT_S);
+            }
+            else
+            {
+                /* not silent long enough yet -- trigger 1 stays quiet */
+            }
+
+            /* Attitude first, then navigation: the channel filters need
+             * acceleration resolved into NED, and only the AHRS can do that.
+             * ahrs.state does not exist yet at this point, so this first gate
+             * is dt+presence only -- NavTask_inputValid's AHRS_RUNNING check
+             * applies below, once ahrs.state is an output rather than an
+             * unknown. */
+            /* Written as an if/else into a boolean local, not a direct `&&`
+             * assignment: cppcheck's MISRA 10.3 does not recognise `boolean`
+             * as an essentially-Boolean type, so it flags a `&&`/comparison
+             * result stored straight into one as a different essential type
+             * category. Same idiom as navTask_dtValid()/NavTask_inputValid(). */
+            /* Task 15 (SWE1-FW-009): a slew-rejected sample gets the exact
+             * same "freeze this tick only" reaction as a bad dt or an absent
+             * sensor -- ahrsInputOk FALSE, nothing else. Short-circuits
+             * before touching sample.gyro when present == FALSE, so a
+             * rejected/absent read (all-zero sample) is never compared
+             * against s_lastGyroSensor at all. */
+            ahrsInputOk = FALSE;
+            if ((navTask_dtValid(elapsedTime) != FALSE) && (present != FALSE)
+                && (NavTask_gyroSlewOk(sample.gyro, s_lastGyroSensor, elapsedTime) != FALSE))
+            {
+                ahrsInputOk = TRUE;
+                s_lastGyroSensor[0] = sample.gyro[0];
+                s_lastGyroSensor[1] = sample.gyro[1];
+                s_lastGyroSensor[2] = sample.gyro[2];
+            }
+            else
+            {
+                /* SYS1-001 task 0 instrumentation -- see NavTask.h. Does NOT
+                 * include a SHORT (duplicate-edge) tick -- see NavTask.h.
+                 * Task 15: also counts a slew-rejected tick here, same
+                 * bucket as every other invalid-input case. */
+                g_dbgNavInvalidTicks++;
+            }
+
+            /* flight-reviewer FAIL, SYS1-001 regression: elapsedTime is
+             * deliberately 0.0f above when there was no new edge at all
+             * (NAVTASK_TIMEDOUT_FAULT_DT_S's own comment) -- correct for the
+             * dt-window/fusion gating this far, but Ahrs_update()'s
+             * fault-hold clock needs real, positive time to pass on THIS one
+             * call, or a fully silent sensor never crosses AHRS_FAULT_HOLD_S.
+             * A genuine new edge (SHORT already handled above, LONG here)
+             * already carries the real measured gap in elapsedTime -- only
+             * the no-new-edge case needs the override. */
+            {
+                float32 ahrsDt = elapsedTime;
+
+                if ((ahrsInputOk == FALSE) && (newSample == FALSE))
+                {
+                    ahrsDt = NAVTASK_TIMEDOUT_FAULT_DT_S;
+                }
+
+                Ahrs_update(&ahrs, sample.acc, sample.gyro, ahrsDt, ahrsInputOk);
+            }
+
+            /* Gate the navigation filter on the attitude being usable, not
+             * merely on the IMU answering. While the AHRS is still averaging
+             * the gyro bias or waiting to align, its projection is
+             * meaningless and integrating it would put a real offset into
+             * the velocity before the barometer ever sees it. */
+            fusionInputOk = NavTask_inputValid(elapsedTime, present, ahrs.state);
+            Fusion_update(&fusion, ahrs.accNed, elapsedTime, fusionInputOk);
+
+            /* Raw sample + an accumulated liveness sum ride along in the SAME
+             * publish as the fusion output (T12 blocker,
+             * docs/REFACTORING_PLAN.md 3.7): measurementsSetImu() writes
+             * g_xcpData (CPU0 DSPR) and PeriphDiag_report() writes
+             * PeriphDiag's plain non-volatile s_periph[] -- calling either
+             * one from here would make both a two-writer object racing
+             * against CPU0's Housekeeping_100ms/PeriphDiag_update. So this
+             * task only accumulates and publishes; Housekeeping_100ms (CPU0)
+             * makes those calls from the NavState snapshot.
+             * Icm42688_plausible()'s instantaneous liveness is summed, never
+             * reset, so Housekeeping's diff of two reads sees every consumed
+             * tick's contribution -- see NavState_t.imuLiveness. */
+            {
+                float32 sampleLiveness = 0.0f;
+                boolean plausible;
+                float32 plausibleDt = elapsedTime;
+
+                /* Same override as ahrsDt above and for the same reason:
+                 * elapsedTime is deliberately 0.0f on the no-new-edge path,
+                 * but Icm42688_reportPlausibility()'s hold clock (B4b
+                 * trigger 2) needs a real, positive duration on every call. */
+                if (newSample == FALSE)
+                {
+                    plausibleDt = NAVTASK_TIMEDOUT_FAULT_DT_S;
+                }
+
+                plausible = Icm42688_plausible(&sample, &sampleLiveness);
+                present   = Icm42688_reportPlausibility(plausible, plausibleDt);
+                s_imuLivenessAccum += sampleLiveness;
+            }
+
+            /* Publish for Housekeeping_100ms to pick up (NavState_get) and
+             * forward to XCP. Runs on every dispatch that reaches this branch
+             * (~1014 Hz in normal operation, up to 2 kHz only in the
+             * timed-out fallback) -- cheap (§2.4/§3.7, ~3.9 us), so there is
+             * no reason to gate it any further than the block it is already
+             * inside. */
+            NavState_publish(&ahrs, &fusion, elapsedTime, present,
+                              sample.acc, sample.gyro, sample.tempC,
+                              s_imuLivenessAccum);
         }
+    }
 
-        /* Publish for Housekeeping_100ms to pick up (NavState_get) and
-         * forward to XCP. Runs on every dispatch that reaches this branch
-         * (~1014 Hz in normal operation, up to 2 kHz only in the timed-out
-         * fallback) -- cheap (§2.4/§3.7, ~3.9 us), so there is no reason to
-         * gate it any further than the block it is already inside. */
-        NavState_publish(&ahrs, &fusion, elapsedTime, present,
-                          sample.acc, sample.gyro, sample.tempC,
-                          s_imuLivenessAccum);
+    stepTicks = (uint32)SysTime_getTicks() - stepStartTicks;
+    if (stepTicks > g_dbgNavStepMaxTicks)
+    {
+        g_dbgNavStepMaxTicks = stepTicks;
+    }
+    else
+    {
+        /* not a new max */
     }
 }

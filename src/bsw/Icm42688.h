@@ -42,9 +42,19 @@ typedef struct
 
 /** Soft-reset, verify WHO_AM_I, and start the gyro and accelerometer in
  *  low-noise mode at 1 kHz.
- *  \return TRUE if WHO_AM_I matched and every configuration write went out.
+ *
+ *  SYS1-001 strand B task 17 (SWE1-FW-008 clause g): a bounded BOOT PUMP
+ *  over Icm42688_reinitStep() (at most ICM42688_REINIT_MAX_STEPS calls,
+ *  Icm42688_delayMs(1 ms) between them) rather than its own blocking
+ *  sequence, so boot and the runtime recovery path (Icm42688_read()) share
+ *  ONE state machine and one register/timing sequence. Only reachable from
+ *  Cpu1_Main.c before the scheduler starts; the runtime recovery path never
+ *  calls this any more, so Icm42688_delayMs() -- the one remaining blocking
+ *  wait in this file -- is reachable only here, still true "one-time" per
+ *  boot the way it always claimed to be.
+ *  \return TRUE if the state machine reached DONE within the step budget.
  *          Safe to call with no sensor attached — returns FALSE without
- *          hanging (every SPI wait is bounded, see Spi.h). */
+ *          hanging (bounded steps, no unbounded SPI wait, see Spi.h). */
 boolean Icm42688_init(void);
 
 /* There is deliberately no Icm42688_isPresent() — see the note in Bmp581.h:
@@ -58,7 +68,18 @@ boolean Icm42688_readWhoAmI(uint8 *whoAmI);
 
 /** Read the latest sample. Also re-probes for the device while it is absent,
  *  so a replugged sensor comes back on its own.
- *  \return FALSE on a bus error or while absent (sample left unchanged). */
+ *
+ *  SYS1-001 strand B task 14 (SWE1-FW-009): a burst in which any accel/gyro
+ *  be16 word equals the ICM-42688's documented invalid-data sentinel 0x8000
+ *  is rejected BEFORE scaling -- \p sample is left unchanged (never
+ *  populated from a burst containing it) and g_dbgImuSentinelWords counts
+ *  it. Deliberately NOT a bus error: the SPI transfer itself succeeded, so
+ *  presence (unlike the bus-error path below) is left UNCHANGED -- one
+ *  corrupt word amid an otherwise healthy stream must not force the
+ *  recovery/re-init path, only Icm42688_reportPlausibility()'s existing
+ *  100 ms hold does that, and only once the whole burst is implausible.
+ *  \return FALSE on a bus error, a rejected sentinel word, or while absent
+ *          (sample left unchanged in every case). */
 boolean Icm42688_read(Icm42688_Sample *sample);
 
 /** Number of registers Icm42688_debugDump() returns in \p cfg. */
@@ -85,6 +106,37 @@ boolean Icm42688_read(Icm42688_Sample *sample);
  *  \return FALSE on a bus error (outputs undefined). */
 boolean Icm42688_debugDump(uint8 cfg[ICM42688_DUMP_CFG_LEN], uint8 raw[14]);
 
+/** B4b (SYS1-001 strand B, evidence 952275AD99001303): trigger 1 -- a
+ *  targeted liveness probe for the "silent AND maybe gone" case, which
+ *  Icm42688_read()'s own SPI-failure path cannot see (a dead-but-still-
+ *  answering part clocks out a well-formed, frozen frame forever). Call
+ *  from NavTask.c's own no-edge path once DRDY has been silent longer than
+ *  its existing (shorter) dt-window fallback -- \p dtS is the elapsed time
+ *  since the LAST call to this function (same "duration, not a count" idiom
+ *  as Ahrs.c's s_faultHoldS), used only to self-limit the probe to
+ *  <= 5 Hz (ICM42688_VERIFY_PERIOD_S) once presence is being watched; the
+ *  first call after a (re)init fires immediately. No-op (returns the
+ *  current presence unchanged) while already known absent -- the existing
+ *  Icm42688_read() recovery probe owns reconnection.
+ *  \return the (possibly just-updated) presence state. */
+boolean Icm42688_verifyPresence(float32 dtS);
+
+/** B4b: trigger 2 -- drop presence when the sensor answers every SPI
+ *  transfer but the payload has stopped moving (INT1 still firing). Call
+ *  once per NavTask_step dispatch that reads a sample, passing that read's
+ *  own Icm42688_plausible() result and the elapsed time since the LAST call
+ *  (same duration idiom as above). Resets the hold the instant a plausible
+ *  sample is seen, so one implausible sample amid a healthy stream (e.g. a
+ *  single sample past 17 g) never drops a live sensor -- only
+ *  ICM42688_STUCK_HOLD_S (100 ms) of CONSECUTIVE implausible samples does.
+ *  \return the (possibly just-updated) presence state. */
+boolean Icm42688_reportPlausibility(boolean plausible, float32 dtS);
+
+/** B4b instrumentation, same class of deviation as g_imuSpiBurst* above:
+ *  raw map symbols read by tools/xcp_read.py, no A2L/GUI change. */
+extern volatile uint32 g_dbgImuStuckDrops;    /**< trigger 2 dropped presence */
+extern volatile uint32 g_dbgImuWhoAmIFail;    /**< trigger 1 read a bad/no WHO_AM_I */
+
 /** Plausibility band. |a| must stay inside the configured +/-16 g full
  *  scale; a sustained 0 g means a dead element rather than free fall, which
  *  never lasts seconds on the bench. \p liveness receives the sum of every
@@ -100,5 +152,42 @@ boolean Icm42688_plausible(const Icm42688_Sample *sample, float32 *liveness);
  *  tools/xcp_read.py; not wired to Xcp_Data, the A2L or the GUI. */
 extern volatile uint32 g_imuSpiBurstTicks;
 extern volatile uint32 g_imuSpiBurstMaxTicks;
+
+/** SYS1-001 strand B task 14 (SWE1-FW-009): count of Icm42688_read() bursts
+ *  rejected because at least one of the six accel/gyro be16 words equalled
+ *  the documented invalid-data sentinel 0x8000 (-16 g / -2000 dps) -- the
+ *  same pattern evidence row 952275AD99001303 showed on all six axes when
+ *  the part was electrically dead, and the near-full-scale words evidence
+ *  rows 7D13E62A0B428BE3/1E1CC203E9702454 traced to a single corrupt tick.
+ *  Checked BEFORE scaling, on the raw words, so it costs one comparison per
+ *  axis regardless of outcome. Raw map symbol, no A2L change. */
+extern volatile uint32 g_dbgImuSentinelWords;
+
+/** SYS1-001 strand B task 17 (B6.4, SWE1-FW-008 clause g): advance the
+ *  non-blocking re-init state machine (IDLE / RESET_WAIT / ID_CHECK /
+ *  WAKE_WAIT / CFG / DONE / FAILED) by AT MOST ONE SPI transaction, and
+ *  NEVER a wait -- the reset and wake delays are accumulated from \p dtS
+ *  across calls, the same "duration, not a count" idiom as
+ *  Icm42688_verifyPresence()/Icm42688_reportPlausibility() above, walking
+ *  the same register/value sequence Icm42688_init() always has (soft
+ *  reset -> 10 ms -> WHO_AM_I, retry once on SPI_MODE_3 -> PWR_MGMT0 ->
+ *  10 ms -> GYRO_CONFIG0/ACCEL_CONFIG0/INT_CONFIG/INT_CONFIG0/INT_CONFIG1/
+ *  INT_SOURCE0, one write per call). Presence becomes TRUE only on
+ *  reaching DONE. A device that never answers ends FAILED and re-arms
+ *  (fresh SPI_MODE_0 attempt) after ICM42688_RECOVERY_PERIOD further calls,
+ *  without ever blocking. Called from Icm42688_read()'s recovery branch on
+ *  every dispatch while absent, and from Icm42688_init()'s bounded boot
+ *  pump.
+ *  \param dtS elapsed time since the LAST call to this function [s]
+ *  \return the (possibly just-updated) presence state (TRUE only on DONE). */
+boolean Icm42688_reinitStep(float32 dtS);
+
+/** Task 17 instrumentation, same class of deviation as g_dbgImuStuckDrops
+ *  above: raw map symbols, no A2L/GUI change. Count RUNTIME re-inits only
+ *  -- Icm42688_init()'s own boot pump saves and restores both around
+ *  itself, so a healthy boot always shows g_dbgImuReinits == 0, and only a
+ *  genuine in-service presence drop/recovery moves either counter. */
+extern volatile uint32 g_dbgImuReinits;      /**< re-init state machine reached DONE */
+extern volatile uint32 g_dbgImuReinitFails;  /**< re-init state machine reached FAILED */
 
 #endif /* ICM42688_H */
