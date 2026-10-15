@@ -266,6 +266,89 @@ still to be designed.
 
 ---
 
+## 6. Settings written to this ESC — change log
+
+The GOKU G55M is four AT32F421 MCUs with one EEPROM page each (1 KB at
+0x7C00, `EEprom_t` 192 bytes, layout version 3). Every write below was done
+per channel through the AM32 bootloader on the signal pad (Nano 33 IoT
+one-wire linker, `tools/am32_eeprom_writer_nano33iot/`), with the ESC lead
+unplugged from the breakout, and verified by reading the whole page back.
+
+### 2026-10-15 — byte 26 `motor_kv` 55 → 21 (2220 → 860 KV), all four channels
+
+**Why.** First thrust-rig run (evidence row `F0F113A90483E214`,
+`Measurement Data\15102026_thrustrig\`, motor on channel 3, supply limit 5 A,
+1,5 A drawn): speed stepped cleanly to **4214 rpm = 29,5 k eRPM and stayed
+flat from DShot ≈ 800 upward**. AM32 2.x limits the PWM duty as a function of
+electrical rpm, scaled by the **KV setting** (`Src/main.c`, master, read
+2026-10-15):
+
+```
+duty_max       = map(k_erpm, low_rpm_level, high_rpm_level, 400, 2000)   // 2000 = 100 %
+low_rpm_level  = motor_kv / 100 / (32 / motor_poles)                    // k eRPM, integer maths
+high_rpm_level = motor_kv / 12  / (32 / motor_poles)
+motor_kv       = eeprom byte 26 * 40 + 20
+```
+
+With the factory 2220 KV / 14 poles: 11 k and 92 k eRPM → cap 765/2000 at
+29,5 k eRPM; throttle 800 maps to 778/2000 (4 % minimum duty). The two meet at
+a stable fixed point: more throttle cannot raise the duty, so the rpm cannot
+rise, so the cap cannot lift. With that default the cap would release fully
+only above 13 100 rpm, above the X2216's no-load speed on 4S — full power was
+unreachable on every channel. With 860 KV the thresholds are 4 k / 35 k eRPM
+(571 / 5000 rpm); the cap line lies above the motor's duty–speed line everywhere
+past startup and never locks. Supply constant-current mode was excluded (5 A
+limit, 1,5 A drawn). Temperature and current limits were already off.
+
+**Page as read before the write (identical on all four channels, bytes 0–47):**
+
+```
+01 03 01 02 13 A0 04 00 0A 64 00 32 02 FF FF FF
+FF 00 00 00 01 01 01 1A 18 64 37 0E 00 00 05 00
+80 80 80 32 00 32 00 00 0F 0A 0A FF 66 06 00 00
+```
+
+| Byte | Field | Value | Meaning |
+|---|---|---|---|
+| 1 | eeprom_version | 03 | layout version 3 |
+| 2 | bootloader | 01 | bootloader version 1 (stamped by the bootloader on every EEPROM write) |
+| 3, 4 | version | 02 13 | firmware **2.19** |
+| 6 | minimum_duty_cycle | 04 | 4 % |
+| 18 | bi_direction | 00 | off (3D/reversible mode flag in AM32 naming) |
+| 24 | pwm_frequency | 18 | 24 kHz |
+| 25 | startup_power | 64 | 100 |
+| **26** | **motor_kv** | **37 = 55** | **2220 KV — the factory default** (`am32-configurator/public/eeprom-defaults/DEFAULT/v2.bin` byte 26 = 55) |
+| 27 | motor_poles | 0E | 14 ✓ (X2216-III 12N14P) |
+| 36 | low_voltage_cut_off | 00 | off |
+| 43 | limits.temperature | FF | off |
+| 44 | limits.current | 66 = 102 | off (> 100) |
+
+**After:** byte 26 = `15` (21 → 860 KV), all other bytes identical except the
+bootloader stamp in byte 2. Verified on channels 1–4 by full-page read-back
+(`[verify] OK` from the sketch on each). 860 is the KV step nearest below
+880 (the setting has 40 KV steps; 900 would have been the step above). The
+value is used by AM32 **only** for this protection scaling.
+
+**Procedure that worked** (the AM32 configurator did not connect — bootloader
+v1 listens only 1–2 s after power-up and the configurator's single Connect
+missed the window): Nano running first (TX idles high through the 1 kΩ =
+"linker present"), ESC lead off the breakout (the AURIX streams idle-low
+DShot even DISARMED and the bootloader then starts the app within 40 ms),
+`G` hunt while switching the ESC on, `W`, `Y`, next pad. Bootloader protocol
+facts used: `SET_BUFFER` has no ACK, payload follows with CRC; `PROG_FLASH`
+erases the 1 KB page only when the address is page-aligned and needs 4-byte
+alignment, so the page is written as 16 × 64-byte chunks from 0x7C00 like
+the configurator does; `PROG_FLASH` ACKs 0x30 only after `memcmp` of the
+written flash succeeds.
+
+**Open from the same run:** the scale read 100 g at 4214 rpm, roughly a third
+of what a 254 mm prop should give (≈ 280 g at Ct ≈ 0,11), while 1,5 A at
+≈ 16 V matches the prop's ≈ 22 W at that speed — rpm and current agree, the
+scale reading is the outlier (suspect inlet suction on the plate under the
+prop). To be checked on the next run; see `QuadSE/evidence/thrust_rig_runs.md`.
+
+---
+
 ## Cross-references
 
 - `docs/DSHOT.md` — protocol reference this file assumes throughout.
@@ -312,7 +395,9 @@ still to be designed.
 - **Bidirectional-DShot-on-by-default question** — the interaction between
   the `bi_direction` eeprom flag and the idle-line auto-detect (`docs/DSHOT.md`
   Traps D1) is not fully resolved from source; the checklist item 4/9
-  above is how it gets settled on arrival.
+  above is how it gets settled on arrival. **Read 2026-10-15 (§6): eeprom
+  byte 18 = 0 on all four channels**, and the ESC has answered KISS
+  telemetry on the T pad throughout with that value.
 - **Exact GPIO pin letter/number for the DShot and telemetry pins on the
   physical GOKU G55M board** — `Mcu/f421/Src/serial_telemetry.c` shows
   `GPIOB` pin 6 for telemetry in the generic target file, but the actual
