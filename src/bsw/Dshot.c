@@ -33,7 +33,7 @@ float32                        g_dshotClk0Hz;
 
 static float32                 g_tbu_clock_frequency;
 static uint8                   g_dshot_reply_counter;
-static float32                 g_dshot_reply_intervalls[30] = {0};
+static float32                 g_dshot_reply_edges[30] = {0u};
 static sint32                  g_ticks_for_100us;
 
 /* ESC Telemetrics */
@@ -52,15 +52,16 @@ static void    Dshot_init_uart        (void);
 static void    Dshot_init_motor_reply (void);
 
 static uint16  dshotBuild             (uint16 value, boolean telem);
-static void    dshotSendFrame         (uint16 frame[DSHOT_MEND]);
+static void    dshotSendFrame         (uint16 frame[DSHOT_MEND], uint32 dshot_reply_intervalls_ticks[30]);
 
-static void    dshotReadReply         (void);
+static void    dshotReadReply         (uint32 dshot_reply_intervalls_ticks[30]);
 
 static boolean Dshot_ESC_T_crc        (void);
 static boolean Dshot_interpret_ESC_Tlm(Esc_telemetry *esc_Tlm);
 
 static void    Dshot_telem_request    (boolean *telem_requested, uint8 dshot_tlm_miss_streak[DSHOT_MEND], Dshot_Motor_t *dshot_motor, const boolean *telem);
-static void    Dshot_sending          (uint16 frames[DSHOT_MEND], const uint16 dshot_command[DSHOT_MEND], const Dshot_Motor_t *dshot_motor, const boolean *telem, const boolean dshot_stream_allowed);
+static void    Dshot_sending          (uint16 frames[DSHOT_MEND], const uint16 dshot_command[DSHOT_MEND], const Dshot_Motor_t *dshot_motor, const boolean *telem, const boolean dshot_stream_allowed, uint32 dshot_reply_intervalls_ticks[30]);
+static void    Dshot_receive_decode   (const uint32 dshot_reply_intervalls_ticks[30]);
 static void    Dshot_telem_decode     (boolean *telem_requested, uint8 dshot_tlm_miss_streak[DSHOT_MEND], Dshot_Motor_t *dshot_motor);
 
 /******************************************************************************/
@@ -229,7 +230,7 @@ static uint16 dshotBuild(uint16 value, boolean telem)
     return (uint16)((v << 4) | crc);
 }
 
-static void dshotSendFrame(uint16 frame[DSHOT_MEND])
+static void dshotSendFrame(uint16 frame[DSHOT_MEND], uint32 dshot_reply_intervalls_ticks[30])
 {
     Ifx_GTM_ATOM    *atom  = g_atomMX[DSHOT_M1].atom;
     IfxGtm_Atom_Ch   refCh = g_atomMX[DSHOT_M1].atomChannel;
@@ -259,20 +260,19 @@ static void dshotSendFrame(uint16 frame[DSHOT_MEND])
     while (regs->IRQ.NOTIFY.B.CCU0TC == 0u) { }
     IfxGtm_Atom_Ch_clearZeroNotification(atom, refCh);
 
-    dshotReadReply();
+    dshotReadReply(dshot_reply_intervalls_ticks);
 
     IfxCpu_restoreInterrupts(irq);
     g_dshotFrames++;
 }
 
-static void dshotReadReply(void)
+static void dshotReadReply(uint32 dshot_reply_intervalls_ticks[30])
 {
     Ifx_GTM        *gtm      = &MODULE_GTM;
     Ifx_GTM_TIM    *gtm_tim  = &gtm->TIM[0];
     Ifx_GTM_TIM_CH *channel = IfxGtm_Tim_getChannel(gtm_tim, g_Dshot_MotorCfg[DSHOT_M1].timChannel);
     uint32          start_count = 0u;
-    g_dshot_reply_counter = 0u;
-    uint32 edge_start_ticks = 0u;
+    uint32          edge_start_ticks = 0u;
 
     //g_dshot_reply_counter = 0u;
     IfxGtm_Tim_Ch_clearNewValueEvent(channel);
@@ -293,7 +293,7 @@ static void dshotReadReply(void)
 
             if (edge_counter > 1u)
             {
-                g_dshot_reply_intervalls[edge_counter - 2u] = (float32) (IfxStm_getLower(&MODULE_STM0) - edge_start_ticks) / (g_ticks_for_100us/100u);
+               dshot_reply_intervalls_ticks[edge_counter - 2u] = IfxStm_getLower(&MODULE_STM0) - edge_start_ticks;
             }
             edge_start_ticks = IfxStm_getLower(&MODULE_STM0);
         }
@@ -385,7 +385,7 @@ static void Dshot_telem_decode(boolean *telem_requested, uint8 dshot_tlm_miss_st
     }
 }
 
-static void Dshot_sending(uint16 frames[DSHOT_MEND], const uint16 dshot_command[DSHOT_MEND], const Dshot_Motor_t *dshot_motor, const boolean *telem, const boolean dshot_stream_allowed)
+static void Dshot_sending(uint16 frames[DSHOT_MEND], const uint16 dshot_command[DSHOT_MEND], const Dshot_Motor_t *dshot_motor, const boolean *telem, const boolean dshot_stream_allowed, uint32 dshot_reply_intervalls_ticks[30])
 {
     /* building the frame */
     for (uint8 motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
@@ -396,8 +396,23 @@ static void Dshot_sending(uint16 frames[DSHOT_MEND], const uint16 dshot_command[
     /* Dshot send Frames */
     if (dshot_stream_allowed != FALSE)
     {
-        dshotSendFrame(frames);
+        dshotSendFrame(frames, dshot_reply_intervalls_ticks);
     }
+}
+
+static void Dshot_receive_decode(const uint32 dshot_reply_intervalls_ticks[30])
+{
+    // dshot_reply_intervalls_ticks[edge_counter - 2u] = (float32) (IfxStm_getLower(&MODULE_STM0) - edge_start_ticks) / (g_ticks_for_100us/100u);
+    float32 edge_time = 0;
+    uint8 bits = 0u;
+
+    for (uint8 edge = 0u; edge < g_dshot_reply_counter; edge++)
+    {
+        edge_time = (float32) ( dshot_reply_intervalls_ticks[edge] / (g_ticks_for_100us / 100u) );
+        bits = (uint8) ( (edge_time / 2.5) + 0.5 );
+        g_dshot_reply_edges[edge] = bits;
+    }
+//g_dshot_reply_edges
 }
 
 /******************************************************************************/
@@ -419,11 +434,16 @@ void Dshot_task(const uint16 dshot_command[DSHOT_MEND], boolean dshot_stream_all
     static uint8         dshot_tlm_miss_streak[DSHOT_MEND] = {0u};
            uint16        frames[DSHOT_MEND] = {0u};
            boolean       telem = ((g_dshotFrames & 0x7u) == 0u) ? TRUE : FALSE;
+           uint32        dshot_reply_intervalls_ticks[30] = {0};
+
     /* telemetrics request */
     Dshot_telem_request(&telem_requested, dshot_tlm_miss_streak, &dshot_motor, &telem);
 
     /* sending dshot */
-    Dshot_sending(frames, dshot_command, &dshot_motor, &telem, dshot_stream_allowed);
+    Dshot_sending(frames, dshot_command, &dshot_motor, &telem, dshot_stream_allowed, dshot_reply_intervalls_ticks);
+
+    /* receiving from bidirectional dshot */
+    Dshot_receive_decode(dshot_reply_intervalls_ticks);
 
     /* decode telemetrics*/
     Dshot_telem_decode(&telem_requested, dshot_tlm_miss_streak, &dshot_motor);
