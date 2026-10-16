@@ -32,6 +32,8 @@ Each of these cost real debugging time on this project. They are not in the vend
 | T13 | ScuEru | The glitch filter (`SCU_EIFILT`) is **global to all ERU inputs**, not per channel. |
 | T14 | Cpu | `Ifx__dsync` is **undefined for TASKING** in this tree — see §3. |
 | T15 | Cpu | `IFX_INTERRUPT`'s `vectabNum` and `IfxSrc_init`'s/`isrProvider`'s target core are **two independent settings nothing cross-checks** — see §3. |
+| T16 | Asclin | `IfxAsclin_Asc_initModuleConfig()` defaults to **4× oversampling, one sample at position 3** — ~40 % framing errors on a transmitter with a slight clock offset (ESC KISS telemetry, 2026-09-17). Set 16× / sample point 8 / median 3 — see §12. |
+| T17 | Port | A **pad pull-up on P22/P23 goes to VEXT = 5 V**, not 3,3 V. Only acceptable on a line a 3,3 V device drives continuously; a released UART line (ESC pad T, unplugged GNSS) rises to 5 V — `noPullDevice` + external pull-up to +3V3 (PINNING.md §2.4). |
 
 ---
 
@@ -472,8 +474,43 @@ string landed in the ELF.
 
 ---
 
+## 12. IfxAsclin_Asc — UART RX (T16, T17)
+
+```c
+IfxAsclin_Asc_initModuleConfig(&config, &MODULE_ASCLIN6);
+config.baudrate.baudrate             = 115200.0f;
+config.baudrate.oversampling         = IfxAsclin_OversamplingFactor_16;   /* default: _4  */
+config.bitTiming.samplePointPosition = IfxAsclin_SamplePointPosition_8;   /* default: _3  */
+config.bitTiming.medianFilter        = IfxAsclin_SamplesPerBit_three;     /* default: one */
+pins.rxMode                          = IfxPort_InputMode_noPullDevice;     /* T17 */
+config.txBuffer = NULL_PTR; config.rxBuffer = NULL_PTR;   /* own ISR drains the HW FIFO */
+```
+
+**T16 measured (ESC telemetry, ASCLIN6, 2026-09-17):** baud divider exact
+(115207 baud from the 200 MHz module clock, `BRG` = 1/434), yet `FLAGS.FE`
+set and 45 of ~77 packets CRC-valid. With 4 ticks per bit the receiver starts
+its bit timer up to ¼ bit late after the start edge; sampling at the last
+quarter plus the transmitter's clock offset lands on the next start bit of
+back-to-back bytes. 16× / mid-bit / majority-of-three: 122/122 packets,
+`FLAGS.FE` clear. The GNSS (ASCLIN4, 38400) survives the defaults only because
+the u-blox clock has no offset — give it the same settings when it is next
+touched.
+
+**`initModule` returns `configurationError` with NULL software buffers** —
+by design when the driver owns the HW FIFO with its own ISR (GnssM9N.c,
+Dshot.c); the hardware is configured anyway. `(void)status`, then
+`IfxAsclin_flushRxFifo` + `IfxAsclin_clearAllFlags`.
+
+**Reading the module live:** `ASCLIN6` at `0xF0000C00` (`ASCLIN4` `0xF0000A00`):
+`BITCON` +0x14 (PRESCALER 11:0, OVERSAMPLING 19:16, SAMPLEPOINT 27:24, SM 31),
+`BRG` +0x20 (DENOMINATOR 11:0, NUMERATOR 27:16), `FLAGS` +0x34 (PE 16, FE 18,
+RFO 26, RFL 28) — `python tools/xcp_read.py 0xF0000C34:u32`; the flags are
+sticky until cleared, so `FE` after a reboot is a real error count of ≥ 1.
+
+---
+
 ## Gaps
 
 Not yet distilled — expect to read vendor source (and then extend this file):
-MCMCAN, EVADC, ASCLIN beyond raw `readRxData`/`writeTxData`, GETH/lwIP port,
+MCMCAN, EVADC, ASCLIN beyond §12 (TX path, LIN, DMA feed), GETH/lwIP port,
 DMA, SENT/PSI5. *(ERU was a gap — distilled in §10 on 2026-08-27.)*

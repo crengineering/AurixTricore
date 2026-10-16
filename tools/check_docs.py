@@ -130,6 +130,7 @@ def check_block_addresses() -> None:
         "Xcp_Gpio": "LCF_XCP_GPIO_START",
         "Xcp_Fusion": "LCF_XCP_FUSION_START",
         "Xcp_FusionCal": "LCF_XCP_FUSIONCAL_START",
+        "Xcp_Esc": "LCF_XCP_ESC_START",
     }
 
     # T6: a define missing from the .lsl means the SSoT itself is broken --

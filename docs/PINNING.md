@@ -106,10 +106,10 @@ Pins are board‑fixed (see §4) but actively used by the firmware Ethernet stac
 
 | Pin | Motor | ATOM out | TIM in | Header·pin | Status |
 |---|---|---|---|---|---|
-| P22.1 | M1 | ATOM0.0 (TOUT48) | TIM0.0 / TIM7.2 | X702·30 | plan |
-| P22.0 | M2 | ATOM0.1 (TOUT47) | TIM0.1 / TIM7.3 | X702·32 | plan |
-| P22.2 | M3 | ATOM0.3 (TOUT49) | TIM0.3 / TIM7.1 | X702·36 | plan |
-| P22.3 | M4 | ATOM0.4 (TOUT50) | TIM0.4 / TIM7.0 | X702·34 | plan |
+| P22.1 | M1 | ATOM0.0 (TOUT48) | TIM0.0 / TIM7.2 | **X702·30 — hole proven 2026‑09‑08** | **impl, HW‑verified 2026‑09‑17** (open‑drain + 2 kΩ→3V3: 3,3 V / 0,26 V; ATOM0 SOMP DShot300 frames decoded by the Nano analyzer, ESC answers) |
+| P22.0 | M2 | ATOM0.1 (TOUT47) | TIM0.1 / TIM7.3 | **X702·32 — hole proven 2026‑09‑08** | **impl, HW‑verified 2026‑09‑21** (open‑drain + 2 kΩ→3V3, DShot300 frames decoded by the Nano analyzer, ESC pad answers telemetry) |
+| P22.2 | M3 | ATOM0.3 (TOUT49) | TIM0.3 / TIM7.1 | **X702·36 — hole proven 2026‑09‑08** | **impl, HW‑verified 2026‑09‑21** (open‑drain + 2 kΩ→3V3, DShot300 frames decoded by the Nano analyzer, ESC pad answers telemetry) |
+| P22.3 | M4 | ATOM0.4 (TOUT50) | TIM0.4 / TIM7.0 | **X702·34 — hole proven 2026‑09‑08** | **impl, HW‑verified 2026‑09‑21** (open‑drain + 2 kΩ→3V3, DShot300 frames decoded by the Nano analyzer, ESC pad answers telemetry) |
 
 Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verification: §2.6).
 
@@ -151,8 +151,16 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 > set) and P20.11.
 >
 > ⚠️ **The X702 hole numbers previously listed here were never verified** and
-> have been removed rather than left to mislead. Wire by **pin name**. The only
-> hardware-proven header positions are P13.1/P13.2 = X702·29/·35 (§2.3).
+> have been removed rather than left to mislead. Wire by **pin name**.
+> Hardware-proven header positions: P13.1/P13.2 = X702·29/·35 (§2.3),
+> P10.7 = X702·73 (below), and — **2026‑09‑08, bench pad walk + multimeter
+> (Chris)** — the five ESC holes X702·30/32/34/36 = P22.1/P22.0/P22.3/P22.2
+> and X702·24 = P23.3 (§2.1/§2.4): each pad driven high alone read ≈5 V on
+> exactly its claimed hole, 0 V otherwise, readbacks OK, P22.4 idle. The
+> sensor lines (GNSS 11/13, IMU SPI 12/14/18/39, +3V3 78/80) run on the
+> bench through the same Fig. 6‑1 numbering (Chris, 2026‑09‑08) — proven by
+> operation, not individually metered. The breakout PCB `drone_breakoutv1`
+> (KiCad, C:\Users\chris\Projects\drone_breakout) uses these numbers.
 >
 > **Electrical plan lives in §2.5** — supply, dividers and pad modes are
 > specified there and §2.5 wins. Summary, with the evaluation‑board detail in
@@ -236,8 +244,45 @@ Drive mode = open‑drain ALT1 + 1.5 kΩ pull‑up to 3.3 V (driver & verificati
 
 | Signal | Pin / channel | Resource | Header·pin | Status |
 |---|---|---|---|---|
-| ESC current sense (Pad C) | AN7 | EVADC **G0CH7** | X703·19 | plan |
-| ESC telemetry RX (Pad T) | P23.3 | ASCLIN6 RXA (`IfxAsclin6_RXA_P23_3_IN`) | X702·24 | plan |
+| ESC current sense (Pad C) | ~~AN7~~ | ~~EVADC **G0CH7**~~ | ~~X703·19~~ | **deferred 2026‑09‑06** — not wired (see note) |
+| ESC telemetry RX (Pad T) | P23.3 | ASCLIN6 RXA (`IfxAsclin6_RXA_P23_3_IN`) | **X702·24 — hole proven 2026‑09‑08** | **impl, HW‑verified 2026‑09‑17** (KISS packets 122/122 CRC‑ok at 16× oversampling, `noPullDevice`) |
+
+> **2026-09-03 audit** (ESC arrival pre-check, `docs/ESC_AM32.md`): the Flywoo
+> GOKU G55M's full pad row is **`G V 1 2 3 4 C T`** — this section only
+> documents C and T because those are the only two pads that reach the
+> AURIX. **G is common ground** (any X702/X703 GND pin). **V is the ESC's
+> own VBAT pass-through/sense pad and is deliberately NOT wired to
+> anything on the AURIX** — it can carry the full pack voltage (up to
+> ~16.8 V at 4S), which exceeds every AURIX pad's absolute maximum. Pack
+> voltage for this project comes from the KISS telemetry frame on Pad T
+> instead (decided 2026-09-03, `dispatch/SYS1-012.md` §10). Full pad-by-pad
+> electrical detail, on-arrival checklist and DShot protocol facts:
+> **`docs/ESC_AM32.md`**, **`docs/DSHOT.md`**.
+
+> **2026-09-06 (Chris): Pad C stays unconnected — the ADC header X703/X803 is
+> not populated on this TriBoard**, so AN7 is not reachable without soldering a
+> header. Motor current comes from the **KISS telemetry frame on Pad T** instead
+> (centiamps, ESC-scaled — `docs/DSHOT.md` §6), refreshed per telemetry request
+> and round-robin across the four channels, i.e. roughly a quarter of the request
+> rate per motor. Sufficient for battery budget and stalled-motor detection; too
+> slow for any per-motor current loop, which is not planned. Consequences: the
+> current-sense mV/A scale and zero-offset are no longer needed by the firmware;
+> **AN7 returns to the filtered-input pool** below. Populating a header on X703
+> reopens the analog tap without any other change.
+
+> **2026-09-09 (Chris, bench): Pad T idles at ≈ 0,17 V** with the ESC powered
+> and nothing connected — the ESC releases the telemetry line between frames.
+> **P23.3 must supply the idle-high — but NOT with the pad's internal pull-up.**
+> Measured 2026-09-17 (Chris): with `IfxPort_InputMode_pullUp` in the ASCLIN6
+> RX init the released line sits at **5 V** — a P22/P23 pad pull-up goes to the
+> pad supply VEXT, not to 3,3 V. The ESC's AT32 pins tolerate it and the current
+> is tens of µA, but it is wrong by design. Rule: **`IfxPort_InputMode_noPullDevice`
+> on every RX pad that a 3,3 V device releases or may leave undriven** (ESC pad T,
+> and the GNSS `TXO` too — it reads 5 V whenever the module is unplugged). The
+> idle-high comes from an **external 4,7–10 kΩ to +3V3** on the breakout board
+> (bench today: the Nano analyzer's pull-up on D12). Firmware: `Dshot.c` and
+> `GnssM9N.c` use `noPullDevice` since 2026-09-17. Pads 1–4 idle
+> at 3,3 V, V pad = supply voltage (12 V on the lab supply) — both as expected.
 
 **ADC header (X703/X803) — scarce filtered inputs + references:**
 - **Only 6 analog inputs are on‑board anti‑alias filtered** (47 nF + 4.7 kΩ series;
@@ -329,11 +374,7 @@ unused elsewhere (the GPIO/PWM feature uses **TOM0/TOM3** on P00). Central `MODU
 scheduler). GTM module + FXCLK are already enabled by `gpio.c`; DShot init must only add its
 ATOM0/TIM cluster, not re‑init the whole GTM.
 
-**⚠ Open verification before populating all four channels** (project handoff §7.3): bench‑test
-that an **LVDS_TX pad sinks correctly in open‑drain while driven by a GTM ATOM in ALT mode** —
-on **P22.0** and especially **P22.2/P22.3** (LVDS_TX + HSCT footprint stub, §4 — higher risk).
-Confirm pin high = 3.3 V (not 5 V) and V_OL ≤ 0.8 V. **Fallback if it fails:** one **74LVC1T45**
-per line (5 V↔3.3 V, push‑pull) instead of open‑drain.
+**✅ Verification closed 2026‑09‑18 (Chris, bench):** all four pads drive DShot300 in **open‑drain ALT1 from a GTM ATOM0 channel** with the external pull‑up to 3,3 V — P22.1 (2026‑09‑17) and P22.0 / P22.2 / P22.3 (2026‑09‑18), each tested one at a time with the same `Dshot.c` (only `atomChannel` + `outputPin` swapped) against ESC pad 1, KISS reply as the oracle. The **LVDS_TX pads P22.2/P22.3** (HSCT footprint stub, §4) sink correctly — the 74LVC1T45 fallback is **not needed**; the breakout PCB (`drone_breakoutv1`) stays open‑drain + 1,5 kΩ. Levels on P22.0/2/3 were not metered (P22.1: 3,3 V / 0,26 V). Observation worth keeping: with the analyzer probe on an **unconfigured neighbour pad** (P22.2 while P22.3 was driven) the trace shows the neighbour's edges — a floating tristate input picking up crosstalk, not the pad driving; this is why every DShot line on the breakout carries its pull‑up.
 
 **Why P22 + open‑drain, not the 3.3 V VFLEX pins.** The only native‑3.3 V pins are
 P11.13/14/15 (§5.1) — only **three**, and SLOW‑class; a 4‑channel driver can't fit and a 4th

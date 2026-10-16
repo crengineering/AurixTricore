@@ -581,6 +581,27 @@
       "maxdiff": "10",
       "lo": "0",
       "hi": "10"
+    },
+    "motorCmd": {
+      "name": "CAL_motorCmd",
+      "desc": "arming word: 1 = ARM, 0 = DISARM; the firmware clears it on every exit from ARMED",
+      "maxdiff": "1",
+      "lo": "0",
+      "hi": "1"
+    },
+    "motorManual": {
+      "name": "CAL_motorManual",
+      "desc": "1 = manual setpoint source (CAL_motorManualSp_n) instead of the flight controller; cleared with CAL_motorCmd on every exit from ARMED",
+      "maxdiff": "1",
+      "lo": "0",
+      "hi": "1"
+    },
+    "motorManualSp": {
+      "name": "CAL_motorManualSp_M{i1}",
+      "desc": "manual DShot value for motor M{i1}: 0 = stop, 48..2047 = throttle; only used while CAL_motorManual is set and the vehicle is ARMED; zeroed on every exit from ARMED",
+      "maxdiff": "2047",
+      "lo": "0",
+      "hi": "2047"
     }
   },
   "Xcp_Nvm": {
@@ -1257,6 +1278,124 @@
       "unit": "m/s^2/sqrt(s)",
       "lo": "0.000001",
       "hi": "1"
+    }
+  },
+  "Xcp_Esc": {
+    "magic": {
+      "skip": true
+    },
+    "tickMs": {
+      "name": "EscTickMs",
+      "desc": "uptime when the ESC block was last written",
+      "unit": "ms",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "crcFail": {
+      "name": "EscCrcFail",
+      "desc": "KISS packets with a bad CRC-8 on the shared telemetry wire (not attributable to a motor)",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "tempC": {
+      "name": "EscM{i1}TempC",
+      "desc": "ESC M{i1} temperature (KISS byte 0)",
+      "unit": "degC",
+      "lo": "-40",
+      "hi": "125"
+    },
+    "tlmCount": {
+      "name": "EscM{i1}TlmCount",
+      "desc": "CRC-valid KISS packets from ESC M{i1} since boot",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "tlmMissed": {
+      "name": "EscM{i1}TlmMissed",
+      "desc": "telemetry requests to ESC M{i1} that got no packet in their slot",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "rpm": {
+      "name": "EscM{i1}Rpm",
+      "desc": "ESC M{i1} mechanical speed from KISS telemetry, eRpm100*100/(poles/2) with 14 poles (~129 while stopped: AM32 max-period sentinel, see ERpm100)",
+      "unit": "rpm",
+      "lo": "0",
+      "hi": "60000"
+    },
+    "eRpm100": {
+      "name": "EscM{i1}ERpm100",
+      "desc": "ESC M{i1} electrical rpm / 100, raw KISS field (x100 = eRPM; reads 9 while stopped because AM32 reports its 65408 us max-period sentinel, not 0)",
+      "lo": "0",
+      "hi": "65535"
+    },
+    "voltageCv": {
+      "name": "EscM{i1}VoltageCv",
+      "desc": "ESC M{i1} reported pack voltage [cV] - INVALID on the GOKU G55M (floating ADC), shown raw",
+      "unit": "cV",
+      "lo": "0",
+      "hi": "65535"
+    },
+    "currentCa": {
+      "name": "EscM{i1}CurrentCa",
+      "desc": "ESC M{i1} reported motor current [cA] - INVALID on the GOKU G55M (floating ADC), shown raw",
+      "unit": "cA",
+      "lo": "0",
+      "hi": "65535"
+    },
+    "mAh": {
+      "name": "EscM{i1}Mah",
+      "desc": "ESC M{i1} consumed charge as integrated by the ESC (from the invalid current)",
+      "unit": "mAh",
+      "lo": "0",
+      "hi": "65535"
+    },
+    "motorState": {
+      "name": "EscMotorState",
+      "desc": "arming state machine (Motor_states_t): 0 disarmed, 1 init (beeps), 2 armed, 3 failsafe",
+      "lo": "0",
+      "hi": "3"
+    },
+    "alive": {
+      "name": "EscM{i1}Alive",
+      "desc": "1 = ESC M{i1} answered its recent telemetry requests",
+      "lo": "0",
+      "hi": "1"
+    },
+    "replyEdges": {
+      "name": "EscM{i1}Edges",
+      "desc": "ESC M{i1} edges captured in the last bidir DShot reply window (16..22 for a complete GCR burst)",
+      "lo": "0",
+      "hi": "255"
+    },
+    "bidirErpm": {
+      "name": "EscM{i1}BidirErpm",
+      "desc": "ESC M{i1} electrical rpm from the bidirectional DShot reply (answered every 1 kHz frame; 0 while stopped - the ESC's 65408 us max-period sentinel is mapped to 0 - and 0 until the first valid reply)",
+      "unit": "eRPM",
+      "lo": "0",
+      "hi": "500000"
+    },
+    "bidirRpm": {
+      "name": "EscM{i1}BidirRpm",
+      "desc": "ESC M{i1} mechanical speed from the bidir DShot reply, eRPM/(poles/2) with 14 poles - compare with EscM{i1}Rpm (KISS)",
+      "unit": "rpm",
+      "lo": "0",
+      "hi": "60000"
+    },
+    "bidirOk": {
+      "name": "EscM{i1}BidirOk",
+      "desc": "CRC-valid bidir DShot replies from ESC M{i1} since boot - must count at ~1000/s while the stream runs",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "dshotCmd": {
+      "name": "EscM{i1}DshotCmd",
+      "desc": "DShot value sent to ESC M{i1} in the last frame, as the driver put it on the wire: 0 = motor stop, 1..47 = special commands (beeps), 48..2047 = throttle (48 = minimum), 0 while the stream is off",
+      "lo": "0",
+      "hi": "2047"
+    },
+    "reserved": {
+      "skip": true
     }
   }
 }

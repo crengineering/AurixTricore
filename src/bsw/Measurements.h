@@ -3,6 +3,7 @@
 
 #include "Ifx_Types.h"
 #include "GnssM9N.h"
+#include "Dshot.h"
 #include "fusion.h"
 #include "Ahrs.h"
 
@@ -347,6 +348,71 @@ typedef struct
 
 extern volatile Xcp_Fusion g_xcpFusion;
 
+/* ---------------------------------------------------------------------------
+ * Xcp_Esc — ESC telemetry of all four motors (KISS packets over the shared
+ * pad-T wire, requested round-robin and decoded by Dshot.c), in its own block
+ * at the next free 256-byte slot.
+ *
+ * SEPARATE BLOCK for the same reason as Xcp_Fusion: Xcp_Data is full. The
+ * sensor task (SensorTask_esc) pulls the per-motor status from the driver
+ * with Dshot_getTelemetry() and writes it here; the driver never touches XCP.
+ *
+ * Block map (little-endian; per-motor arrays indexed M1..M4 = 0..3, the A2L
+ * names them EscM1..EscM4):
+ *
+ *   0x00  uint32  magic         0x32435345 ("ESC2")
+ *   0x04  uint32  tickMs        uptime when this block was written
+ *   0x08  uint32  crcFail       packets with a bad CRC-8 (shared wire, not attributable)
+ *   0x0C  sint32  tempC[4]      ESC temperature [degC] (sint32: no SBYTE layout in the generator)
+ *   0x1C  uint32  tlmCount[4]   CRC-valid packets per motor since boot
+ *   0x2C  uint32  tlmMissed[4]  requests per motor that got no packet in their slot
+ *   0x3C  float32 rpm[4]        mechanical rpm = eRpm100 * 100 / (poles / 2), poles = 14
+ *   0x4C  uint16  eRpm100[4]    electrical rpm / 100, raw KISS field
+ *   0x54  uint16  voltageCv[4]  pack voltage [cV] — INVALID on the GOKU G55M (floating ADC)
+ *   0x5C  uint16  currentCa[4]  motor current [cA] — INVALID on the GOKU G55M (floating ADC)
+ *   0x64  uint16  mAh[4]        consumed charge [mAh] — integrates the invalid current
+ *   0x6C  uint8   motorState    Motor.c state (Motor_states_t): 0 disarmed, 1 init, 2 armed, 3 failsafe
+ *   0x6D  uint8   alive[4]      1 = the ESC answered its recent telemetry requests
+ *   0x71  uint8   replyEdges[4]  bidir DShot edges seen per motor in the last reply window
+ *   0x75  uint8   reserved[3]    explicit pad to 4 (TASKING 2-aligns uint32, see Xcp_Data note)
+ *   0x78  uint32  bidirErpm[4]   bidir DShot electrical rpm, last CRC-valid reply (0 until the first)
+ *   0x88  float32 bidirRpm[4]    mechanical rpm = bidirErpm / (poles / 2), poles = 14
+ *   0x98  uint32  bidirOk[4]     CRC-valid bidir replies per motor since boot (freshness)
+ *   0xA8  uint16  dshotCmd[4]    DShot value on the wire in the last frame: 0 stop, 1..47 cmd, 48..2047 throttle
+ *
+ * Total 0xB0 = 176 bytes. v1 (one motor, 32 bytes, 2026-09-17) was replaced
+ * in place on 2026-09-21 before any release carried it; bidir fields added
+ * 2026-10-16 (every DShot frame is answered, so these update at 1 kHz while
+ * the KISS fields above arrive round-robin on the shared UART wire).
+ * --------------------------------------------------------------------------- */
+#define XCP_ESC_MAGIC        0x32435345u
+#define XCP_ESC_MOTOR_POLES  14u        /* X2216-III 12N14P, docs/ESC_BRINGUP_2026-09-16.md */
+
+typedef struct
+{
+    uint32  magic;
+    uint32  tickMs;
+    uint32  crcFail;
+    sint32  tempC[4];
+    uint32  tlmCount[4];
+    uint32  tlmMissed[4];
+    float32 rpm[4];
+    uint16  eRpm100[4];
+    uint16  voltageCv[4];
+    uint16  currentCa[4];
+    uint16  mAh[4];
+    uint8   motorState;
+    uint8   alive[4];
+    uint8   replyEdges[4];
+    uint8   reserved[3];
+    uint32  bidirErpm[4];
+    float32 bidirRpm[4];
+    uint32  bidirOk[4];
+    uint16  dshotCmd[4];
+} Xcp_Esc;
+
+extern volatile Xcp_Esc g_xcpEsc;
+
 void measurementsInit(void);    /* DTS + DTSC + EVR monitor init (CPU0)  */
 void measurementsUpdate(void);  /* call cyclically, e.g. every 100 ms    */
 
@@ -369,6 +435,22 @@ void measurementsSetImu(boolean present, const float32 acc[3], const float32 gyr
 /* Publish per-core execution time and Ethernet utilisation. Called from the
  * 100 ms task on CPU0; reads the other cores' slots in g_coreStats. */
 void measurementsSetSystemLoad(void);
+
+/* Publish the per-motor ESC telemetry status the driver holds (last CRC-valid
+ * packet, packet count, miss count per motor) plus the shared-wire CRC failure
+ * count. Called by SensorTask_esc (CPU0, 20 ms). */
+void measurementsSetEsc(const Dshot_TelemetryStatus tlm[DSHOT_MEND], uint32 crcFail);
+/* Publish the arming state machine's state (Motor_states_t as a byte). Called by
+ * the 1 ms motor/DShot wrapper task after Motor_task(). */
+void measurementsSetMotorState(uint8 state);
+void measurementsSetEscReplyEdges(uint8 edges[DSHOT_MEND]);
+/* Publish the bidirectional-DShot eRPM per motor (last CRC-valid reply) and the
+ * valid-reply count; the mechanical rpm is derived here with the same pole count
+ * as the KISS rpm so the two can be compared directly. Called by SensorTask_esc. */
+void measurementsSetEscBidir(const uint32 eRPM[DSHOT_MEND], const uint32 ok[DSHOT_MEND]);
+/* Publish the DShot value each motor received in the last frame (the driver's
+ * view of the wire, after Motor.c's clamping). Called by SensorTask_esc. */
+void measurementsSetEscCommand(const uint16 cmd[DSHOT_MEND]);
 
 /*
  * Publish the latest gnss sample into the XCP block. Called by the measurement task
