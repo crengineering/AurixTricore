@@ -45,7 +45,7 @@ typedef struct
     uint32  last_ts;                               /* GPR0[23:0] of the last consumed edge  */
     uint8   last_ecnt;                             /* GPR0[31:24] of the last consumed edge */
     uint8   edges;                                 /* edges consumed in this window         */
-    boolean lost;                                  /* GPROFL or ECNT gap: do not decode     */
+    boolean lost;                                  /* ECNT gap (edge missed): do not decode */
 } Dshot_ReplyCapture;
 
 static uint32                  g_replyTicksPerBit;            /* TBU ticks per 2.667 us slot */
@@ -68,7 +68,6 @@ uint8                          g_dshot_reply_edges[DSHOT_REPLY_MAX_EDGES];
 uint32                         g_dshot_reply_passes;
 /* cppcheck-suppress misra-c2012-8.7 ; deviation: diagnostic, read over XCP by symbol name (tools/xcp_read.py) */
 uint32                         g_dshot_reply_minPasses = 0xFFFFFFFFu;
-static uint32                  g_dshot_reply_value = 0u;           /* M1 eRPM (legacy XCP hook)           */
 
 /* ESC Telemetrics */
 volatile uint8                 g_escTlmRaw[ESC_T_MESSAGE_LENGTH];
@@ -681,8 +680,6 @@ static void Dshot_receive_decode(const Dshot_ReplyCapture reply[DSHOT_MEND], uin
         }
         dshot_eRPM[motor_id] = g_dshot_eRPM[motor_id];    /* last valid value, 0 until the first one */
     }
-
-    g_dshot_reply_value = g_dshot_eRPM[DSHOT_M1];
 }
 
 /******************************************************************************/
@@ -704,7 +701,17 @@ void Dshot_task(const uint16 dshot_command[DSHOT_MEND], boolean dshot_stream_all
     static uint8         dshot_tlm_miss_streak[DSHOT_MEND] = {0};
            uint16        frames[DSHOT_MEND] = {0};
            boolean       telem = ((g_dshotFrames & 0x7u) == 0u) ? TRUE : FALSE;
-           Dshot_ReplyCapture reply[DSHOT_MEND] = {0};
+           Dshot_ReplyCapture reply[DSHOT_MEND];
+           Dshot_Motor_t motor_id;
+
+    /* no reply window yet: edges 0 is what Dshot_receive_decode checks when the stream is off */
+    for (motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
+    {
+        reply[motor_id].edges     = 0u;
+        reply[motor_id].lost      = FALSE;
+        reply[motor_id].last_ts   = 0u;
+        reply[motor_id].last_ecnt = 0u;
+    }
 
     /* telemetrics request */
     Dshot_telem_request(&telem_requested, dshot_tlm_miss_streak, &dshot_motor, &telem);
@@ -728,8 +735,7 @@ uint32 Dshot_getTelemetry(Dshot_TelemetryStatus *out)
     {
         out[motor_id].packet = g_esc_Tlm[motor_id].packet;
         out[motor_id].count  = g_esc_Tlm[motor_id].count;
-        //out[motor_id].missed = g_esc_Tlm[motor_id].missed;
-        out[motor_id].missed = g_dshot_reply_value;
+        out[motor_id].missed = g_esc_Tlm[motor_id].missed;    /* PoC hook (M1 bidir eRPM) removed 2026-10-16 */
         out[motor_id].alive  = g_esc_Tlm[motor_id].alive;
     }
 
