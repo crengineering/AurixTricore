@@ -247,9 +247,23 @@ void measurementsSetMotorState(uint8 state)
     g_xcpEsc.motorState = state;
 }
 
-void measurementsSetEscReplyEdges(uint8 edges)
+void measurementsSetEscReplyEdges(uint8 edges[DSHOT_MEND])
 {
-    g_xcpEsc.replyEdgesM1 = edges;
+    for (uint8 m = 0u; m < (uint8)DSHOT_MEND; m++)
+    {
+        g_xcpEsc.replyEdges[m] = edges[m];
+    }
+}
+
+void measurementsSetEscBidir(const uint32 eRPM[DSHOT_MEND], const uint32 ok[DSHOT_MEND])
+{
+    for (uint8 m = 0u; m < (uint8)DSHOT_MEND; m++)
+    {
+        g_xcpEsc.bidirErpm[m] = eRPM[m];
+        g_xcpEsc.bidirOk[m]   = ok[m];
+        /* eRPM counts electrical revolutions; one mechanical turn = poles/2 of them */
+        g_xcpEsc.bidirRpm[m]  = (float32)eRPM[m] / ((float32)XCP_ESC_MOTOR_POLES / 2.0f);
+    }
 }
 
 void measurementsSetGnss(boolean present, GnssM9N_Sample sample_info)

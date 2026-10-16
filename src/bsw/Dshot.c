@@ -31,11 +31,38 @@ uint32                         g_escTlmBytes;
 
 float32                        g_dshotClk0Hz;
 
+/* Bidirectional DShot reply: GCR burst at 5/4 x 300 kbit/s = 375 kbit/s, 2.667 us per
+ * bit slot, 21 slots (1 leading pad bit + 20 GCR bits), NRZI: a transition at the start
+ * of a slot means GCR bit 1. The ESC turns the line around ~30 us after our frame. */
+#define DSHOT_REPLY_GCR_BITS    20u
+#define DSHOT_REPLY_MAX_EDGES   24u            /* 21 slot edges + return-to-idle + slack */
+#define DSHOT_REPLY_BIT_S       2.6667e-6f
+#define DSHOT_TBU_MASK          0x00FFFFFFu    /* TBU_TS0 is a free-running 24-bit counter */
+
+typedef struct
+{
+    uint32  interval_ticks[DSHOT_REPLY_MAX_EDGES]; /* edge-to-edge, TBU_TS0 ticks, 24 bit   */
+    uint32  last_ts;                               /* GPR0[23:0] of the last consumed edge  */
+    uint8   last_ecnt;                             /* GPR0[31:24] of the last consumed edge */
+    uint8   edges;                                 /* edges consumed in this window         */
+    boolean lost;                                  /* GPROFL or ECNT gap: do not decode     */
+} Dshot_ReplyCapture;
+
 static float32                 g_tbu_clock_frequency;
-static uint8                   g_dshot_reply_counter;
-static float32                 g_dshot_reply_edges[30] = {0u};
-static uint32                  g_dshot_reply_value = 0u;
+static uint32                  g_replyTicksPerBit;            /* TBU ticks per 2.667 us slot */
 static sint32                  g_ticks_for_100us;
+
+/* Reply diagnostics - deliberately not static so the debugger / A2L can see them */
+uint8                          g_dshot_reply_counter[DSHOT_MEND];  /* edges per motor, last window        */
+uint32                         g_dshot_reply_lostEcnt[DSHOT_MEND]; /* windows with an ECNT gap (edge lost)*/
+uint32                         g_dshot_reply_crcFail[DSHOT_MEND];  /* complete captures, GCR/CRC rejected */
+uint32                         g_dshot_reply_ok[DSHOT_MEND];
+uint32                         g_dshot_reply_edt[DSHOT_MEND];      /* EDT frames (type-tagged, not eRPM)  */
+uint32                         g_dshot_eRPM[DSHOT_MEND];           /* last valid eRPM per motor           */
+uint8                          g_dshot_reply_edges[DSHOT_REPLY_MAX_EDGES]; /* M1 debug: slots per interval */
+uint32                         g_dshot_reply_passes;               /* poll passes in the last window      */
+uint32                         g_dshot_reply_minPasses = 0xFFFFFFFFu; /* slowest window since boot        */
+static uint32                  g_dshot_reply_value = 0u;           /* M1 eRPM (legacy XCP hook)           */
 
 /* ESC Telemetrics */
 volatile uint8                 g_escTlmRaw[ESC_T_MESSAGE_LENGTH];
@@ -59,16 +86,24 @@ static void    Dshot_init_uart        (void);
 static void    Dshot_init_motor_reply (void);
 
 static uint16  dshotBuild             (uint16 value, boolean telem);
-static void    dshotSendFrame         (uint16 frame[DSHOT_MEND], uint32 dshot_reply_intervalls_ticks[30]);
+static void    dshotSendFrame         (uint16 frame[DSHOT_MEND], Dshot_ReplyCapture reply[DSHOT_MEND]);
 
-static void    dshotReadReply         (uint32 dshot_reply_intervalls_ticks[30]);
+static void    dshotReadReply         (Dshot_ReplyCapture reply[DSHOT_MEND]);
+typedef enum
+{
+    DSHOT_REPLY_OK = 0,      /* *eRPM written                                        */
+    DSHOT_REPLY_INVALID,     /* incomplete capture, bad GCR quintet or CRC mismatch  */
+    DSHOT_REPLY_EDT          /* valid frame, but extended telemetry - not an eRPM    */
+} Dshot_ReplyResult;
+
+static Dshot_ReplyResult dshotDecodeReply(const Dshot_ReplyCapture *cap, uint32 *eRPM, boolean debugBits);
 
 static boolean Dshot_ESC_T_crc        (void);
 static boolean Dshot_interpret_ESC_Tlm(Esc_telemetry *esc_Tlm);
 
 static void    Dshot_telem_request    (boolean *telem_requested, uint8 dshot_tlm_miss_streak[DSHOT_MEND], Dshot_Motor_t *dshot_motor, const boolean *telem);
-static void    Dshot_sending          (uint16 frames[DSHOT_MEND], const uint16 dshot_command[DSHOT_MEND], const Dshot_Motor_t *dshot_motor, const boolean *telem, const boolean dshot_stream_allowed, uint32 dshot_reply_intervalls_ticks[30]);
-static void    Dshot_receive_decode   (const uint32 dshot_reply_intervalls_ticks[30], uint32 dshot_eRPM[DSHOT_MEND]);
+static void    Dshot_sending          (uint16 frames[DSHOT_MEND], const uint16 dshot_command[DSHOT_MEND], const Dshot_Motor_t *dshot_motor, const boolean *telem, const boolean dshot_stream_allowed, Dshot_ReplyCapture reply[DSHOT_MEND]);
+static void    Dshot_receive_decode   (const Dshot_ReplyCapture reply[DSHOT_MEND], uint32 dshot_eRPM[DSHOT_MEND]);
 static void    Dshot_telem_decode     (boolean *telem_requested, uint8 dshot_tlm_miss_streak[DSHOT_MEND], Dshot_Motor_t *dshot_motor);
 
 /******************************************************************************/
@@ -210,6 +245,7 @@ static void Dshot_init_motor_reply (void)
     IfxGtm_Tbu_setChannelClockSource(gtm, IfxGtm_Tbu_Ts_0, IfxGtm_Tbu_ClkSrc_0);
     IfxGtm_Tbu_enableChannel(gtm, IfxGtm_Tbu_Ts_0);
     g_tbu_clock_frequency = IfxGtm_Tbu_getClockFrequency(gtm, IfxGtm_Tbu_Ts_0);
+    g_replyTicksPerBit    = (uint32)(g_tbu_clock_frequency * DSHOT_REPLY_BIT_S + 0.5f);
     for (motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
     {
         Ifx_GTM_TIM_CH *gtm_tim_ch = IfxGtm_Tim_getChannel(gtm_tim, g_Dshot_MotorCfg[motor_id].timChannel);
@@ -237,7 +273,7 @@ static uint16 dshotBuild(uint16 value, boolean telem)
     return (uint16)((v << 4) | crc);
 }
 
-static void dshotSendFrame(uint16 frame[DSHOT_MEND], uint32 dshot_reply_intervalls_ticks[30])
+static void dshotSendFrame(uint16 frame[DSHOT_MEND], Dshot_ReplyCapture reply[DSHOT_MEND])
 {
     Ifx_GTM_ATOM    *atom  = g_atomMX[DSHOT_M1].atom;
     IfxGtm_Atom_Ch   refCh = g_atomMX[DSHOT_M1].atomChannel;
@@ -267,46 +303,190 @@ static void dshotSendFrame(uint16 frame[DSHOT_MEND], uint32 dshot_reply_interval
     while (regs->IRQ.NOTIFY.B.CCU0TC == 0u) { }
     IfxGtm_Atom_Ch_clearZeroNotification(atom, refCh);
 
-    dshotReadReply(dshot_reply_intervalls_ticks);
+    dshotReadReply(reply);
 
     IfxCpu_restoreInterrupts(irq);
     g_dshotFrames++;
 }
 
-static void dshotReadReply(uint32 dshot_reply_intervalls_ticks[30])
+/* Drain the four TIM channels for one reply window. The hardware does the timing:
+ * in TIEM every edge captures TBU_TS0 into GPR0[23:0] and the edge count ECNT into
+ * GPR0[31:24]. This loop only has to visit each channel once per 2.667 us slot; how
+ * late it is inside that slot does not touch the timestamp.
+ * Every GTM/STM register read is an SPB access (tens of CPU cycles), so the hot loop
+ * is ONE read per channel per pass: GPR0 itself. A new edge shows as a changed ECNT,
+ * so NOTIFY is neither read nor cleared in the loop. An ECNT step != 1 means an edge
+ * came and went between two visits; that marks the capture lost instead of letting
+ * it decode to garbage. The pass counter is the loop's own speedometer: passes per
+ * 100 us window must stay well above 100us / 2.667us = 37. */
+#pragma optimize 2
+static void dshotReadReply(Dshot_ReplyCapture reply[DSHOT_MEND])
 {
-    Ifx_GTM        *gtm      = &MODULE_GTM;
-    Ifx_GTM_TIM    *gtm_tim  = &gtm->TIM[0];
-    Ifx_GTM_TIM_CH *channel = IfxGtm_Tim_getChannel(gtm_tim, g_Dshot_MotorCfg[DSHOT_M1].timChannel);
-    uint32          start_count = 0u;
-    uint32          edge_start_ticks = 0u;
+    Ifx_GTM                 *gtm     = &MODULE_GTM;
+    Ifx_GTM_TIM             *gtm_tim = &gtm->TIM[0];
+    volatile const uint32   *gpr0Reg[DSHOT_MEND];
+    uint32                   start_count;
+    uint32                   pass    = 0u;
+    uint32                   stm_ticks = (uint32)g_ticks_for_100us;
+    Dshot_Motor_t            motor_id;
 
-    //g_dshot_reply_counter = 0u;
-    IfxGtm_Tim_Ch_clearNewValueEvent(channel);
-    uint8    edge_counter = 0u;
-
-    // get current time stamp
-    start_count = IfxStm_getLower(&MODULE_STM0);
-
-    // while loop until 100us for response (current timestamp  + 100us)
-    while (IfxStm_getLower(&MODULE_STM0) - start_count < g_ticks_for_100us)
+    for (motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
     {
-        if ( IfxGtm_Tim_Ch_isNewValueEvent(channel) != FALSE)
-        {
-            // get value
-            //channel->GPR0.B.GPR0;
-            edge_counter++;
-            IfxGtm_Tim_Ch_clearNewValueEvent(channel);
+        Ifx_GTM_TIM_CH *ch = IfxGtm_Tim_getChannel(gtm_tim, g_Dshot_MotorCfg[motor_id].timChannel);
 
-            if (edge_counter > 1u)
+        gpr0Reg[motor_id] = (volatile const uint32 *)&ch->GPR0.U;
+        /* our own frame and the pad release toggled this pin: take the current edge
+         * count as the baseline, so the first reply edge is ECNT baseline + 1 */
+        reply[motor_id].last_ecnt = (uint8)(*gpr0Reg[motor_id] >> 24u);
+        reply[motor_id].edges     = 0u;
+        reply[motor_id].lost      = FALSE;
+    }
+
+    start_count = IfxStm_getLower(&MODULE_STM0);
+    for (;;)
+    {
+        for (motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
+        {
+            Dshot_ReplyCapture *cap  = &reply[motor_id];
+            uint32              gpr0 = *gpr0Reg[motor_id];          /* the one SPB read per channel */
+            uint8               ecnt = (uint8)(gpr0 >> 24u);
+
+            if (ecnt != cap->last_ecnt)
             {
-               dshot_reply_intervalls_ticks[edge_counter - 2u] = IfxStm_getLower(&MODULE_STM0) - edge_start_ticks;
+                uint32 ts = gpr0 & DSHOT_TBU_MASK;
+
+                if ((uint8)(ecnt - cap->last_ecnt) != 1u)
+                {
+                    cap->lost = TRUE;                                /* an edge came and went between visits */
+                }
+                if ((cap->edges > 0u) && (cap->edges <= DSHOT_REPLY_MAX_EDGES))
+                {
+                    cap->interval_ticks[cap->edges - 1u] = (ts - cap->last_ts) & DSHOT_TBU_MASK;
+                }
+                cap->last_ts   = ts;
+                cap->last_ecnt = ecnt;
+                if (cap->edges < 255u)
+                {
+                    cap->edges++;
+                }
             }
-            edge_start_ticks = IfxStm_getLower(&MODULE_STM0);
+        }
+
+        pass++;
+        if ((pass & 7u) == 0u)                                       /* STM is on the SPB too: check rarely */
+        {
+            if ((IfxStm_getLower(&MODULE_STM0) - start_count) >= stm_ticks)
+            {
+                break;
+            }
         }
     }
 
-    g_dshot_reply_counter = edge_counter;
+    g_dshot_reply_passes = pass;
+    if (pass < g_dshot_reply_minPasses)
+    {
+        g_dshot_reply_minPasses = pass;
+    }
+    for (motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
+    {
+        if (reply[motor_id].lost != FALSE)
+        {
+            g_dshot_reply_lostEcnt[motor_id]++;
+        }
+        g_dshot_reply_counter[motor_id] = reply[motor_id].edges;
+    }
+}
+#pragma endoptimize
+
+/* One motor's edge intervals -> eRPM. *eRPM is written only for DSHOT_REPLY_OK.
+ *
+ * Edge k sits at the start of slot b(k). The slots between two edges are GCR 0, the
+ * slot an edge starts is GCR 1. The first edge starts the leading pad slot and carries
+ * no data. If the line's final level differs from idle the ESC's release produces one
+ * more edge at slot 21 - that one and anything later is ignored. If the GCR word ends
+ * in zeros there is no edge for them, so the word is padded to 20 bits. */
+static Dshot_ReplyResult dshotDecodeReply(const Dshot_ReplyCapture *cap, uint32 *eRPM, boolean debugBits)
+{
+    uint32 gcr     = 0u;
+    uint32 bits    = 0u;
+    uint16 decoded = 0u;
+    uint16 value;
+    uint8  crc;
+    uint8  exponent;
+    uint16 mantissa;
+    uint32 period_us;
+    uint8  i;
+    uint8  intervals;
+
+    if ((cap->lost != FALSE) || (cap->edges < 2u) || (g_replyTicksPerBit == 0u))
+    {
+        return DSHOT_REPLY_INVALID;
+    }
+
+    intervals = (uint8)(cap->edges - 1u);
+    if (intervals > DSHOT_REPLY_MAX_EDGES)
+    {
+        intervals = DSHOT_REPLY_MAX_EDGES;
+    }
+
+    for (i = 0u; i < intervals; i++)
+    {
+        uint32 slots = (cap->interval_ticks[i] + (g_replyTicksPerBit / 2u)) / g_replyTicksPerBit;
+
+        if (debugBits != FALSE)
+        {
+            g_dshot_reply_edges[i] = (uint8)((slots > 255u) ? 255u : slots);
+        }
+        if (slots == 0u)
+        {
+            return DSHOT_REPLY_INVALID;                   /* two edges inside half a slot: glitch */
+        }
+        if ((bits + slots) > DSHOT_REPLY_GCR_BITS)
+        {
+            break;                                        /* return-to-idle edge (slot 21) or later */
+        }
+        gcr   = (gcr << slots) | 1u;
+        bits += slots;
+    }
+    if (bits < DSHOT_REPLY_GCR_BITS)
+    {
+        gcr <<= (DSHOT_REPLY_GCR_BITS - bits);            /* trailing GCR zeros have no edge */
+    }
+
+    for (i = 4u; i > 0u; i--)
+    {
+        uint8 nibble = GCR_DECODE_TABLE[(gcr >> ((i - 1u) * 5u)) & 0x1Fu];
+
+        if (nibble == 0xFFu)
+        {
+            return DSHOT_REPLY_INVALID;
+        }
+        decoded = (uint16)((decoded << 4u) | nibble);
+    }
+
+    value = (uint16)(decoded >> 4u);                      /* eee mmmmmmmmm */
+    crc   = (uint8)(decoded & 0x0Fu);
+    if (((uint8)(~(value ^ (value >> 4u) ^ (value >> 8u))) & 0x0Fu) != crc)
+    {
+        return DSHOT_REPLY_INVALID;
+    }
+
+    exponent  = (uint8)((value >> 9u) & 0x07u);
+    mantissa  = (uint16)(value & 0x1FFu);
+
+    /* AM32 normalises the period so the mantissa MSB is set whenever exponent > 0.
+     * exponent != 0 with bit 8 clear is therefore an EDT frame: top nibble = type
+     * tag (temperature, voltage, ...), low byte = payload (DSHOT.md D4). Only sent
+     * after DShot command 13 enabled EDT, but never let one through as an eRPM. */
+    if ((exponent != 0u) && ((value & 0x100u) == 0u))
+    {
+        return DSHOT_REPLY_EDT;
+    }
+
+    period_us = (uint32)mantissa << exponent;             /* one electrical revolution */
+    *eRPM     = (period_us != 0u) ? (60000000u / period_us) : 0u;
+
+    return DSHOT_REPLY_OK;
 }
 
 static boolean Dshot_ESC_T_crc(void)
@@ -392,7 +572,7 @@ static void Dshot_telem_decode(boolean *telem_requested, uint8 dshot_tlm_miss_st
     }
 }
 
-static void Dshot_sending(uint16 frames[DSHOT_MEND], const uint16 dshot_command[DSHOT_MEND], const Dshot_Motor_t *dshot_motor, const boolean *telem, const boolean dshot_stream_allowed, uint32 dshot_reply_intervalls_ticks[30])
+static void Dshot_sending(uint16 frames[DSHOT_MEND], const uint16 dshot_command[DSHOT_MEND], const Dshot_Motor_t *dshot_motor, const boolean *telem, const boolean dshot_stream_allowed, Dshot_ReplyCapture reply[DSHOT_MEND])
 {
     /* building the frame */
     for (uint8 motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
@@ -403,55 +583,42 @@ static void Dshot_sending(uint16 frames[DSHOT_MEND], const uint16 dshot_command[
     /* Dshot send Frames */
     if (dshot_stream_allowed != FALSE)
     {
-        dshotSendFrame(frames, dshot_reply_intervalls_ticks);
+        dshotSendFrame(frames, reply);
     }
 }
 
 
 
-static void Dshot_receive_decode(const uint32 dshot_reply_intervalls_ticks[30], uint32 dshot_eRPM[DSHOT_MEND])
+static void Dshot_receive_decode(const Dshot_ReplyCapture reply[DSHOT_MEND], uint32 dshot_eRPM[DSHOT_MEND])
 {
-    // dshot_reply_intervalls_ticks[edge_counter - 2u] = (float32) (IfxStm_getLower(&MODULE_STM0) - edge_start_ticks) / (g_ticks_for_100us/100u);
-    float32 edge_time = 0;
-    uint8   bits = 0u;
-    uint32  dshot_reply_value = 0u;
-    uint8   gcr_nibble = 0u;
-    uint16  decoded_value = 0u;
-    static uint32 eRPM = 0u;
+    Dshot_Motor_t motor_id;
 
-
-    // determine bits per edge
-    for (uint8 edge = 0u; edge < g_dshot_reply_counter; edge++)
+    for (motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
     {
-        edge_time = (float32) ( dshot_reply_intervalls_ticks[edge] / (g_ticks_for_100us / 100u) );
-        bits = (uint8) ( (edge_time / 2.5) + 0.5 );
-        g_dshot_reply_edges[edge] = bits;
-        dshot_reply_value = (dshot_reply_value << bits) | 1u;
-    }
-    //g_dshot_reply_value = dshot_reply_value;
-    // check crc
+        uint32 eRPM = 0u;
 
-    // decode gcr nibbles and mapping, counter on invalids and build decoded value
-    for (uint8 i = 3u; i > 0u; i--)
-    {
-        gcr_nibble    = (uint8) (dshot_reply_value >> i*5u) & 0x1F;
-        decoded_value = (uint16) GCR_DECODE_TABLE[gcr_nibble] << ( (i-1u) * 4u) | decoded_value;
-    }
+        if (reply[motor_id].edges != 0u)                  /* no reply window (stream off) is not a failure */
+        {
+            Dshot_ReplyResult result = dshotDecodeReply(&reply[motor_id], &eRPM, (motor_id == DSHOT_M1) ? TRUE : FALSE);
 
-    uint8 crc = (~(decoded_value ^ (decoded_value >> 4) ^ (decoded_value >> 8))) & 0x0F;
-    if (crc == (GCR_DECODE_TABLE[dshot_reply_value & 0x1F]))
-    {
-        // excluded exponent and mantissa
-        uint8 exponent = (decoded_value >> 9u) & 0x07;
-        uint16 mantissa = decoded_value & 0x1FF;
-        eRPM = (60000000) /  (mantissa << exponent);
-
+            if (result == DSHOT_REPLY_OK)
+            {
+                g_dshot_eRPM[motor_id] = eRPM;
+                g_dshot_reply_ok[motor_id]++;
+            }
+            else if (result == DSHOT_REPLY_EDT)
+            {
+                g_dshot_reply_edt[motor_id]++;
+            }
+            else if (reply[motor_id].lost == FALSE)
+            {
+                g_dshot_reply_crcFail[motor_id]++;        /* lost captures are counted in dshotReadReply */
+            }
+        }
+        dshot_eRPM[motor_id] = g_dshot_eRPM[motor_id];    /* last valid value, 0 until the first one */
     }
 
-
-    // decode eRPM and Motor stop
-    g_dshot_reply_value = eRPM;
-
+    g_dshot_reply_value = g_dshot_eRPM[DSHOT_M1];
 }
 
 /******************************************************************************/
@@ -473,16 +640,16 @@ void Dshot_task(const uint16 dshot_command[DSHOT_MEND], boolean dshot_stream_all
     static uint8         dshot_tlm_miss_streak[DSHOT_MEND] = {0u};
            uint16        frames[DSHOT_MEND] = {0u};
            boolean       telem = ((g_dshotFrames & 0x7u) == 0u) ? TRUE : FALSE;
-           uint32        dshot_reply_intervalls_ticks[30] = {0};
+           Dshot_ReplyCapture reply[DSHOT_MEND] = {{{0u}, 0u, 0u, 0u, FALSE}};
 
     /* telemetrics request */
     Dshot_telem_request(&telem_requested, dshot_tlm_miss_streak, &dshot_motor, &telem);
 
     /* sending dshot */
-    Dshot_sending(frames, dshot_command, &dshot_motor, &telem, dshot_stream_allowed, dshot_reply_intervalls_ticks);
+    Dshot_sending(frames, dshot_command, &dshot_motor, &telem, dshot_stream_allowed, reply);
 
     /* receiving from bidirectional dshot */
-    Dshot_receive_decode(dshot_reply_intervalls_ticks, dshot_eRPM);
+    Dshot_receive_decode(reply, dshot_eRPM);
 
     /* decode telemetrics*/
     Dshot_telem_decode(&telem_requested, dshot_tlm_miss_streak, &dshot_motor);
@@ -503,7 +670,19 @@ uint32 Dshot_getTelemetry(Dshot_TelemetryStatus *out)
     return g_escTlmCrcFail;
 }
 
-uint8 Dshot_getReplyEdges(void)
+void Dshot_getBidirErpm(uint32 dshot_eRPM[DSHOT_MEND], uint32 dshot_ok[DSHOT_MEND])
 {
-    return g_dshot_reply_counter;
+    for (uint8 motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
+    {
+        dshot_eRPM[motor_id] = g_dshot_eRPM[motor_id];
+        dshot_ok[motor_id]   = g_dshot_reply_ok[motor_id];
+    }
+}
+
+void Dshot_getReplyEdges(uint8 dshot_edge_replys[DSHOT_MEND])
+{
+    dshot_edge_replys[DSHOT_M1] =  g_dshot_reply_counter[DSHOT_M1];
+    dshot_edge_replys[DSHOT_M2] =  g_dshot_reply_counter[DSHOT_M2];
+    dshot_edge_replys[DSHOT_M3] =  g_dshot_reply_counter[DSHOT_M3];
+    dshot_edge_replys[DSHOT_M4] =  g_dshot_reply_counter[DSHOT_M4];
 }

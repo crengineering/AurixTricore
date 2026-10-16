@@ -373,11 +373,16 @@ extern volatile Xcp_Fusion g_xcpFusion;
  *   0x64  uint16  mAh[4]        consumed charge [mAh] — integrates the invalid current
  *   0x6C  uint8   motorState    Motor.c state (Motor_states_t): 0 disarmed, 1 init, 2 armed, 3 failsafe
  *   0x6D  uint8   alive[4]      1 = the ESC answered its recent telemetry requests
- *   0x71  uint8   replyEdgesM1  bidir DShot proof of concept: edges seen on M1 in the last reply window
- *   0x72  uint8   reserved[2]
+ *   0x71  uint8   replyEdges[4]  bidir DShot edges seen per motor in the last reply window
+ *   0x75  uint8   reserved[3]    explicit pad to 4 (TASKING 2-aligns uint32, see Xcp_Data note)
+ *   0x78  uint32  bidirErpm[4]   bidir DShot electrical rpm, last CRC-valid reply (0 until the first)
+ *   0x88  float32 bidirRpm[4]    mechanical rpm = bidirErpm / (poles / 2), poles = 14
+ *   0x98  uint32  bidirOk[4]     CRC-valid bidir replies per motor since boot (freshness)
  *
- * Total 0x74 = 116 bytes. v1 (one motor, 32 bytes, 2026-09-17) was replaced
- * in place on 2026-09-21 before any release carried it.
+ * Total 0xA8 = 168 bytes. v1 (one motor, 32 bytes, 2026-09-17) was replaced
+ * in place on 2026-09-21 before any release carried it; bidir fields added
+ * 2026-10-16 (every DShot frame is answered, so these update at 1 kHz while
+ * the KISS fields above arrive round-robin on the shared UART wire).
  * --------------------------------------------------------------------------- */
 #define XCP_ESC_MAGIC        0x32435345u
 #define XCP_ESC_MOTOR_POLES  14u        /* X2216-III 12N14P, docs/ESC_BRINGUP_2026-09-16.md */
@@ -397,8 +402,11 @@ typedef struct
     uint16  mAh[4];
     uint8   motorState;
     uint8   alive[4];
-    uint8   replyEdgesM1;
-    uint8   reserved[2];
+    uint8   replyEdges[4];
+    uint8   reserved[3];
+    uint32  bidirErpm[4];
+    float32 bidirRpm[4];
+    uint32  bidirOk[4];
 } Xcp_Esc;
 
 extern volatile Xcp_Esc g_xcpEsc;
@@ -433,7 +441,11 @@ void measurementsSetEsc(const Dshot_TelemetryStatus tlm[DSHOT_MEND], uint32 crcF
 /* Publish the arming state machine's state (Motor_states_t as a byte). Called by
  * the 1 ms motor/DShot wrapper task after Motor_task(). */
 void measurementsSetMotorState(uint8 state);
-void measurementsSetEscReplyEdges(uint8 edges);
+void measurementsSetEscReplyEdges(uint8 edges[DSHOT_MEND]);
+/* Publish the bidirectional-DShot eRPM per motor (last CRC-valid reply) and the
+ * valid-reply count; the mechanical rpm is derived here with the same pole count
+ * as the KISS rpm so the two can be compared directly. Called by SensorTask_esc. */
+void measurementsSetEscBidir(const uint32 eRPM[DSHOT_MEND], const uint32 ok[DSHOT_MEND]);
 
 /*
  * Publish the latest gnss sample into the XCP block. Called by the measurement task

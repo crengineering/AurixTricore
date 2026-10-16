@@ -232,8 +232,11 @@ typedef char layout_assert_Xcp_Esc_currentCa_offset[(offsetof(Xcp_Esc, currentCa
 typedef char layout_assert_Xcp_Esc_mAh_offset[(offsetof(Xcp_Esc, mAh) == 0x64u) ? 1 : -1];
 typedef char layout_assert_Xcp_Esc_motorState_offset[(offsetof(Xcp_Esc, motorState) == 0x6Cu) ? 1 : -1];
 typedef char layout_assert_Xcp_Esc_alive_offset[(offsetof(Xcp_Esc, alive) == 0x6Du) ? 1 : -1];
-typedef char layout_assert_Xcp_Esc_replyEdgesM1_offset[(offsetof(Xcp_Esc, replyEdgesM1) == 0x71u) ? 1 : -1];
-typedef char layout_assert_Xcp_Esc_reserved_offset[(offsetof(Xcp_Esc, reserved) == 0x72u) ? 1 : -1];
-typedef char layout_assert_Xcp_Esc_sizeof[(sizeof(Xcp_Esc) == 0x74u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_replyEdges_offset[(offsetof(Xcp_Esc, replyEdges) == 0x71u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_reserved_offset[(offsetof(Xcp_Esc, reserved) == 0x75u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_bidirErpm_offset[(offsetof(Xcp_Esc, bidirErpm) == 0x78u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_bidirRpm_offset[(offsetof(Xcp_Esc, bidirRpm) == 0x88u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_bidirOk_offset[(offsetof(Xcp_Esc, bidirOk) == 0x98u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_sizeof[(sizeof(Xcp_Esc) == 0xA8u) ? 1 : -1];
 
 #endif /* AURIXTRICORE_LAYOUT_ASSERT_GEN_H */

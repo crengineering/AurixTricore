@@ -50,7 +50,11 @@ void Dshot_task(const uint16 dshot_command[DSHOT_MEND], boolean dshot_stream_all
 /* Copies the last CRC-valid telemetry packet; returns the driver's CRC-ok packet
  * count so the caller can tell whether a new packet arrived since it last asked. */
 uint32 Dshot_getTelemetry(Dshot_TelemetryStatus *out);
-/* Bidir reply proof of concept: edges counted on M1 in the last reply window. */
-uint8  Dshot_getReplyEdges(void);
+/* Bidir reply: edges captured per motor in the last reply window (diagnostic). */
+void   Dshot_getReplyEdges(uint8 dshot_edge_replys[DSHOT_MEND]);
+/* Bidirectional DShot: the ESC answers EVERY frame with its electrical period. Copies
+ * the last CRC-valid eRPM per motor (0 until the first one) and the count of valid
+ * replies since boot, so a consumer can tell a live value from a stale one. */
+void   Dshot_getBidirErpm(uint32 dshot_eRPM[DSHOT_MEND], uint32 dshot_ok[DSHOT_MEND]);
 
 #endif /* DSHOT_H */

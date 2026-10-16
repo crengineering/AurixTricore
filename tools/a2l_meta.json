@@ -1362,11 +1362,31 @@
       "lo": "0",
       "hi": "1"
     },
-    "replyEdgesM1": {
-      "name": "EscM1ReplyEdges",
-      "desc": "bidir DShot proof of concept: edges on M1 (TIM0 ch0) in the last reply window",
+    "replyEdges": {
+      "name": "EscM{i1}Edges",
+      "desc": "ESC M{i1} edges captured in the last bidir DShot reply window (16..22 for a complete GCR burst)",
       "lo": "0",
       "hi": "255"
+    },
+    "bidirErpm": {
+      "name": "EscM{i1}BidirErpm",
+      "desc": "ESC M{i1} electrical rpm from the bidirectional DShot reply (answered every 1 kHz frame; 0 until the first valid reply, 917 = motor stopped)",
+      "unit": "eRPM",
+      "lo": "0",
+      "hi": "500000"
+    },
+    "bidirRpm": {
+      "name": "EscM{i1}BidirRpm",
+      "desc": "ESC M{i1} mechanical speed from the bidir DShot reply, eRPM/(poles/2) with 14 poles - compare with EscM{i1}Rpm (KISS)",
+      "unit": "rpm",
+      "lo": "0",
+      "hi": "60000"
+    },
+    "bidirOk": {
+      "name": "EscM{i1}BidirOk",
+      "desc": "CRC-valid bidir DShot replies from ESC M{i1} since boot - must count at ~1000/s while the stream runs",
+      "lo": "0",
+      "hi": "4294967295"
     },
     "reserved": {
       "skip": true

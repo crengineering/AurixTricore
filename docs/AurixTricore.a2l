@@ -16,7 +16,7 @@
  *   Xcp_Gpio  (GPIO control, RAM only) 0x70030300, 52 bytes, gpio.h
  *   Xcp_Fusion (navigation state)     0x70030500, 252 bytes, Measurements.h
  *   Xcp_FusionCal (estimator tuning)  0x70030600, 64 bytes, FusionCal.h
- *   Xcp_Esc   (ESC telemetry)         0x70030700, 116 bytes, Measurements.h
+ *   Xcp_Esc   (ESC telemetry)         0x70030700, 168 bytes, Measurements.h
  * Transport: XCP on UDP/IP, port 5555, station 192.168.0.10.
  * DAQ: dynamic, 1 list, event channel 0 = 100 ms task.
  */
@@ -1702,9 +1702,92 @@ ASAP2_VERSION 1 61
       ECU_ADDRESS 0x70030770
     /end MEASUREMENT
 
-    /begin MEASUREMENT EscM1ReplyEdges "bidir DShot proof of concept: edges on M1 (TIM0 ch0) in the last reply window"
+    /begin MEASUREMENT EscM1Edges "ESC M1 edges captured in the last bidir DShot reply window (16..22 for a complete GCR burst)"
       UBYTE NO_COMPU_METHOD 0 0 0 255
       ECU_ADDRESS 0x70030771
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EscM2Edges "ESC M2 edges captured in the last bidir DShot reply window (16..22 for a complete GCR burst)"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x70030772
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EscM3Edges "ESC M3 edges captured in the last bidir DShot reply window (16..22 for a complete GCR burst)"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x70030773
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EscM4Edges "ESC M4 edges captured in the last bidir DShot reply window (16..22 for a complete GCR burst)"
+      UBYTE NO_COMPU_METHOD 0 0 0 255
+      ECU_ADDRESS 0x70030774
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EscM1BidirErpm "ESC M1 electrical rpm from the bidirectional DShot reply (answered every 1 kHz frame; 0 until the first valid reply, 917 = motor stopped)"
+      ULONG NO_COMPU_METHOD 0 0 0 500000
+      ECU_ADDRESS 0x70030778
+      PHYS_UNIT "eRPM"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EscM2BidirErpm "ESC M2 electrical rpm from the bidirectional DShot reply (answered every 1 kHz frame; 0 until the first valid reply, 917 = motor stopped)"
+      ULONG NO_COMPU_METHOD 0 0 0 500000
+      ECU_ADDRESS 0x7003077C
+      PHYS_UNIT "eRPM"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EscM3BidirErpm "ESC M3 electrical rpm from the bidirectional DShot reply (answered every 1 kHz frame; 0 until the first valid reply, 917 = motor stopped)"
+      ULONG NO_COMPU_METHOD 0 0 0 500000
+      ECU_ADDRESS 0x70030780
+      PHYS_UNIT "eRPM"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EscM4BidirErpm "ESC M4 electrical rpm from the bidirectional DShot reply (answered every 1 kHz frame; 0 until the first valid reply, 917 = motor stopped)"
+      ULONG NO_COMPU_METHOD 0 0 0 500000
+      ECU_ADDRESS 0x70030784
+      PHYS_UNIT "eRPM"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EscM1BidirRpm "ESC M1 mechanical speed from the bidir DShot reply, eRPM/(poles/2) with 14 poles - compare with EscM1Rpm (KISS)"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 60000
+      ECU_ADDRESS 0x70030788
+      PHYS_UNIT "rpm"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EscM2BidirRpm "ESC M2 mechanical speed from the bidir DShot reply, eRPM/(poles/2) with 14 poles - compare with EscM2Rpm (KISS)"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 60000
+      ECU_ADDRESS 0x7003078C
+      PHYS_UNIT "rpm"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EscM3BidirRpm "ESC M3 mechanical speed from the bidir DShot reply, eRPM/(poles/2) with 14 poles - compare with EscM3Rpm (KISS)"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 60000
+      ECU_ADDRESS 0x70030790
+      PHYS_UNIT "rpm"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EscM4BidirRpm "ESC M4 mechanical speed from the bidir DShot reply, eRPM/(poles/2) with 14 poles - compare with EscM4Rpm (KISS)"
+      FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 60000
+      ECU_ADDRESS 0x70030794
+      PHYS_UNIT "rpm"
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EscM1BidirOk "CRC-valid bidir DShot replies from ESC M1 since boot - must count at ~1000/s while the stream runs"
+      ULONG NO_COMPU_METHOD 0 0 0 4294967295
+      ECU_ADDRESS 0x70030798
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EscM2BidirOk "CRC-valid bidir DShot replies from ESC M2 since boot - must count at ~1000/s while the stream runs"
+      ULONG NO_COMPU_METHOD 0 0 0 4294967295
+      ECU_ADDRESS 0x7003079C
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EscM3BidirOk "CRC-valid bidir DShot replies from ESC M3 since boot - must count at ~1000/s while the stream runs"
+      ULONG NO_COMPU_METHOD 0 0 0 4294967295
+      ECU_ADDRESS 0x700307A0
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EscM4BidirOk "CRC-valid bidir DShot replies from ESC M4 since boot - must count at ~1000/s while the stream runs"
+      ULONG NO_COMPU_METHOD 0 0 0 4294967295
+      ECU_ADDRESS 0x700307A4
     /end MEASUREMENT
 
   /end MODULE
