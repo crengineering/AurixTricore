@@ -34,6 +34,7 @@ float32                        g_dshotClk0Hz;
 static float32                 g_tbu_clock_frequency;
 static uint8                   g_dshot_reply_counter;
 static float32                 g_dshot_reply_edges[30] = {0u};
+static uint32                  g_dshot_reply_value = 0u;
 static sint32                  g_ticks_for_100us;
 
 /* ESC Telemetrics */
@@ -44,6 +45,12 @@ static   Dshot_TelemetryStatus g_esc_Tlm[DSHOT_MEND];
 static   uint32                g_escTlmCrcOk    = 0u;
 static   uint32                g_escTlmCrcFail  = 0u;
 
+static const uint8 GCR_DECODE_TABLE[32] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // 0x00 - 0x07
+    0xFF, 0x09, 0x0A, 0x0B, 0xFF, 0xFF, 0x0E, 0x0F, // 0x08 - 0x0F
+    0xFF, 0xFF, 0x02, 0x03, 0x05, 0x06, 0xFF, 0x07, // 0x10 - 0x17
+    0xFF, 0x00, 0x08, 0x01, 0x0C, 0x0D, 0x04, 0xFF  // 0x18 - 0x1F (Index 30 ist 0x1E -> 0x04)
+};
 /******************************************************************************/
 /*--------------------------Function Declaration------------------------------*/
 /******************************************************************************/
@@ -61,7 +68,7 @@ static boolean Dshot_interpret_ESC_Tlm(Esc_telemetry *esc_Tlm);
 
 static void    Dshot_telem_request    (boolean *telem_requested, uint8 dshot_tlm_miss_streak[DSHOT_MEND], Dshot_Motor_t *dshot_motor, const boolean *telem);
 static void    Dshot_sending          (uint16 frames[DSHOT_MEND], const uint16 dshot_command[DSHOT_MEND], const Dshot_Motor_t *dshot_motor, const boolean *telem, const boolean dshot_stream_allowed, uint32 dshot_reply_intervalls_ticks[30]);
-static void    Dshot_receive_decode   (const uint32 dshot_reply_intervalls_ticks[30]);
+static void    Dshot_receive_decode   (const uint32 dshot_reply_intervalls_ticks[30], uint32 dshot_eRPM[DSHOT_MEND]);
 static void    Dshot_telem_decode     (boolean *telem_requested, uint8 dshot_tlm_miss_streak[DSHOT_MEND], Dshot_Motor_t *dshot_motor);
 
 /******************************************************************************/
@@ -400,19 +407,51 @@ static void Dshot_sending(uint16 frames[DSHOT_MEND], const uint16 dshot_command[
     }
 }
 
-static void Dshot_receive_decode(const uint32 dshot_reply_intervalls_ticks[30])
+
+
+static void Dshot_receive_decode(const uint32 dshot_reply_intervalls_ticks[30], uint32 dshot_eRPM[DSHOT_MEND])
 {
     // dshot_reply_intervalls_ticks[edge_counter - 2u] = (float32) (IfxStm_getLower(&MODULE_STM0) - edge_start_ticks) / (g_ticks_for_100us/100u);
     float32 edge_time = 0;
-    uint8 bits = 0u;
+    uint8   bits = 0u;
+    uint32  dshot_reply_value = 0u;
+    uint8   gcr_nibble = 0u;
+    uint16  decoded_value = 0u;
+    static uint32 eRPM = 0u;
 
+
+    // determine bits per edge
     for (uint8 edge = 0u; edge < g_dshot_reply_counter; edge++)
     {
         edge_time = (float32) ( dshot_reply_intervalls_ticks[edge] / (g_ticks_for_100us / 100u) );
         bits = (uint8) ( (edge_time / 2.5) + 0.5 );
         g_dshot_reply_edges[edge] = bits;
+        dshot_reply_value = (dshot_reply_value << bits) | 1u;
     }
-//g_dshot_reply_edges
+    //g_dshot_reply_value = dshot_reply_value;
+    // check crc
+
+    // decode gcr nibbles and mapping, counter on invalids and build decoded value
+    for (uint8 i = 3u; i > 0u; i--)
+    {
+        gcr_nibble    = (uint8) (dshot_reply_value >> i*5u) & 0x1F;
+        decoded_value = (uint16) GCR_DECODE_TABLE[gcr_nibble] << ( (i-1u) * 4u) | decoded_value;
+    }
+
+    uint8 crc = (~(decoded_value ^ (decoded_value >> 4) ^ (decoded_value >> 8))) & 0x0F;
+    if (crc == (GCR_DECODE_TABLE[dshot_reply_value & 0x1F]))
+    {
+        // excluded exponent and mantissa
+        uint8 exponent = (decoded_value >> 9u) & 0x07;
+        uint16 mantissa = decoded_value & 0x1FF;
+        eRPM = (60000000) /  (mantissa << exponent);
+
+    }
+
+
+    // decode eRPM and Motor stop
+    g_dshot_reply_value = eRPM;
+
 }
 
 /******************************************************************************/
@@ -427,7 +466,7 @@ void Dshot_init(void)
 }
 
 /* 1 kHz task: zero throttle = the arming stream; every 256th frame asks for telemetry */
-void Dshot_task(const uint16 dshot_command[DSHOT_MEND], boolean dshot_stream_allowed)
+void Dshot_task(const uint16 dshot_command[DSHOT_MEND], boolean dshot_stream_allowed, uint32 dshot_eRPM[DSHOT_MEND])
 {
     static boolean       telem_requested    = FALSE;
     static Dshot_Motor_t dshot_motor        = DSHOT_M1;
@@ -443,10 +482,11 @@ void Dshot_task(const uint16 dshot_command[DSHOT_MEND], boolean dshot_stream_all
     Dshot_sending(frames, dshot_command, &dshot_motor, &telem, dshot_stream_allowed, dshot_reply_intervalls_ticks);
 
     /* receiving from bidirectional dshot */
-    Dshot_receive_decode(dshot_reply_intervalls_ticks);
+    Dshot_receive_decode(dshot_reply_intervalls_ticks, dshot_eRPM);
 
     /* decode telemetrics*/
     Dshot_telem_decode(&telem_requested, dshot_tlm_miss_streak, &dshot_motor);
+
 }
 
 uint32 Dshot_getTelemetry(Dshot_TelemetryStatus *out)
@@ -455,7 +495,8 @@ uint32 Dshot_getTelemetry(Dshot_TelemetryStatus *out)
     {
         out[motor_id].packet = g_esc_Tlm[motor_id].packet;
         out[motor_id].count  = g_esc_Tlm[motor_id].count;
-        out[motor_id].missed = g_esc_Tlm[motor_id].missed;
+        //out[motor_id].missed = g_esc_Tlm[motor_id].missed;
+        out[motor_id].missed = g_dshot_reply_value;
         out[motor_id].alive  = g_esc_Tlm[motor_id].alive;
     }
 

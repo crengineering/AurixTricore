@@ -75,6 +75,7 @@ static void Task_Dshot(void)
 {
     static Motor_states_t state                         = MOTOR_DISARMED;
            uint16         speed_setpoints[DSHOT_MEND]   = {0};
+           uint32         dshot_eRPM     [DSHOT_MEND]   = {0};
            uint16         dshot_command_set[DSHOT_MEND] = {0};
            boolean        dshot_stream_allowed          = FALSE;
 
@@ -83,7 +84,7 @@ static void Task_Dshot(void)
      * e.g. for testing or commissioning purposes
      * */
     dshot_stream_allowed = Motor_task(speed_setpoints, dshot_command_set, &state);
-    Dshot_task(dshot_command_set, dshot_stream_allowed);
+    Dshot_task(dshot_command_set, dshot_stream_allowed, dshot_eRPM);
     measurementsSetMotorState((uint8)state);
 }
 
