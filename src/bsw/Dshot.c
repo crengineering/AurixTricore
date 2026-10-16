@@ -33,6 +33,7 @@ float32                        g_dshotClk0Hz;
 
 static float32                 g_tbu_clock_frequency;
 static uint8                   g_dshot_reply_counter;
+static float32                 g_dshot_reply_intervalls[30] = {0};
 static sint32                  g_ticks_for_100us;
 
 /* ESC Telemetrics */
@@ -271,6 +272,7 @@ static void dshotReadReply(void)
     Ifx_GTM_TIM_CH *channel = IfxGtm_Tim_getChannel(gtm_tim, g_Dshot_MotorCfg[DSHOT_M1].timChannel);
     uint32          start_count = 0u;
     g_dshot_reply_counter = 0u;
+    uint32 edge_start_ticks = 0u;
 
     //g_dshot_reply_counter = 0u;
     IfxGtm_Tim_Ch_clearNewValueEvent(channel);
@@ -278,6 +280,7 @@ static void dshotReadReply(void)
 
     // get current time stamp
     start_count = IfxStm_getLower(&MODULE_STM0);
+
     // while loop until 100us for response (current timestamp  + 100us)
     while (IfxStm_getLower(&MODULE_STM0) - start_count < g_ticks_for_100us)
     {
@@ -287,6 +290,12 @@ static void dshotReadReply(void)
             //channel->GPR0.B.GPR0;
             edge_counter++;
             IfxGtm_Tim_Ch_clearNewValueEvent(channel);
+
+            if (edge_counter > 1u)
+            {
+                g_dshot_reply_intervalls[edge_counter - 2u] = (float32) (IfxStm_getLower(&MODULE_STM0) - edge_start_ticks) / (g_ticks_for_100us/100u);
+            }
+            edge_start_ticks = IfxStm_getLower(&MODULE_STM0);
         }
     }
 
