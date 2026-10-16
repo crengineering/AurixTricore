@@ -237,6 +237,7 @@ typedef char layout_assert_Xcp_Esc_reserved_offset[(offsetof(Xcp_Esc, reserved) 
 typedef char layout_assert_Xcp_Esc_bidirErpm_offset[(offsetof(Xcp_Esc, bidirErpm) == 0x78u) ? 1 : -1];
 typedef char layout_assert_Xcp_Esc_bidirRpm_offset[(offsetof(Xcp_Esc, bidirRpm) == 0x88u) ? 1 : -1];
 typedef char layout_assert_Xcp_Esc_bidirOk_offset[(offsetof(Xcp_Esc, bidirOk) == 0x98u) ? 1 : -1];
-typedef char layout_assert_Xcp_Esc_sizeof[(sizeof(Xcp_Esc) == 0xA8u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_dshotCmd_offset[(offsetof(Xcp_Esc, dshotCmd) == 0xA8u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_sizeof[(sizeof(Xcp_Esc) == 0xB0u) ? 1 : -1];
 
 #endif /* AURIXTRICORE_LAYOUT_ASSERT_GEN_H */

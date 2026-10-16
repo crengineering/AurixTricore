@@ -255,6 +255,14 @@ void measurementsSetEscReplyEdges(uint8 edges[DSHOT_MEND])
     }
 }
 
+void measurementsSetEscCommand(const uint16 cmd[DSHOT_MEND])
+{
+    for (uint8 m = 0u; m < (uint8)DSHOT_MEND; m++)
+    {
+        g_xcpEsc.dshotCmd[m] = cmd[m];
+    }
+}
+
 void measurementsSetEscBidir(const uint32 eRPM[DSHOT_MEND], const uint32 ok[DSHOT_MEND])
 {
     for (uint8 m = 0u; m < (uint8)DSHOT_MEND; m++)

@@ -16,7 +16,7 @@
  *   Xcp_Gpio  (GPIO control, RAM only) 0x70030300, 52 bytes, gpio.h
  *   Xcp_Fusion (navigation state)     0x70030500, 252 bytes, Measurements.h
  *   Xcp_FusionCal (estimator tuning)  0x70030600, 64 bytes, FusionCal.h
- *   Xcp_Esc   (ESC telemetry)         0x70030700, 168 bytes, Measurements.h
+ *   Xcp_Esc   (ESC telemetry)         0x70030700, 176 bytes, Measurements.h
  * Transport: XCP on UDP/IP, port 5555, station 192.168.0.10.
  * DAQ: dynamic, 1 list, event channel 0 = 100 ms task.
  */
@@ -1788,6 +1788,26 @@ ASAP2_VERSION 1 61
     /begin MEASUREMENT EscM4BidirOk "CRC-valid bidir DShot replies from ESC M4 since boot - must count at ~1000/s while the stream runs"
       ULONG NO_COMPU_METHOD 0 0 0 4294967295
       ECU_ADDRESS 0x700307A4
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EscM1DshotCmd "DShot value sent to ESC M1 in the last frame, as the driver put it on the wire: 0 = motor stop, 1..47 = special commands (beeps), 48..2047 = throttle (48 = minimum), 0 while the stream is off"
+      UWORD NO_COMPU_METHOD 0 0 0 2047
+      ECU_ADDRESS 0x700307A8
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EscM2DshotCmd "DShot value sent to ESC M2 in the last frame, as the driver put it on the wire: 0 = motor stop, 1..47 = special commands (beeps), 48..2047 = throttle (48 = minimum), 0 while the stream is off"
+      UWORD NO_COMPU_METHOD 0 0 0 2047
+      ECU_ADDRESS 0x700307AA
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EscM3DshotCmd "DShot value sent to ESC M3 in the last frame, as the driver put it on the wire: 0 = motor stop, 1..47 = special commands (beeps), 48..2047 = throttle (48 = minimum), 0 while the stream is off"
+      UWORD NO_COMPU_METHOD 0 0 0 2047
+      ECU_ADDRESS 0x700307AC
+    /end MEASUREMENT
+
+    /begin MEASUREMENT EscM4DshotCmd "DShot value sent to ESC M4 in the last frame, as the driver put it on the wire: 0 = motor stop, 1..47 = special commands (beeps), 48..2047 = throttle (48 = minimum), 0 while the stream is off"
+      UWORD NO_COMPU_METHOD 0 0 0 2047
+      ECU_ADDRESS 0x700307AE
     /end MEASUREMENT
 
   /end MODULE

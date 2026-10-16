@@ -1388,6 +1388,12 @@
       "lo": "0",
       "hi": "4294967295"
     },
+    "dshotCmd": {
+      "name": "EscM{i1}DshotCmd",
+      "desc": "DShot value sent to ESC M{i1} in the last frame, as the driver put it on the wire: 0 = motor stop, 1..47 = special commands (beeps), 48..2047 = throttle (48 = minimum), 0 while the stream is off",
+      "lo": "0",
+      "hi": "2047"
+    },
     "reserved": {
       "skip": true
     }

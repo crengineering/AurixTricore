@@ -378,8 +378,9 @@ extern volatile Xcp_Fusion g_xcpFusion;
  *   0x78  uint32  bidirErpm[4]   bidir DShot electrical rpm, last CRC-valid reply (0 until the first)
  *   0x88  float32 bidirRpm[4]    mechanical rpm = bidirErpm / (poles / 2), poles = 14
  *   0x98  uint32  bidirOk[4]     CRC-valid bidir replies per motor since boot (freshness)
+ *   0xA8  uint16  dshotCmd[4]    DShot value on the wire in the last frame: 0 stop, 1..47 cmd, 48..2047 throttle
  *
- * Total 0xA8 = 168 bytes. v1 (one motor, 32 bytes, 2026-09-17) was replaced
+ * Total 0xB0 = 176 bytes. v1 (one motor, 32 bytes, 2026-09-17) was replaced
  * in place on 2026-09-21 before any release carried it; bidir fields added
  * 2026-10-16 (every DShot frame is answered, so these update at 1 kHz while
  * the KISS fields above arrive round-robin on the shared UART wire).
@@ -407,6 +408,7 @@ typedef struct
     uint32  bidirErpm[4];
     float32 bidirRpm[4];
     uint32  bidirOk[4];
+    uint16  dshotCmd[4];
 } Xcp_Esc;
 
 extern volatile Xcp_Esc g_xcpEsc;
@@ -446,6 +448,9 @@ void measurementsSetEscReplyEdges(uint8 edges[DSHOT_MEND]);
  * valid-reply count; the mechanical rpm is derived here with the same pole count
  * as the KISS rpm so the two can be compared directly. Called by SensorTask_esc. */
 void measurementsSetEscBidir(const uint32 eRPM[DSHOT_MEND], const uint32 ok[DSHOT_MEND]);
+/* Publish the DShot value each motor received in the last frame (the driver's
+ * view of the wire, after Motor.c's clamping). Called by SensorTask_esc. */
+void measurementsSetEscCommand(const uint16 cmd[DSHOT_MEND]);
 
 /*
  * Publish the latest gnss sample into the XCP block. Called by the measurement task

@@ -112,13 +112,16 @@ void SensorTask_esc(void)
 {
     Dshot_TelemetryStatus tlm[DSHOT_MEND];
     uint32                crcFail = Dshot_getTelemetry(tlm);   /* fills all four, returns the wire's CRC failures */
-    uint8                 dshot_edge_replys[DSHOT_MEND] = {0u};
-    uint32                bidir_eRPM[DSHOT_MEND]        = {0u};
-    uint32                bidir_ok[DSHOT_MEND]          = {0u};
+    uint8                 dshot_edge_replys[DSHOT_MEND] = {0};
+    uint32                bidir_eRPM[DSHOT_MEND]        = {0};
+    uint32                bidir_ok[DSHOT_MEND]          = {0};
+    uint16                dshot_cmd[DSHOT_MEND]         = {0};
 
     measurementsSetEsc(tlm, crcFail);
     Dshot_getReplyEdges(dshot_edge_replys);
     measurementsSetEscReplyEdges(dshot_edge_replys);
     Dshot_getBidirErpm(bidir_eRPM, bidir_ok);
     measurementsSetEscBidir(bidir_eRPM, bidir_ok);
+    Dshot_getLastCommand(dshot_cmd);
+    measurementsSetEscCommand(dshot_cmd);
 }

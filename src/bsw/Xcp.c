@@ -596,11 +596,6 @@ void xcpInit(void)
     }
 }
 
-uint32 Xcp_getLastCommandMs(void)
-{
-    return s_lastCmdMs;
-}
-
 /* Link-loss criterion for the arming state machine (SYS2-SAF-002): the master
  * polls continuously while it is connected, so "no well-formed command for
  * XCP_LINK_TIMEOUT_MS" is "the link is gone" -- GUI closed, cable pulled, PC

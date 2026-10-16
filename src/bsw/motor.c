@@ -14,11 +14,7 @@
 
 /* Dshot protocol comments from betaflight */
 #define DSHOT_CMD_MOTOR_STOP      0u
-#define DSHOT_CMD_BEEP1           1u
-#define DSHOT_CMD_BEEP2           2u
-#define DSHOT_CMD_BEEP3           3u
-#define DSHOT_CMD_BEEP4           4u
-#define DSHOT_CMD_BEEP5           5u
+#define DSHOT_CMD_BEEP1           1u   /* BEEP2..BEEP5 = 2..5, see docs/DSHOT.md §4 - unused here */
 #define DSHOT_CMD_THROTTLE_MIN   48u
 #define DSHOT_CMD_THROTTLE_MAX 2047u
 
@@ -33,7 +29,7 @@ static void    Motor_calc_clamp    (const uint16 motor_speed_rqst[DSHOT_MEND], u
 static void    Motor_state_disarmed(boolean *dshot_stream_allowed, Motor_states_t *state);
 static void    Motor_state_init    (boolean *dshot_stream_allowed, Motor_states_t *state, uint16 dshot_command_set[DSHOT_MEND]);
 static void    Motor_state_armed   (boolean *dshot_stream_allowed, Motor_states_t *state, uint16 dshot_command_set[DSHOT_MEND], const boolean *eth_link_alive, const uint16 motor_speed_rqst[DSHOT_MEND], uint16  setpoint[DSHOT_MEND]);
-static void    Motor_state_failsafe(boolean *dshot_stream_allowed, Motor_states_t *state, boolean *eth_link_alive);
+static void    Motor_state_failsafe(boolean *dshot_stream_allowed, Motor_states_t *state, const boolean *eth_link_alive);
 
 /******************************************************************************/
 /*--------------------------Interrupts----------------------------------------*/
@@ -44,7 +40,7 @@ static void    Motor_state_failsafe(boolean *dshot_stream_allowed, Motor_states_
 /******************************************************************************/
 static boolean Motor_beep(uint16 dshot_command_set[DSHOT_MEND])
 {
-    static boolean motor_beep[DSHOT_MEND] = {FALSE};
+    static boolean motor_beep[DSHOT_MEND] = {FALSE, FALSE, FALSE, FALSE};
     static uint16  motor_beep_counter     = 0u;
     static uint8   motor_id               = 0u;
            boolean motor_beep_finished    = FALSE;
@@ -63,7 +59,10 @@ static boolean Motor_beep(uint16 dshot_command_set[DSHOT_MEND])
             if (++motor_id >= DSHOT_MEND)
             {
                 motor_id = 0u;
-                motor_beep[DSHOT_M1] = motor_beep[DSHOT_M2] = motor_beep[DSHOT_M3] = motor_beep[DSHOT_M4] = FALSE;
+                motor_beep[DSHOT_M1] = FALSE;
+                motor_beep[DSHOT_M2] = FALSE;
+                motor_beep[DSHOT_M3] = FALSE;
+                motor_beep[DSHOT_M4] = FALSE;
                 motor_beep_counter = 0u;
                 motor_beep_finished = TRUE;
             }
@@ -116,7 +115,7 @@ static void Motor_state_init(boolean *dshot_stream_allowed, Motor_states_t *stat
 static void Motor_state_armed(boolean *dshot_stream_allowed, Motor_states_t *state, uint16 dshot_command_set[DSHOT_MEND], const boolean *eth_link_alive, const uint16 motor_speed_rqst[DSHOT_MEND], uint16  setpoint[DSHOT_MEND])
 {
     *dshot_stream_allowed = TRUE;
-    if (eth_link_alive == FALSE)
+    if (*eth_link_alive == FALSE)                 /* 2026-10-16: compared the POINTER before - failsafe entry was dead */
     {
         *state = MOTOR_FAILSAFE;
     }
@@ -140,13 +139,14 @@ static void Motor_state_armed(boolean *dshot_stream_allowed, Motor_states_t *sta
     }
 }
 
-static void Motor_state_failsafe(boolean *dshot_stream_allowed, Motor_states_t *state, boolean *eth_link_alive)
+static void Motor_state_failsafe(boolean *dshot_stream_allowed, Motor_states_t *state, const boolean *eth_link_alive)
 {
+    *dshot_stream_allowed = FALSE;                /* no frames at all while in failsafe */
     g_xcpCal.motorCmd    = 0u;
     g_xcpCal.motorManual = 0u;
     for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++) {g_xcpCal.motorManualSp[motor_id] = 0u;}
 
-    if (eth_link_alive != FALSE)
+    if (*eth_link_alive != FALSE)                 /* 2026-10-16: compared the POINTER before - left failsafe unconditionally */
     {
         *state = MOTOR_DISARMED;
     }
