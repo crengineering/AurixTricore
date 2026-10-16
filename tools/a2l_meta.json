@@ -1318,14 +1318,14 @@
     },
     "rpm": {
       "name": "EscM{i1}Rpm",
-      "desc": "ESC M{i1} mechanical speed, eRPM*100/(poles/2) with 14 poles",
+      "desc": "ESC M{i1} mechanical speed from KISS telemetry, eRpm100*100/(poles/2) with 14 poles (~129 while stopped: AM32 max-period sentinel, see ERpm100)",
       "unit": "rpm",
       "lo": "0",
       "hi": "60000"
     },
     "eRpm100": {
       "name": "EscM{i1}ERpm100",
-      "desc": "ESC M{i1} electrical rpm / 100, raw KISS field",
+      "desc": "ESC M{i1} electrical rpm / 100, raw KISS field (x100 = eRPM; reads 9 while stopped because AM32 reports its 65408 us max-period sentinel, not 0)",
       "lo": "0",
       "hi": "65535"
     },
@@ -1370,7 +1370,7 @@
     },
     "bidirErpm": {
       "name": "EscM{i1}BidirErpm",
-      "desc": "ESC M{i1} electrical rpm from the bidirectional DShot reply (answered every 1 kHz frame; 0 until the first valid reply, 917 = motor stopped)",
+      "desc": "ESC M{i1} electrical rpm from the bidirectional DShot reply (answered every 1 kHz frame; 0 while stopped - the ESC's 65408 us max-period sentinel is mapped to 0 - and 0 until the first valid reply)",
       "unit": "eRPM",
       "lo": "0",
       "hi": "500000"

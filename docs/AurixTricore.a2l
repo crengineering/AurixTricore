@@ -1561,46 +1561,46 @@ ASAP2_VERSION 1 61
       ECU_ADDRESS 0x70030738
     /end MEASUREMENT
 
-    /begin MEASUREMENT EscM1Rpm "ESC M1 mechanical speed, eRPM*100/(poles/2) with 14 poles"
+    /begin MEASUREMENT EscM1Rpm "ESC M1 mechanical speed from KISS telemetry, eRpm100*100/(poles/2) with 14 poles (~129 while stopped: AM32 max-period sentinel, see ERpm100)"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 60000
       ECU_ADDRESS 0x7003073C
       PHYS_UNIT "rpm"
     /end MEASUREMENT
 
-    /begin MEASUREMENT EscM2Rpm "ESC M2 mechanical speed, eRPM*100/(poles/2) with 14 poles"
+    /begin MEASUREMENT EscM2Rpm "ESC M2 mechanical speed from KISS telemetry, eRpm100*100/(poles/2) with 14 poles (~129 while stopped: AM32 max-period sentinel, see ERpm100)"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 60000
       ECU_ADDRESS 0x70030740
       PHYS_UNIT "rpm"
     /end MEASUREMENT
 
-    /begin MEASUREMENT EscM3Rpm "ESC M3 mechanical speed, eRPM*100/(poles/2) with 14 poles"
+    /begin MEASUREMENT EscM3Rpm "ESC M3 mechanical speed from KISS telemetry, eRpm100*100/(poles/2) with 14 poles (~129 while stopped: AM32 max-period sentinel, see ERpm100)"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 60000
       ECU_ADDRESS 0x70030744
       PHYS_UNIT "rpm"
     /end MEASUREMENT
 
-    /begin MEASUREMENT EscM4Rpm "ESC M4 mechanical speed, eRPM*100/(poles/2) with 14 poles"
+    /begin MEASUREMENT EscM4Rpm "ESC M4 mechanical speed from KISS telemetry, eRpm100*100/(poles/2) with 14 poles (~129 while stopped: AM32 max-period sentinel, see ERpm100)"
       FLOAT32_IEEE NO_COMPU_METHOD 0 0 0 60000
       ECU_ADDRESS 0x70030748
       PHYS_UNIT "rpm"
     /end MEASUREMENT
 
-    /begin MEASUREMENT EscM1ERpm100 "ESC M1 electrical rpm / 100, raw KISS field"
+    /begin MEASUREMENT EscM1ERpm100 "ESC M1 electrical rpm / 100, raw KISS field (x100 = eRPM; reads 9 while stopped because AM32 reports its 65408 us max-period sentinel, not 0)"
       UWORD NO_COMPU_METHOD 0 0 0 65535
       ECU_ADDRESS 0x7003074C
     /end MEASUREMENT
 
-    /begin MEASUREMENT EscM2ERpm100 "ESC M2 electrical rpm / 100, raw KISS field"
+    /begin MEASUREMENT EscM2ERpm100 "ESC M2 electrical rpm / 100, raw KISS field (x100 = eRPM; reads 9 while stopped because AM32 reports its 65408 us max-period sentinel, not 0)"
       UWORD NO_COMPU_METHOD 0 0 0 65535
       ECU_ADDRESS 0x7003074E
     /end MEASUREMENT
 
-    /begin MEASUREMENT EscM3ERpm100 "ESC M3 electrical rpm / 100, raw KISS field"
+    /begin MEASUREMENT EscM3ERpm100 "ESC M3 electrical rpm / 100, raw KISS field (x100 = eRPM; reads 9 while stopped because AM32 reports its 65408 us max-period sentinel, not 0)"
       UWORD NO_COMPU_METHOD 0 0 0 65535
       ECU_ADDRESS 0x70030750
     /end MEASUREMENT
 
-    /begin MEASUREMENT EscM4ERpm100 "ESC M4 electrical rpm / 100, raw KISS field"
+    /begin MEASUREMENT EscM4ERpm100 "ESC M4 electrical rpm / 100, raw KISS field (x100 = eRPM; reads 9 while stopped because AM32 reports its 65408 us max-period sentinel, not 0)"
       UWORD NO_COMPU_METHOD 0 0 0 65535
       ECU_ADDRESS 0x70030752
     /end MEASUREMENT
@@ -1722,25 +1722,25 @@ ASAP2_VERSION 1 61
       ECU_ADDRESS 0x70030774
     /end MEASUREMENT
 
-    /begin MEASUREMENT EscM1BidirErpm "ESC M1 electrical rpm from the bidirectional DShot reply (answered every 1 kHz frame; 0 until the first valid reply, 917 = motor stopped)"
+    /begin MEASUREMENT EscM1BidirErpm "ESC M1 electrical rpm from the bidirectional DShot reply (answered every 1 kHz frame; 0 while stopped - the ESC's 65408 us max-period sentinel is mapped to 0 - and 0 until the first valid reply)"
       ULONG NO_COMPU_METHOD 0 0 0 500000
       ECU_ADDRESS 0x70030778
       PHYS_UNIT "eRPM"
     /end MEASUREMENT
 
-    /begin MEASUREMENT EscM2BidirErpm "ESC M2 electrical rpm from the bidirectional DShot reply (answered every 1 kHz frame; 0 until the first valid reply, 917 = motor stopped)"
+    /begin MEASUREMENT EscM2BidirErpm "ESC M2 electrical rpm from the bidirectional DShot reply (answered every 1 kHz frame; 0 while stopped - the ESC's 65408 us max-period sentinel is mapped to 0 - and 0 until the first valid reply)"
       ULONG NO_COMPU_METHOD 0 0 0 500000
       ECU_ADDRESS 0x7003077C
       PHYS_UNIT "eRPM"
     /end MEASUREMENT
 
-    /begin MEASUREMENT EscM3BidirErpm "ESC M3 electrical rpm from the bidirectional DShot reply (answered every 1 kHz frame; 0 until the first valid reply, 917 = motor stopped)"
+    /begin MEASUREMENT EscM3BidirErpm "ESC M3 electrical rpm from the bidirectional DShot reply (answered every 1 kHz frame; 0 while stopped - the ESC's 65408 us max-period sentinel is mapped to 0 - and 0 until the first valid reply)"
       ULONG NO_COMPU_METHOD 0 0 0 500000
       ECU_ADDRESS 0x70030780
       PHYS_UNIT "eRPM"
     /end MEASUREMENT
 
-    /begin MEASUREMENT EscM4BidirErpm "ESC M4 electrical rpm from the bidirectional DShot reply (answered every 1 kHz frame; 0 until the first valid reply, 917 = motor stopped)"
+    /begin MEASUREMENT EscM4BidirErpm "ESC M4 electrical rpm from the bidirectional DShot reply (answered every 1 kHz frame; 0 while stopped - the ESC's 65408 us max-period sentinel is mapped to 0 - and 0 until the first valid reply)"
       ULONG NO_COMPU_METHOD 0 0 0 500000
       ECU_ADDRESS 0x70030784
       PHYS_UNIT "eRPM"

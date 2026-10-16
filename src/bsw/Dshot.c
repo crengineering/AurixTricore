@@ -471,6 +471,15 @@ static Dshot_ReplyResult dshotDecodeReply(const Dshot_ReplyCapture *cap, uint32 
         return DSHOT_REPLY_INVALID;
     }
 
+    /* 0x0FFF = period 511 << 7 = 65408 us is the ESC's "motor stopped" sentinel (the
+     * largest encodable period; AM32 sends it whenever it is not running). Report 0
+     * instead of the literal 917 eRPM it would decode to - same rule as Betaflight. */
+    if (value == 0x0FFFu)
+    {
+        *eRPM = 0u;
+        return DSHOT_REPLY_OK;
+    }
+
     exponent  = (uint8)((value >> 9u) & 0x07u);
     mantissa  = (uint16)(value & 0x1FFu);
 
