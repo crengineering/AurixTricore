@@ -1,6 +1,6 @@
 <mxfile host="Electron" pages="2">
   <diagram name="P1" id="BAX2hsDPizo_VL98bUzZ">
-    <mxGraphModel dx="2531" dy="2182" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+    <mxGraphModel grid="1" page="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -23,7 +23,7 @@
           <mxGeometry height="84.75" width="120" x="30" y="445.25" as="geometry" />
         </mxCell>
         <mxCell id="OOOd5db5GXImQQD6YVal-14" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="SPI" vertex="1">
-          <mxGeometry height="30" width="50" x="10" y="140.03" as="geometry" />
+          <mxGeometry height="21.96" width="50" x="10" y="130" as="geometry" />
         </mxCell>
         <mxCell id="OOOd5db5GXImQQD6YVal-21" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="3.3V" vertex="1">
           <mxGeometry height="21.96" width="50" x="10" y="200.03" as="geometry" />
@@ -132,8 +132,10 @@
         <mxCell id="H8ekkz0zUjdbCF9T-yjm-9" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="Breakout &lt;b&gt;PCB&lt;/b&gt; on X702 &quot;peripherals connector&quot;&lt;div&gt;(level-shift, pullups)&lt;/div&gt;" vertex="1">
           <mxGeometry height="365.12" width="120" x="-130" y="112.51" as="geometry" />
         </mxCell>
-        <mxCell id="H8ekkz0zUjdbCF9T-yjm-10" edge="1" parent="1" source="OOOd5db5GXImQQD6YVal-14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1.003;entryY=0.117;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=none;endFill=0;" target="H8ekkz0zUjdbCF9T-yjm-9">
-          <mxGeometry relative="1" x="0.0084" as="geometry" />
+        <mxCell id="H8ekkz0zUjdbCF9T-yjm-10" edge="1" parent="1" source="OOOd5db5GXImQQD6YVal-14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;endArrow=none;endFill=0;">
+          <mxGeometry relative="1" x="0.7312" as="geometry">
+            <mxPoint x="-9.64" y="141" as="targetPoint" />
+          </mxGeometry>
         </mxCell>
         <mxCell id="H8ekkz0zUjdbCF9T-yjm-11" edge="1" parent="1" source="OOOd5db5GXImQQD6YVal-21" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1.007;entryY=0.271;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=none;endFill=0;" target="H8ekkz0zUjdbCF9T-yjm-9">
           <mxGeometry relative="1" x="0.0173" as="geometry" />
@@ -184,11 +186,17 @@
         <mxCell id="H8ekkz0zUjdbCF9T-yjm-35" edge="1" parent="1" source="H8ekkz0zUjdbCF9T-yjm-34" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.882;entryY=0.994;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=none;endFill=0;" target="H8ekkz0zUjdbCF9T-yjm-9">
           <mxGeometry relative="1" x="0.0073" as="geometry" />
         </mxCell>
+        <mxCell id="H8ekkz0zUjdbCF9T-yjm-36" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="Interrupt" vertex="1">
+          <mxGeometry height="21.96" width="50" x="10" y="158" as="geometry" />
+        </mxCell>
+        <mxCell id="H8ekkz0zUjdbCF9T-yjm-38" edge="1" parent="1" source="H8ekkz0zUjdbCF9T-yjm-36" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=1;entryY=0.155;entryDx=0;entryDy=0;entryPerimeter=0;endArrow=none;endFill=0;" target="H8ekkz0zUjdbCF9T-yjm-9">
+          <mxGeometry relative="1" x="-0.0052" as="geometry" />
+        </mxCell>
       </root>
     </mxGraphModel>
   </diagram>
-  <diagram id="J069AJvK9rUCMNz-5qRd" name="PowerSupply">
-    <mxGraphModel dx="1414" dy="841" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+  <diagram id="J069AJvK9rUCMNz-5qRd" name="PowerSupply (draft)">
+    <mxGraphModel dx="1724" dy="1026" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />

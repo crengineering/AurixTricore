@@ -43,8 +43,8 @@ pin is listed in [`docs/PINNING.md`](docs/PINNING.md).*
 lead, and the TriBoard through its own 2 A fuse. The ESC takes four
 bidirectional DShot300 lines and returns KISS telemetry on one UART. On the
 signal side, a breakout PCB on the peripherals connector X702 carries the level
-shifting and pull-ups for the IMU (SPI), the GNSS receiver (UART) and the
-barometer and magnetometer (I2C). Ethernet carries XCP to the groundstation,
+shifting and pull-ups for the IMU (SPI plus its data-ready interrupt), the
+GNSS receiver (UART) and the barometer and magnetometer (I2C). Ethernet carries XCP to the groundstation,
 the UART the console. Click to open full size.*
 
 Source: [`docs/system-architecture.drawio`](docs/system-architecture.drawio), editable in
