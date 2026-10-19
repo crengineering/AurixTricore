@@ -376,8 +376,8 @@ Every throttle setpoint (`motorManualSp[]` today, the flight controller's
 
 1. `0` stays `0` (stop).
 2. limited to the ceiling `Xcp_Cal.motorSpMax` (`CAL_motorSpMax`, default 1600 from
-   `DIAG_DEFAULT_MOTOR_SP_MAX` in `Diagnostics.h`, RAM only, restored on every reset;
-   a value outside 48..2047 acts as, and reads back as, the default);
+   `diag_loadDefaults()`, RAM only, restored on every reset; a value outside 48..2047 is
+   reverted to the last valid value);
 3. protocol range 48..2047 (the ceiling itself is validated into that range, so it can
    never produce 1..47 ESC commands or > 2047);
 4. the driver (`Dshot.c`) validates the frame again.

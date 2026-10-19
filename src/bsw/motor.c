@@ -162,10 +162,15 @@ boolean Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_comma
     boolean eth_link_alive       = Xcp_linkAlive();
     uint16  setpoint[DSHOT_MEND] = {0};
     boolean dshot_stream_allowed = FALSE;
+    static uint16 s_ceiling      = DSHOT_CMD_THROTTLE_MIN;    /* last valid motorSpMax (SWE1-FW-025) */
 
-    if ((g_xcpCal.motorSpMax < DSHOT_CMD_THROTTLE_MIN) || (g_xcpCal.motorSpMax > DSHOT_CMD_THROTTLE_MAX))
+    if ((g_xcpCal.motorSpMax >= DSHOT_CMD_THROTTLE_MIN) && (g_xcpCal.motorSpMax <= DSHOT_CMD_THROTTLE_MAX))
     {
-        g_xcpCal.motorSpMax = DIAG_DEFAULT_MOTOR_SP_MAX;       /* read-back = value in force */
+        s_ceiling = g_xcpCal.motorSpMax;
+    }
+    else
+    {
+        g_xcpCal.motorSpMax = s_ceiling;                       /* read-back = value in force */
     }
 
     switch(*state)
@@ -179,7 +184,7 @@ boolean Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_comma
             break;
 
         case MOTOR_ARMED:
-            Motor_state_armed(&dshot_stream_allowed, state, dshot_command_set, &eth_link_alive, motor_speed_rqst, setpoint, g_xcpCal.motorSpMax);
+            Motor_state_armed(&dshot_stream_allowed, state, dshot_command_set, &eth_link_alive, motor_speed_rqst, setpoint, s_ceiling);
             break;
 
         case MOTOR_FAILSAFE:

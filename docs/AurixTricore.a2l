@@ -854,7 +854,7 @@ ASAP2_VERSION 1 61
       VALUE 0x7003014E RL_UWORD 2047 NO_COMPU_METHOD 0 2047
     /end CHARACTERISTIC
 
-    /begin CHARACTERISTIC CAL_motorSpMax "DShot throttle ceiling for every setpoint source, 48..2047; default 1600 after every reset (50 A criterion, SYS2-PWR-001); raise to 2047 for thrust-rig runs only; out-of-range writes read back as 1600"
+    /begin CHARACTERISTIC CAL_motorSpMax "DShot throttle ceiling for every setpoint source, 48..2047; default 1600 after every reset (50 A criterion, SYS2-PWR-001); raise to 2047 for thrust-rig runs only; an out-of-range write is reverted to the last valid value"
       VALUE 0x70030150 RL_UWORD 2047 NO_COMPU_METHOD 48 2047
     /end CHARACTERISTIC
 

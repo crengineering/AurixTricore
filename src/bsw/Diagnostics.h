@@ -37,8 +37,8 @@
  *   0x48  uint16   motorManualSp[4]  manual DShot values M1..M4: 0 = stop, 48..2047 = throttle;
  *                                  zeroed on every exit from ARMED
  *   0x50  uint16   motorSpMax     DShot throttle ceiling for every setpoint source, 48..2047;
- *                                  an out-of-range value acts as, and is written back as, the
- *                                  default (DIAG_DEFAULT_MOTOR_SP_MAX); SWE1-FW-025
+ *                                  an out-of-range write is reverted by motor.c to the last valid
+ *                                  value; default 1600 (diag_loadDefaults); SWE1-FW-025
  *   0x52  uint16   motorSpReserved  pad (TASKING packs uint32 at 2-byte alignment, GCC at 4), 0
  */
 /* XCP_CAL_ADDR deleted, T5 (docs/MEMORY_PLACEMENT.md): Xcp.c's whitelist
@@ -46,11 +46,6 @@
  * (LCF_XCP_CAL_START) is the only place 0x70030100 is written down. */
 #define XCP_CAL_MAGIC   0x4C414358u
 #define XCP_CAL_SIZE    84u
-
-/* DShot ceiling default: sp 1600 on a full pack = 8257 rpm, 970 g, 10,2 A per motor,
- * 40,6 A for four (50 A criterion SYS2-PWR-001); thrust rig run 5 2026-10-18,
- * evidence 4829A25237BFB7C8; raise to 2047 over XCP for rig runs only. */
-#define DIAG_DEFAULT_MOTOR_SP_MAX 1600u
 
 typedef struct
 {

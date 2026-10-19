@@ -23,7 +23,7 @@ void setUp(void)
     s_state     = MOTOR_DISARMED;
     g_xcpCal.motorCmd       = 0u;
     g_xcpCal.motorManual    = 0u;
-    g_xcpCal.motorSpMax     = DIAG_DEFAULT_MOTOR_SP_MAX;
+    g_xcpCal.motorSpMax     = 1600u;
     for (uint32 i = 0u; i < DSHOT_MEND; i++) { g_xcpCal.motorManualSp[i] = 0u; }
 }
 
@@ -85,16 +85,17 @@ void test_arming_sequence_with_beacons(void)
 void test_ceiling_sweep(void)
 {
     static const uint16 ceilings[] = {0u, 47u, 48u, 1600u, 2047u, 2048u, 65535u};
+    uint16 eff = 1600u;                 /* last valid ceiling */
 
     arm();
     g_xcpCal.motorManual = MOTOR_CMD_MANUAL;
+    (void)clampM1(1u);                  /* adopt 1600 from setUp */
     for (uint32 c = 0u; c < 7u; c++)
     {
-        uint16 eff = ceilings[c];
+        if ((ceilings[c] >= 48u) && (ceilings[c] <= 2047u)) { eff = ceilings[c]; }
         uint32 hi;
         uint16 prev = 0u;
 
-        if ((eff < 48u) || (eff > 2047u)) { eff = 1600u; }
         hi = (eff > 48u) ? eff : 48u;
         g_xcpCal.motorSpMax = ceilings[c];
         for (uint32 sp = 0u; sp <= 65535u; sp++)
@@ -131,17 +132,23 @@ void test_spot_values(void)
     TEST_ASSERT_EQUAL_UINT16(2047u, clampM1(2048u));
 }
 
-void test_ceiling_validation_readback(void)
+void test_ceiling_validation_reverts_to_last_valid(void)
 {
     static const uint16 bad[]  = {0u, 47u, 2048u, 65535u};
     static const uint16 good[] = {48u, 1600u, 2047u};
+    static const uint16 base[] = {1600u, 2047u};
     uint16 cmd[DSHOT_MEND];
 
-    for (uint32 i = 0u; i < 4u; i++)
+    for (uint32 b = 0u; b < 2u; b++)
     {
-        g_xcpCal.motorSpMax = bad[i];
-        step(cmd);
-        TEST_ASSERT_EQUAL_UINT16(1600u, g_xcpCal.motorSpMax);
+        g_xcpCal.motorSpMax = base[b];
+        step(cmd);                                           /* adopt the valid value */
+        for (uint32 i = 0u; i < 4u; i++)
+        {
+            g_xcpCal.motorSpMax = bad[i];
+            step(cmd);
+            TEST_ASSERT_EQUAL_UINT16(base[b], g_xcpCal.motorSpMax);
+        }
     }
     for (uint32 i = 0u; i < 3u; i++)
     {
@@ -149,6 +156,17 @@ void test_ceiling_validation_readback(void)
         step(cmd);
         TEST_ASSERT_EQUAL_UINT16(good[i], g_xcpCal.motorSpMax);
     }
+}
+
+/* Must run first: needs the file-static s_ceiling of motor.c untouched, i.e. no valid
+ * motorSpMax adopted yet (setUp's 1600 is overridden before the first Motor_task call). */
+void test_fresh_ceiling_is_protocol_floor(void)
+{
+    g_xcpCal.motorSpMax = 0u;
+    arm();
+    g_xcpCal.motorManual = MOTOR_CMD_MANUAL;
+    TEST_ASSERT_EQUAL_UINT16(48u, clampM1(2047u));
+    TEST_ASSERT_EQUAL_UINT16(48u, g_xcpCal.motorSpMax);      /* read-back = value in force */
 }
 
 void test_manual_sp_not_rewritten_and_all_motors_same_ceiling(void)
@@ -189,10 +207,11 @@ void test_disarm_zeroes_everything(void)
 int main(void)
 {
     UNITY_BEGIN();
+    RUN_TEST(test_fresh_ceiling_is_protocol_floor);      /* first: needs the untouched static */
     RUN_TEST(test_arming_sequence_with_beacons);
     RUN_TEST(test_ceiling_sweep);
     RUN_TEST(test_spot_values);
-    RUN_TEST(test_ceiling_validation_readback);
+    RUN_TEST(test_ceiling_validation_reverts_to_last_valid);
     RUN_TEST(test_manual_sp_not_rewritten_and_all_motors_same_ceiling);
     RUN_TEST(test_disarm_zeroes_everything);
     return UNITY_END();
