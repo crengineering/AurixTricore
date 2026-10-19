@@ -81,7 +81,7 @@ static void ctrlReplayStep(const uint8_t *in, uint8_t *out)
         /* Physik */
         1.20f,          /* m     */
         9.81f,          /* g     */
-        782.0f,         /* w_max - thrust rig run 3 (2026-10-15), top of the measured sweep, evidence BB9B34CB480DCC42 */
+        865.0f,         /* w_lim: rotor-speed ceiling from the 50 A criterion (SYS2-PWR-001), sp 1600 on a full pack = 8257 rpm, thrust rig run 5 2026-10-18, evidence 4829A25237BFB7C8; NOT the motor top (w_motor_max 1080 rad/s) */
 
         /* Abtastzeit */
         0.001f,         /* Ts    */

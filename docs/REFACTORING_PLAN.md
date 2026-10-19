@@ -1070,7 +1070,7 @@ unchanged once f_s is well above omega_c -- true from 100 Hz upward.
 - Hover shaft speed `w_hover = sqrt(m*g/(4*kT))` = sqrt(11.772 / 2.0e-5) =
   **767.2 rad/s = 122.1 Hz** (`quad_params.m:57`; its inline comment "-> 990.5 rad/s"
   is **stale** -- `linearize/linearize_hover.m:15` gives the check value as 767).
-- At `w_max = 1200 rad/s` (`quad_params.m:11`) the shaft is 191 Hz.
+- At `w_max = 1200 rad/s` (historical; design ceiling since 2026-10-19: 865 rad/s, see CtrlReplay.c) (`quad_params.m:11`) the shaft is 191 Hz.
 - Two-blade blade-pass = 2x shaft: **244 Hz at hover, up to 382 Hz at full throttle.**
 
 | f_s | Nyquist | blade-pass 244-382 Hz |
