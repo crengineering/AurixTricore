@@ -60,6 +60,17 @@ target_link_libraries(test_corestats PRIVATE unity test_common)
 add_test(NAME corestats COMMAND test_corestats)
 
 #[[
+MotorLimit: reine Funktionen (Gas-Obergrenze + DShot-Protokollbereich),
+SWE1-FW-025. Braucht nur den Ifx_Types-Shim.
+]]
+add_executable(test_motorlimit
+    test_motorlimit.c
+    ${BSW}/MotorLimit.c
+)
+target_link_libraries(test_motorlimit PRIVATE unity test_common)
+add_test(NAME motorlimit COMMAND test_motorlimit)
+
+#[[
 GnssM9N: der Treiber steht NICHT in dieser Liste. test_GnssM9N.c zieht
 GnssM9N.c per #include herein, weil die interessante Logik (Checksumme,
 ASCII-Wandlung, Feldparser, Decoder) static ist und sonst unerreichbar waere.

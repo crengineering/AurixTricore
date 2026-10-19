@@ -98,8 +98,9 @@ that deliberately skips the "Add a field to `Xcp_Data`" chain above.
 
 ### Add a calibration parameter (RAM-only, lost on reset)
 
-`Diagnostics.h` `Xcp_Cal` struct → default in `Diagnostics.c` → A2L
-`CHARACTERISTIC` → GUI *Ethernet → Kalibrierung* tab. Never lands in flash.
+`Diagnostics.h` `Xcp_Cal` struct (bump `XCP_CAL_SIZE`) → default in `Diagnostics.c` →
+`tools/a2l_meta.json` entry, then `python tools/gen_a2l.py` regenerates the A2L and
+`LayoutAssert_gen.h` → GUI *Ethernet → Kalibrierung* tab. Never lands in flash.
 
 ### Add a persistent parameter (survives reset)
 

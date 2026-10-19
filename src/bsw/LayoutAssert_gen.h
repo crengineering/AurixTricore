@@ -121,7 +121,9 @@ typedef char layout_assert_Xcp_Cal_fsVext_offset[(offsetof(Xcp_Cal, fsVext) == 0
 typedef char layout_assert_Xcp_Cal_motorCmd_offset[(offsetof(Xcp_Cal, motorCmd) == 0x40u) ? 1 : -1];
 typedef char layout_assert_Xcp_Cal_motorManual_offset[(offsetof(Xcp_Cal, motorManual) == 0x44u) ? 1 : -1];
 typedef char layout_assert_Xcp_Cal_motorManualSp_offset[(offsetof(Xcp_Cal, motorManualSp) == 0x48u) ? 1 : -1];
-typedef char layout_assert_Xcp_Cal_sizeof[(sizeof(Xcp_Cal) == 0x50u) ? 1 : -1];
+typedef char layout_assert_Xcp_Cal_motorSpMax_offset[(offsetof(Xcp_Cal, motorSpMax) == 0x50u) ? 1 : -1];
+typedef char layout_assert_Xcp_Cal_motorSpReserved_offset[(offsetof(Xcp_Cal, motorSpReserved) == 0x52u) ? 1 : -1];
+typedef char layout_assert_Xcp_Cal_sizeof[(sizeof(Xcp_Cal) == 0x54u) ? 1 : -1];
 
 /* Xcp_Nvm (Nvm.h) */
 typedef char layout_assert_Xcp_Nvm_magic_offset[(offsetof(Xcp_Nvm, magic) == 0x0u) ? 1 : -1];

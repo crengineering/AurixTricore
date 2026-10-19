@@ -54,6 +54,8 @@ static void diag_loadDefaults(void)
     g_xcpCal.motorManualSp[1] = 0u;
     g_xcpCal.motorManualSp[2] = 0u;
     g_xcpCal.motorManualSp[3] = 0u;
+    g_xcpCal.motorSpMax   = DIAG_DEFAULT_MOTOR_SP_MAX;
+    g_xcpCal.motorSpReserved = 0u;
     g_xcpCal.magic        = XCP_CAL_MAGIC;
 }
 
