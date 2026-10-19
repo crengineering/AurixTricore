@@ -391,6 +391,13 @@ machine is host-tested through `test/test_motor.c`; the kill chain was recorded
 on the bench with a logic analyser on the DShot lines before any propeller
 existed.
 
+The bench tooling is home-made and lives in its own repositories: the DShot
+lines were decoded with a
+[5-channel logic analyser on an Arduino Nano 33 IoT](https://github.com/crengineering/dshot300-logic-analyzer-nano33iot)
+(~10 MSa/s, decoders for DShot frames, bidirectional replies and KISS
+telemetry), and the propulsion constants come from a single-motor thrust stand
+on a 0.1 g scale with its measurement protocol and fit scripts (`thrustrig`).
+
 **Measured on this board:**
 
 | | |
