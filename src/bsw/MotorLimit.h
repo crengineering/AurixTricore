@@ -5,8 +5,9 @@
 
 /* DShot throttle limiting, pure functions (no hardware, no globals) so the host
  * tests can reach them. Only the protocol range lives here; the ceiling value
- * itself is an aircraft calibration (Xcp_Cal.motorSpMax, default in
- * Diagnostics.c). SWE1-FW-022, SWE1-FW-025. */
+ * itself is an aircraft calibration (Xcp_Cal.motorSpMax, default: Diagnostics.h
+ * (DIAG_DEFAULT_MOTOR_SP_MAX), loaded by diag_loadDefaults(), passed by motor.c as
+ * fallback). SWE1-FW-022, SWE1-FW-025. */
 #define MOTORLIMIT_THROTTLE_MIN    48u      /* DShot 0 % throttle            */
 #define MOTORLIMIT_THROTTLE_MAX  2047u      /* DShot 11-bit top              */
 
