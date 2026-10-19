@@ -11,11 +11,12 @@
 #include "motor.h"
 #include "Xcp.h"
 #include "Diagnostics.h"
-#include "MotorLimit.h"
 
 /* Dshot protocol comments from betaflight */
 #define DSHOT_CMD_MOTOR_STOP      0u
 #define DSHOT_CMD_BEEP1           1u   /* BEEP2..BEEP5 = 2..5, see docs/DSHOT.md §4 - unused here */
+#define DSHOT_CMD_THROTTLE_MIN   48u
+#define DSHOT_CMD_THROTTLE_MAX 2047u
 
 #define DSHOT_BEEP_DELAY 1000u  /* 1s between beeps */
 
@@ -75,7 +76,25 @@ static void Motor_calc_clamp(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 d
 {
     for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
     {
-        dshot_command_set[motor_id] = MotorLimit_setpoint(motor_speed_rqst[motor_id], ceiling);
+        if (motor_speed_rqst[motor_id] > 0u)
+        {
+            if (motor_speed_rqst[motor_id] < DSHOT_CMD_THROTTLE_MIN)
+            {
+                dshot_command_set[motor_id] = DSHOT_CMD_THROTTLE_MIN;
+            }
+            else if (motor_speed_rqst[motor_id] > ceiling)        /* SWE1-FW-025, ceiling is 48..2047 */
+            {
+                dshot_command_set[motor_id] = ceiling;
+            }
+            else if (motor_speed_rqst[motor_id] > DSHOT_CMD_THROTTLE_MAX)
+            {
+                dshot_command_set[motor_id] = DSHOT_CMD_THROTTLE_MAX;
+            }
+            else
+            {
+                dshot_command_set[motor_id] = motor_speed_rqst[motor_id];
+            }
+        }
     }
 }
 
@@ -140,12 +159,14 @@ static void Motor_state_failsafe(boolean *dshot_stream_allowed, Motor_states_t *
 
 boolean Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_command_set[DSHOT_MEND], Motor_states_t *state)
 {
-    const uint16 ceiling         = MotorLimit_ceiling(g_xcpCal.motorSpMax, DIAG_DEFAULT_MOTOR_SP_MAX);
     boolean eth_link_alive       = Xcp_linkAlive();
     uint16  setpoint[DSHOT_MEND] = {0};
     boolean dshot_stream_allowed = FALSE;
 
-    if (g_xcpCal.motorSpMax != ceiling) { g_xcpCal.motorSpMax = ceiling; }  /* read-back = value in force */
+    if ((g_xcpCal.motorSpMax < DSHOT_CMD_THROTTLE_MIN) || (g_xcpCal.motorSpMax > DSHOT_CMD_THROTTLE_MAX))
+    {
+        g_xcpCal.motorSpMax = DIAG_DEFAULT_MOTOR_SP_MAX;       /* read-back = value in force */
+    }
 
     switch(*state)
     {
@@ -158,7 +179,7 @@ boolean Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_comma
             break;
 
         case MOTOR_ARMED:
-            Motor_state_armed(&dshot_stream_allowed, state, dshot_command_set, &eth_link_alive, motor_speed_rqst, setpoint, ceiling);
+            Motor_state_armed(&dshot_stream_allowed, state, dshot_command_set, &eth_link_alive, motor_speed_rqst, setpoint, g_xcpCal.motorSpMax);
             break;
 
         case MOTOR_FAILSAFE:

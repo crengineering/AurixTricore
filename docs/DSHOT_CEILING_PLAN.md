@@ -21,8 +21,7 @@ of the mixer limit is the sweep top of run 3, not a design value
 
 | Element | Owner / core | Change | Why the boundary |
 |---|---|---|---|
-| `src/bsw/MotorLimit.c/.h` (new) | BSW, CPU0 | pure functions: ceiling validation + per-value clamp, no hardware, no globals | the only host-testable seam; `motor.c` drags in `IfxPort.h`/`Dshot.h`/`Xcp.h` |
-| `src/bsw/motor.c` | BSW, CPU0, `Task_Dshot` 1 ms | `Motor_task` reads the cal once per call, validates + writes back; `Motor_calc_clamp` calls `MotorLimit_setpoint()` | the state machine is the single point every throttle source passes |
+| `src/bsw/motor.c` | BSW, CPU0, `Task_Dshot` 1 ms | `Motor_task` validates the cal + writes back; `Motor_calc_clamp` gets one more branch (`> ceiling`) | the state machine is the single point every throttle source passes; host-tested through `Motor_task` (`test/test_motor.c`, fakes) |
 | `Xcp_Cal.motorSpMax` | `Diagnostics.h/.c` | new `uint16` at `0x50`, default 1600 | RAM-only cal block = reset restores the default by construction |
 | A2L `CAL_motorSpMax` | `tools/a2l_meta.json` → `gen_a2l.py` | new CHARACTERISTIC 48..2047 | GUI is A2L-driven |
 
@@ -47,47 +46,28 @@ The pad is load-bearing: without it TASKING (uint32 2-aligned) gives `sizeof` 0x
 ### 2.2 Clamp — order of operations (per motor, per 1 ms frame)
 
 ```c
-/* MotorLimit.h */
-#define MOTORLIMIT_THROTTLE_MIN       48u    /* DShot 0 % throttle               */
-#define MOTORLIMIT_THROTTLE_MAX     2047u    /* DShot 11-bit top, SWE1-FW-022     */
-
-/* calSpMax if 48 <= calSpMax <= 2047, else fallback (caller's aircraft default) */
-uint16 MotorLimit_ceiling(uint16 calSpMax, uint16 fallback);
-
-/* sp == 0 -> 0 (stop)
- * else: v = min(sp, ceiling)          step 1: ceiling
- *       v = max(v, 48)                step 2: protocol floor   } SWE1-FW-022, last,
- *       v = min(v, 2047)              step 3: protocol top     } total for ANY ceiling
- * Result is always 0 or 48..2047, whatever ceiling is passed. */
-uint16 MotorLimit_setpoint(uint16 sp, uint16 ceiling);
+/* motor.c, Motor_calc_clamp: the existing chain of main, one branch added.
+ * sp == 0      -> command untouched (caller zero-inits, as before)
+ * sp <  48     -> 48          protocol floor
+ * sp > ceiling -> ceiling     NEW (ceiling is validated 48..2047, so 48/2047 still hold)
+ * sp > 2047    -> 2047        protocol top (kept)
+ */
 ```
 
 > Amended at gate 2 (Chris, 2026-10-19): default is a calibration default in Diagnostics
-> (`DIAG_DEFAULT_MOTOR_SP_MAX 1600u`, `Diagnostics.h`), MotorLimit stays aircraft-agnostic;
-> `motor.c` passes that constant as `fallback`.
+> (`DIAG_DEFAULT_MOTOR_SP_MAX 1600u`, `Diagnostics.h`). Amended at gate 2 (Chris,
+> 2026-10-19): no separate module, clamp stays in `motor.c`, host test through `Motor_task`
+> with fakes.
 
-The protocol clamp is applied after the ceiling, so even an unvalidated ceiling (0..47,
-> 2047) cannot put an ESC command (1..47, e.g. 36 = EEPROM write mode, DSHOT.md §4) or an
-out-of-protocol value on the wire. `MotorLimit_ceiling()` is the second, independent guard.
-
-`motor.c` changes (illustrative):
+Validation is the first thing in `Motor_task` and keeps the ceiling in 48..2047, so the
+existing 48 floor / 2047 top cannot be undone by the ceiling:
 
 ```c
-boolean Motor_task(...)
+if ((g_xcpCal.motorSpMax < DSHOT_CMD_THROTTLE_MIN) || (g_xcpCal.motorSpMax > DSHOT_CMD_THROTTLE_MAX))
 {
-    const uint16 ceiling = MotorLimit_ceiling(g_xcpCal.motorSpMax, DIAG_DEFAULT_MOTOR_SP_MAX);
-    if (g_xcpCal.motorSpMax != ceiling) { g_xcpCal.motorSpMax = ceiling; } /* read-back = value in force */
-    ...
-        case MOTOR_ARMED: Motor_state_armed(..., ceiling); break;
+    g_xcpCal.motorSpMax = DIAG_DEFAULT_MOTOR_SP_MAX;   /* read-back = value in force */
 }
-
-static void Motor_calc_clamp(const uint16 sp[DSHOT_MEND], uint16 cmd[DSHOT_MEND], uint16 ceiling)
-{
-    for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
-    {
-        cmd[motor_id] = MotorLimit_setpoint(sp[motor_id], ceiling);
-    }
-}
+... Motor_state_armed(..., g_xcpCal.motorSpMax);       /* one read, all four motors */
 ```
 
 - One read of the cal per `Motor_task` call → all four motors of a frame use the same ceiling.
@@ -95,10 +75,7 @@ static void Motor_calc_clamp(const uint16 sp[DSHOT_MEND], uint16 cmd[DSHOT_MEND]
   confirmation (SWE1-GUI-011) stays valid.
 - The write-back is safe without a lock: XCP DOWNLOAD is served by `Task_Lwip` and
   `Task_Dshot` runs in the same cooperative scheduler on CPU0 (`Cpu0_Main.c:164`, `:180`).
-- Behaviour for `sp == 0` is unchanged in effect (the caller zero-inits `dshot_command_set`,
-  `Cpu0_Main.c:79`); the new code writes the 0 explicitly instead of relying on that.
-- `motor.c`'s private `DSHOT_CMD_THROTTLE_MIN/MAX` (`motor.c:18-19`) are deleted in favour of
-  the `MOTORLIMIT_*` macros (one definition of the protocol range).
+- `motor.c`'s private `DSHOT_CMD_THROTTLE_MIN/MAX` (`motor.c:18-19`) stay as on main.
 
 ### 2.3 Default and reset
 
@@ -106,7 +83,7 @@ static void Motor_calc_clamp(const uint16 sp[DSHOT_MEND], uint16 cmd[DSHOT_MEND]
 and `motorSpReserved = 0u`. It runs at boot (`diagnosticsInit`, `Cpu0_Main.c:184`) and on a
 garbled cal magic (`Diagnostics.c:139-143`). The block is `.bss` in RAM (`Diagnostics.c:12-18`),
 never in `Xcp_Nvm`/DFLASH — **a 2047 cannot survive a reset**. Even before `diagnosticsInit`
-(`.bss` = 0), `MotorLimit_ceiling(0, DIAG_DEFAULT_MOTOR_SP_MAX)` = 1600.
+(`.bss` = 0), the validation in `Motor_task` yields 1600 on the first call.
 
 Not chosen: reverting the ceiling to 1600 on every exit from ARMED (like `motorManualSp[]`).
 Defensive, but a link blip on the rig would silently drop the ceiling mid-session; the
@@ -125,12 +102,13 @@ setpoint is a thrust step in one frame — rig only, intended.
 
 | Header | Change |
 |---|---|
-| `src/bsw/MotorLimit.h` (new) | `MotorLimit_ceiling(uint16, uint16)`, `MotorLimit_setpoint(uint16, uint16)`, two macros (48, 2047) — includes `Ifx_Types.h` only |
 | `src/bsw/Diagnostics.h` | `motorSpMax`, `motorSpReserved` appended; `XCP_CAL_SIZE` 84u; layout comment `0x50`/`0x52`, "84 bytes" |
 | `src/bsw/motor.h` | unchanged (`Motor_task` signature unchanged) |
 
-Host-testable: `MotorLimit.c` (whole 16-bit range). `motor.c` itself stays untested on the
-host (iLLD includes) — its change is two call sites, covered by review and the bench.
+Host-testable: `test/test_motor.c` #includes `motor.c` and drives the public `Motor_task()`
+(needs the `Ifx_Types`/`IfxPort` fakes; `g_xcpCal` and `Xcp_linkAlive()` are stubbed in the
+test): arming sequence with beacons (first host test of SWE1-FW-019), the whole 16-bit
+setpoint range per ceiling, validation read-back, `motorManualSp[]` not rewritten, DISARM.
 
 ## 5. Risks
 
@@ -155,9 +133,9 @@ branch of the same name). Each step builds; firmware behaviour is unchanged unti
 
 | # | Files | Change | Acceptance |
 |---|---|---|---|
-| T1 | `src/bsw/MotorLimit.c/.h` (new), `test/test_motorlimit.c` (new), `test/CMakeLists.txt` | pure module per §2.2, single exit per function (15.5 is enforced, see baseline), `u` literals; host test: (a) `MotorLimit_ceiling` with explicit fallbacks (1600, 1000): 0, 1, 47, 2048, 65535 → fallback; 48, 1600, 2047 → same. (b) `MotorLimit_setpoint` exhaustive over sp 0..65535 × ceiling {0, 1, 47, 48, 1600, 2047, 2048, 65535}: result 0 ⇔ sp 0, else 48 ≤ r ≤ min(max(ceiling, 48), 2047), monotonic in sp. (c) spot values, ceiling 1600: 1→48, 47→48, 48→48, 1599→1599, 1600→1600, 1601→1600, 2047→1600, 65535→1600; ceiling 2047: 1601→1601, 2047→2047, 2048→2047. Add the file to the TASKING build like the other BSW sources | `python tools/utest.py` green incl. sanitize variant; firmware builds (module unused yet); `python tools/misra_check.py` no new finding |
+| T1 | `test/test_motor.c` (new), `test/fakes/IfxPort.h` (new, empty), `test/fakes/Ifx_Types.h` (`sint8`), `test/CMakeLists.txt` | host test through `Motor_task` (no new module, amended at gate 2): DISARMED → INIT (beacons) → ARMED; ceilings {0, 47, 48, 1600, 2047, 2048, 65535} × sp 0..65535 on M1: 0 ⇔ sp 0, else 48 ≤ r ≤ min(max(ceiling,48),2047), monotonic; spot values (1600: 1599, 1600, 1601→1600, 2047→1600; 2047: 2047, 2048→2047); validation read-back 1600 for 0/47/2048/65535, itself for 48/1600/2047; `motorManualSp[]` not rewritten; DISARM zeroes | `python tools/utest.py` green incl. sanitize variant |
 | T2 | `src/bsw/Diagnostics.h`, `Diagnostics.c`, `tools/a2l_meta.json`, regenerate `docs/AurixTricore.a2l` + `src/bsw/LayoutAssert_gen.h` | append `uint16 motorSpMax; uint16 motorSpReserved;`, `XCP_CAL_SIZE 84u`, header layout comment; default `DIAG_DEFAULT_MOTOR_SP_MAX` (1600u, `Diagnostics.h`) + reserved 0 in `diag_loadDefaults`; meta: `"motorSpMax": {"name": "CAL_motorSpMax", "desc": "DShot throttle ceiling for every setpoint source, 48..2047; default 1600 after every reset (50 A criterion, SYS2-PWR-001); raise to 2047 for thrust-rig runs only; out-of-range writes read back as 1600", "maxdiff": "2047", "lo": "48", "hi": "2047"}`, `"motorSpReserved": {"skip": true}` | `python tools/gen_a2l.py` then `--check` exit 0; build (layout asserts `0x50`, `0x52`, `sizeof 0x54`); `check_memmap` OK; MISRA clean |
-| T3 | `src/bsw/motor.c` | per §2.2: include `MotorLimit.h`; delete `DSHOT_CMD_THROTTLE_MIN/MAX`; ceiling read + write-back at the top of `Motor_task`; pass `ceiling` into `Motor_state_armed` → `Motor_calc_clamp` (update both prototypes, `motor.c:28`, `:31`); clamp body = `MotorLimit_setpoint` | builds; MISRA: `motor.c` stays at zero baseline entries; host tests still green |
+| T3 | `src/bsw/motor.c` | minimal (amended at gate 2): `ceiling` parameter through `Motor_state_armed` → `Motor_calc_clamp`, one `else if (> ceiling)` branch in the existing chain, range check + write-back at the top of `Motor_task`; `DSHOT_CMD_THROTTLE_MIN/MAX` stay | builds; MISRA: `motor.c` stays at zero baseline entries; host tests green |
 | T4 | `docs/DIAGNOSTICS.md` (table after `:200`, German like its rows), `docs/DSHOT.md` (new `## 8. FC-side setpoint chain` before `## Traps`: source → ceiling → 48/2047 → driver validation, beacons bypass), `docs/CODEMAP.md` (*Add a calibration parameter*, `:99-102`: add `tools/a2l_meta.json`, `gen_a2l.py` regenerates A2L + `LayoutAssert_gen.h`, bump `XCP_CAL_SIZE`), `src/bsw/Version.h` step bump | rows: `0x50 motorSpMax DShot 1600 Gas-Obergrenze für jede Sollwertquelle (48..2047), nach jedem Reset 1600, 2047 nur am Schubprüfstand; Werte außerhalb werden als 1600 zurückgeschrieben` and `0x52 motorSpReserved – 0 Füllwort` | `python tools/check_docs.py` exit 0 |
 | T5 | — (bench, §6.1) | B0–B9 | evidence row proposed to the orchestrator (INDEX), results reported, not entered |
 | T6 | — | report: chain, build/test/MISRA exit codes, bench table, `EscMnDshotCmd` values | flight-reviewer verdict |

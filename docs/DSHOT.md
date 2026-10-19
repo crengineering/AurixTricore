@@ -372,13 +372,14 @@ paths specific to this use.
 
 Every throttle setpoint (`motorManualSp[]` today, the flight controller's
 `motor_speed_rqst[]` later) passes the one clamp in `motor.c` while ARMED
-(`MotorLimit.c`, SWE1-FW-025 / SWE1-FW-022):
+(`Motor_calc_clamp` in `motor.c`, SWE1-FW-025 / SWE1-FW-022):
 
 1. `0` stays `0` (stop).
 2. limited to the ceiling `Xcp_Cal.motorSpMax` (`CAL_motorSpMax`, default 1600 from
    `DIAG_DEFAULT_MOTOR_SP_MAX` in `Diagnostics.h`, RAM only, restored on every reset;
    a value outside 48..2047 acts as, and reads back as, the default);
-3. protocol clamp 48..2047 last - no ceiling can produce 1..47 (ESC commands) or > 2047;
+3. protocol range 48..2047 (the ceiling itself is validated into that range, so it can
+   never produce 1..47 ESC commands or > 2047);
 4. the driver (`Dshot.c`) validates the frame again.
 
 The INIT beacons (1..5) are not throttle and bypass the ceiling. `motorManualSp[]` is
