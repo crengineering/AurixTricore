@@ -36,23 +36,21 @@ pin is listed in [`docs/PINNING.md`](docs/PINNING.md).*
 
 ### System architecture
 
-[![System architecture: LiPo pack through anti-spark connector, fusing and distribution to the 4-in-1 ESC and four motors, a separately fused and filtered branch into the board's X501 power connector, and every sensor line off the peripherals header](docs/img/system-architecture.png)](docs/img/system-architecture.png)
+[![System architecture: 4S pack through an 80 A fuse and XT60 distribution to the 4-in-1 ESC and four motors, a 2 A fused branch into the TriBoard, the breakout PCB on the peripherals connector carrying IMU, GNSS, barometer and magnetometer, Ethernet and UART to the groundstation](docs/img/system-architecture.png)](docs/img/system-architecture.png)
 
-*System architecture. Power distribution from the pack through the XT90-S
-anti-spark connector, an 80 A fuse and the XT60 splitter to the 4-in-1 ESC and
-the four motors. A separately fused 2 A branch feeds the board's X501 connector
-through a ferrite, a TVS diode and a 470 µF buffer. On the signal side, every
-sensor line off the peripherals header including the level shifting and the
-pull-ups. Click to open full size and zoom.*
-
-> The propulsion half is built and measured: pack, fuse, ESC, motors and the
-> four DShot lines, characterised one motor at a time on a thrust rig (see
-> [Propulsion](#propulsion)). The diagram still shows the XT90-S anti-spark
-> connector from the planning stage; it was dropped, the pack plugs in over XT60.
+*System architecture as built. The 4S 4000 mAh pack feeds the 4-in-1 ESC
+(Flywoo GOKU G55M, AM32, 55 A) through an 80 A fuse and an XT60 distribution
+lead, and the TriBoard through its own 2 A fuse. The ESC takes four
+bidirectional DShot300 lines and returns KISS telemetry on one UART. On the
+signal side, a breakout PCB on the peripherals connector X702 carries the level
+shifting and pull-ups for the IMU (SPI), the GNSS receiver (UART) and the
+barometer and magnetometer (I2C). Ethernet carries XCP to the groundstation,
+the UART the console. Click to open full size.*
 
 Source: [`docs/system-architecture.drawio`](docs/system-architecture.drawio), editable in
-[diagrams.net](https://app.diagrams.net/). The PNG is an editable export too, so
-either file reopens as a diagram.
+[diagrams.net](https://app.diagrams.net/) — page 1 is this drawing, page 2 keeps
+the earlier wire-level draft of the power path. The PNG is an editable export
+too, so either file reopens as a diagram.
 
 ---
 
