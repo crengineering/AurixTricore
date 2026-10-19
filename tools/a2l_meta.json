@@ -602,6 +602,16 @@
       "maxdiff": "2047",
       "lo": "0",
       "hi": "2047"
+    },
+    "motorSpMax": {
+      "name": "CAL_motorSpMax",
+      "desc": "DShot throttle ceiling for every setpoint source, 48..2047; default 1600 after every reset (50 A criterion, SYS2-PWR-001); raise to 2047 for thrust-rig runs only; an out-of-range write is reverted to the last valid value",
+      "maxdiff": "2047",
+      "lo": "48",
+      "hi": "2047"
+    },
+    "motorSpReserved": {
+      "skip": true
     }
   },
   "Xcp_Nvm": {

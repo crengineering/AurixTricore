@@ -60,6 +60,17 @@ target_link_libraries(test_corestats PRIVATE unity test_common)
 add_test(NAME corestats COMMAND test_corestats)
 
 #[[
+Motor (SWE1-FW-019 arming state machine, SWE1-FW-025 DShot ceiling): test_motor.c
+#includes motor.c and drives the public Motor_task(). Needs the Ifx_Types and
+IfxPort fakes only; g_xcpCal and Xcp_linkAlive() are stubbed in the test.
+]]
+add_executable(test_motor
+    test_motor.c
+)
+target_link_libraries(test_motor PRIVATE unity test_common)
+add_test(NAME motor COMMAND test_motor)
+
+#[[
 GnssM9N: der Treiber steht NICHT in dieser Liste. test_GnssM9N.c zieht
 GnssM9N.c per #include herein, weil die interessante Logik (Checksumme,
 ASCII-Wandlung, Feldparser, Decoder) static ist und sonst unerreichbar waere.

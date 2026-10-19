@@ -25,10 +25,10 @@
 /*--------------------------Function Declaration------------------------------*/
 /******************************************************************************/
 static boolean Motor_beep          (uint16 dshot_command_set[DSHOT_MEND]);
-static void    Motor_calc_clamp    (const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_command_set[DSHOT_MEND]);
+static void    Motor_calc_clamp    (const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_command_set[DSHOT_MEND], uint16 ceiling);
 static void    Motor_state_disarmed(boolean *dshot_stream_allowed, Motor_states_t *state);
 static void    Motor_state_init    (boolean *dshot_stream_allowed, Motor_states_t *state, uint16 dshot_command_set[DSHOT_MEND]);
-static void    Motor_state_armed   (boolean *dshot_stream_allowed, Motor_states_t *state, uint16 dshot_command_set[DSHOT_MEND], const boolean *eth_link_alive, const uint16 motor_speed_rqst[DSHOT_MEND], uint16  setpoint[DSHOT_MEND]);
+static void    Motor_state_armed   (boolean *dshot_stream_allowed, Motor_states_t *state, uint16 dshot_command_set[DSHOT_MEND], const boolean *eth_link_alive, const uint16 motor_speed_rqst[DSHOT_MEND], uint16  setpoint[DSHOT_MEND], uint16 ceiling);
 static void    Motor_state_failsafe(boolean *dshot_stream_allowed, Motor_states_t *state, const boolean *eth_link_alive);
 
 /******************************************************************************/
@@ -72,7 +72,7 @@ static boolean Motor_beep(uint16 dshot_command_set[DSHOT_MEND])
     return motor_beep_finished;
 }
 
-static void Motor_calc_clamp(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_command_set[DSHOT_MEND])
+static void Motor_calc_clamp(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_command_set[DSHOT_MEND], uint16 ceiling)
 {
     for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
     {
@@ -81,6 +81,10 @@ static void Motor_calc_clamp(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 d
             if (motor_speed_rqst[motor_id] < DSHOT_CMD_THROTTLE_MIN)
             {
                 dshot_command_set[motor_id] = DSHOT_CMD_THROTTLE_MIN;
+            }
+            else if (motor_speed_rqst[motor_id] > ceiling)        /* SWE1-FW-025, ceiling is 48..2047 */
+            {
+                dshot_command_set[motor_id] = ceiling;
             }
             else if (motor_speed_rqst[motor_id] > DSHOT_CMD_THROTTLE_MAX)
             {
@@ -112,7 +116,7 @@ static void Motor_state_init(boolean *dshot_stream_allowed, Motor_states_t *stat
     }
 }
 
-static void Motor_state_armed(boolean *dshot_stream_allowed, Motor_states_t *state, uint16 dshot_command_set[DSHOT_MEND], const boolean *eth_link_alive, const uint16 motor_speed_rqst[DSHOT_MEND], uint16  setpoint[DSHOT_MEND])
+static void Motor_state_armed(boolean *dshot_stream_allowed, Motor_states_t *state, uint16 dshot_command_set[DSHOT_MEND], const boolean *eth_link_alive, const uint16 motor_speed_rqst[DSHOT_MEND], uint16  setpoint[DSHOT_MEND], uint16 ceiling)
 {
     *dshot_stream_allowed = TRUE;
     if (*eth_link_alive == FALSE)                 /* 2026-10-16: compared the POINTER before - failsafe entry was dead */
@@ -135,7 +139,7 @@ static void Motor_state_armed(boolean *dshot_stream_allowed, Motor_states_t *sta
         {
             for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++) {setpoint[motor_id] = motor_speed_rqst[motor_id];}
         }
-        Motor_calc_clamp( setpoint, dshot_command_set);
+        Motor_calc_clamp( setpoint, dshot_command_set, ceiling);
     }
 }
 
@@ -158,6 +162,16 @@ boolean Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_comma
     boolean eth_link_alive       = Xcp_linkAlive();
     uint16  setpoint[DSHOT_MEND] = {0};
     boolean dshot_stream_allowed = FALSE;
+    static uint16 s_ceiling      = DSHOT_CMD_THROTTLE_MIN;    /* last valid motorSpMax (SWE1-FW-025) */
+
+    if ((g_xcpCal.motorSpMax >= DSHOT_CMD_THROTTLE_MIN) && (g_xcpCal.motorSpMax <= DSHOT_CMD_THROTTLE_MAX))
+    {
+        s_ceiling = g_xcpCal.motorSpMax;
+    }
+    else
+    {
+        g_xcpCal.motorSpMax = s_ceiling;                       /* read-back = value in force */
+    }
 
     switch(*state)
     {
@@ -170,7 +184,7 @@ boolean Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_comma
             break;
 
         case MOTOR_ARMED:
-            Motor_state_armed(&dshot_stream_allowed, state, dshot_command_set, &eth_link_alive, motor_speed_rqst, setpoint);
+            Motor_state_armed(&dshot_stream_allowed, state, dshot_command_set, &eth_link_alive, motor_speed_rqst, setpoint, s_ceiling);
             break;
 
         case MOTOR_FAILSAFE:
