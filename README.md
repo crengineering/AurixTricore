@@ -4,12 +4,14 @@ Bare-metal firmware for the Infineon **AURIX TC399** (6× TriCore, 300 MHz) on t
 TriBoard TC3X9 V2.0. No RTOS — a cooperative scheduler per core, iLLD for the
 hardware, lwIP for Ethernet.
 
-A flight-controller platform: an Ethernet-attached measurement and calibration
-target that reads inertial, barometric, magnetic and GNSS sensors, monitors its
-own health, and exposes all of it live over **XCP-on-UDP** to a PC GUI.
+A flight-controller platform: it reads inertial, barometric, magnetic and GNSS
+sensors, estimates attitude and position on a dedicated core, drives four ESCs
+over bidirectional **DShot300**, monitors its own health, and exposes all of it
+live over **XCP-on-UDP** to a PC GUI.
 
-**Firmware version: v1.19.27** (`src/bsw/Version.h`) · Hardware-validated on the
-bench.
+**Firmware version: v1.19.27** (`src/bsw/Version.h`) · sensors, estimator and
+actuation hardware-validated on the bench and on a thrust rig. The aircraft has
+not flown yet.
 
 ### Companion repositories
 
@@ -23,12 +25,14 @@ This is the firmware half of a three-repository project.
 
 ---
 
-![TriBoard TC3X9 with the IMU, barometer, magnetometer and GNSS receiver wired to the PERIPHERALS header](docs/img/AURIX-Triboard-setup.jpg)
+![Flight stack on the F450 frame: top view of the TriBoard with IMU, barometer, magnetometer and GNSS receiver, bottom view of the 4-in-1 ESC](docs/img/flight-stack.png)
 
-*TriBoard TC3X9 V2.0 running v1.18.0. ICM-42688-P on QSPI0, BMP581 and MMC5983MA
-sharing I2C0, NEO-M9N on ASCLIN4, RGMII to the host running AurixGUI, console on
-ASCLIN0 over the on-board USB-to-UART. Every pin is listed in
-[`docs/PINNING.md`](docs/PINNING.md).*
+*The flight stack on the F450 frame. Top: TriBoard TC3X9 V2.0 on its printed
+adapter plate — ICM-42688-P on QSPI0, BMP581 and MMC5983MA sharing I2C0,
+NEO-M9N on ASCLIN4, RGMII to the host running AurixGUI, console and flashing
+over the on-board USB-to-UART. Bottom: the Flywoo GOKU G55M 4-in-1 ESC,
+connected to the board with four DShot300 lines and one telemetry UART. Every
+pin is listed in [`docs/PINNING.md`](docs/PINNING.md).*
 
 ### System architecture
 
@@ -41,10 +45,10 @@ through a ferrite, a TVS diode and a 470 µF buffer. On the signal side, every
 sensor line off the peripherals header including the level shifting and the
 pull-ups. Click to open full size and zoom.*
 
-> **Target design, not yet built.** The sensor and Ethernet half is implemented and
-> hardware-validated; the propulsion half — LiPo, fusing, ESC, motors and the DShot
-> lines to them — is the planned architecture. DShot is an open item in
-> [Status](#status).
+> The propulsion half is built and measured: pack, fuse, ESC, motors and the
+> four DShot lines, characterised one motor at a time on a thrust rig (see
+> [Propulsion](#propulsion)). The diagram still shows the XT90-S anti-spark
+> connector from the planning stage; it was dropped, the pack plugs in over XT60.
 
 Source: [`docs/system-architecture.drawio`](docs/system-architecture.drawio), editable in
 [diagrams.net](https://app.diagrams.net/). The PNG is an editable export too, so
@@ -72,16 +76,20 @@ either file reopens as a diagram.
 | Magnetometer hard-iron calibration, stored in NVM | ✅ HW-validated — \|B\| spread 135 % → 13 % |
 | Live estimator tuning over XCP (`Xcp_FusionCal`, RAM only) | ✅ HW-validated |
 | Flight-control feedback in `flight_ctrl`'s own units and frames | ✅ published |
-| Spec-based host test suite for the estimator | ✅ 9 tests — `docs/FUSION_SPEC.md` |
-| Diagnostics: 28 debounced status bits, per-device peripheral health | ✅ |
+| Host unit tests: 16 suites, ~200 tests, estimator tests spec-based | ✅ — `docs/FUSION_SPEC.md` |
+| Diagnostics: 32 debounced status bits, per-device peripheral health | ✅ |
 | GPIO / PWM feature on Port 00 (GTM TOM), XCP-controlled duty | ✅ |
 | Flight-control replay harness (UDP 5556) | ✅ |
 | Host unit tests + MISRA gate in CI | ✅ |
-| DShot ESC output, CAN, EVADC | 📋 planned — `docs/PINNING.md`, `docs/CAN_ADC_PLAN.md` |
+| DShot300 to four ESCs, bidirectional eRPM + KISS telemetry | ✅ HW-validated — `docs/DSHOT.md` |
+| Arming state machine, XCP disarm, link-loss failsafe | ✅ bench-recorded, 502 ms measured |
+| Rotor-speed ceiling as a RAM calibration (`CAL_motorSpMax`, default 1600) | ✅ |
+| CAN, EVADC | 📋 planned — `docs/CAN_ADC_PLAN.md` |
 
 **CPU1 is the dedicated flight core** (`NavTask_step`: IMU read → AHRS →
-fusion, ~0.7 % load, 50 Hz today) — CPU0 keeps comms, sensors and
-housekeeping at ~9.4 %; CPU2–CPU5 remain idle. See [Status](#status).
+fusion, clocked by the IMU's data-ready interrupt at 1014 Hz, 15.5 % load) —
+CPU0 keeps comms, sensors, the 1 kHz DShot task and housekeeping; CPU2–CPU5
+remain idle. See [Status](#status).
 
 ---
 
@@ -165,7 +173,7 @@ meaningful. Controller design, tuning and the MiL/SiL verification live there.
 
 | Core | Role | LED |
 |---|---|---|
-| CPU0 | Ethernet/lwIP, XCP, sensors, diagnostics, NVM, housekeeping | D306 (P20.11) |
+| CPU0 | Ethernet/lwIP, XCP, sensors, DShot + motor state machine (1 ms), diagnostics, NVM, housekeeping | D306 (P20.11) |
 | CPU1 | **flight core** — `NavTask_step` (IMU → AHRS → fusion), nothing else but the LED | D307 (P20.12) |
 | CPU2 | sync + 10 ms idle task | — (D308's pin is now QSPI0 SCLK) |
 | CPU3 | sync + 10 ms idle task | D309 (P20.14) |
@@ -250,8 +258,8 @@ stays on CPU0.
 
 ### Fixed XCP memory map
 
-Blocks are pinned with TASKING `__at`, 256 bytes apart, so clients need no map
-file:
+Blocks are placed by the linker script (`Lcf_Tasking_Tricore_Tc.lsl`),
+256 bytes apart, so clients need no map file:
 
 | Block | Address | Backing | Defined in |
 |---|---|---|---|
@@ -261,6 +269,8 @@ file:
 | `Xcp_Gpio` — pin modes / duty | `0x70030300` | RAM only | `gpio.h` |
 | `I2c_Debug` — bus diagnostics | `0x70030400` | RAM only | `I2c.h` |
 | `Xcp_Fusion` — navigation state | `0x70030500` | RAM only | `Measurements.h` |
+| `Xcp_FusionCal` — estimator tuning | `0x70030600` | RAM only | `FusionCal.h` |
+| `Xcp_Esc` — motor state + ESC telemetry | `0x70030700` | RAM only | `Measurements.h` |
 
 `Xcp_Data` is **full**: its last field ends within 8 bytes of the 256-byte
 boundary, so the next appended measurement collides with `Xcp_Cal`.
@@ -294,6 +304,7 @@ Static IP `192.168.0.10/24`, set in `Cpu0_Main.c`.
 | BMP581 barometer | I2C0 | `0x47` | 50 Hz | `docs/BMP581.md` |
 | MMC5983MA magnetometer | I2C0 | `0x30` | 50 Hz | `docs/MMC5983MA.md` |
 | u-blox NEO-M9N GNSS | ASCLIN4 | UART 38 400 | 10 Hz | `docs/GNSS_UBX.md` |
+| Flywoo GOKU G55M ESC telemetry (KISS, 4 channels on one pad) | ASCLIN6 | UART | 50 Hz publish | `docs/ESC_AM32.md` |
 
 `Bmp388.c` and `Mpu6050.c` remain in-tree as a validated driver pool — compiled,
 never called, held with justified MISRA 8.7 deviations.
@@ -360,6 +371,38 @@ physical (foam or a static port), not filtering.
 
 ---
 
+### Propulsion
+
+Four motors on a 4-in-1 ESC (Flywoo GOKU G55M, AM32 firmware), driven with
+**bidirectional DShot300** on the GTM: ATOM channels in PWM mode generate the
+16 pulse widths of a frame, then the pad flips to input and a TIM channel
+timestamps the ESC's eRPM reply on the same wire — one frame per millisecond
+per motor, the pad direction switched well inside the ESC's 30 µs turnaround.
+KISS telemetry (rpm, temperature, voltage, current) arrives on a shared UART as
+an independent cross-check. Every protocol figure is cited to the AM32 source
+in `docs/DSHOT.md`; the GTM mode choice is argued in `docs/GTM.md`.
+
+`motor.c` is the single point every throttle source passes: a state machine
+DISARMED → INIT (arming beeps) → ARMED → FAILSAFE, armed and disarmed over XCP,
+with a link-loss failsafe that stops the stream 500 ms after the last XCP
+command. The throttle ceiling is a RAM calibration (`CAL_motorSpMax`, default
+1600 of 2047), so a reset restores the safe value by construction. The state
+machine is host-tested through `test/test_motor.c`; the kill chain was recorded
+on the bench with a logic analyser on the DShot lines before any propeller
+existed.
+
+**Measured on this board:**
+
+| | |
+|---|---|
+| kill chain | DISARM → zero frames within 6 ms · link loss → stream stops after 502 ms |
+| bidirectional eRPM vs KISS rpm | median +0.2 %, p5/p95 −0.8/+1.5 % over 500–9000 rpm |
+| reply validity | one valid eRPM reply per frame on all four motors, spinning or not |
+| thrust rig, one motor on the flight pack | 1410 g at 9886 rpm and 17.6 A at full throttle · kT = 12.45 µN/(rad/s)² |
+| rotor-speed ceiling | setpoint 1600 ≈ 865 rad/s keeps four motors under the 50 A pack criterion |
+
+---
+
 ## Repository layout
 
 ```
@@ -367,7 +410,8 @@ src/bsw/              Base software (see Architecture above)
 src/asw/              Application software — flight_ctrl.c, CtrlReplay.c
 test/                 Host unit tests: vendored Unity 2.7.0, CMake, fakes
 tools/                Python: on-target integration tests + host test/MISRA runners
-docs/                 Pin SSoT, per-peripheral notes, plans, A2L, vendor PDFs
+calibration/          board.json — versioned magnetometer calibration, restored after a reflash
+docs/                 Pin SSoT, per-peripheral notes, architecture, plans, A2L, vendor PDFs
 configs/              GUI plot configurations
 Configurations/       PLL init, boot mode header, startup software, lwipopts
 Libraries/Ethernet/   lwIP + Infineon port + RTL8211F PHY driver
@@ -397,8 +441,8 @@ python tools\utest.py --variant sanitize :: ASan + UBSan (CI only — no libasan
 ```
 
 **On-target integration tests** — `tools/xcp_test.py`, `nvm_test.py`,
-`ctrl_replay_test.py`, `gpio_pwm_test.py`: real board, real peripherals, pyXCP
-over Ethernet. Complementary, not a substitute.
+`ctrl_replay_test.py`, `gpio_pwm_test.py`, `killchain_test.py`: real board,
+real peripherals, pyXCP over Ethernet. Complementary, not a substitute.
 
 **CI** (GitHub Actions, `ubuntu-latest`):
 
@@ -406,6 +450,7 @@ over Ethernet. Complementary, not a substitute.
 |---|---|
 | `unit_tests.yml` | unit tests · ASan+UBSan · coverage (artifact + summary) · warnings at `-Og` and `-Os` |
 | `misra.yml` | cppcheck MISRA addon (pinned 2.21.0) over `src/` |
+| `a2l.yml` | the committed A2L must match what the C structs generate |
 
 The MISRA gate uses a **baseline ratchet**: legacy findings are grandfathered in
 `tools/misra_baseline.txt`, only *new* violations fail. New code should be
@@ -431,6 +476,13 @@ reproduces locally with one command.
 | `docs/FUSION.md` | **Sensor fusion** — architecture, bench numbers, mounting transforms, calibration procedure, and the failure modes already hit |
 | `docs/FUSION_SPEC.md` | **What the estimator must do**, stated independently of how it does it — the source the test suite is written from |
 | `docs/CTRL_REPLAY.md` | Replay harness protocol |
+| `docs/DSHOT.md` | **DShot300, bidirectional reply, KISS telemetry** — every figure cited to the AM32 source |
+| `docs/ESC_AM32.md` | Flywoo GOKU G55M: pad map, electrical rules, the EEPROM settings that bit |
+| `docs/GTM.md` | Bosch GTM-IP: why ATOM PWM mode for transmit and TIM event mode for receive |
+| `docs/IMU_INTERRUPT.md` | IMU data-ready interrupt: pin, wiring, measured interval distribution |
+| `docs/NAV_TUNING.md` | Outdoor tuning pass on the navigation filter, from five MF4 traces |
+| `docs/MEMORY_PLACEMENT.md` | Why fixed placement moved from `__at()` to the linker |
+| `docs/architecture/SWE2_SWARC-FW.md` | Software architecture: module allocation, budgets, change log |
 | `docs/CAN_ADC_PLAN.md` | MCMCAN + EVADC plan (blocked on hardware) |
 | `docs/AurixTricore.a2l` | ASAP2 description for XCP masters — generated by `tools/gen_a2l.py`, gated by CI |
 | `docs/SPI_IMU.html` | How SPI reaches the flight IMU — QSPI0 bring-up walkthrough |
@@ -487,6 +539,19 @@ reproduces locally with one command.
       `baroBias` converged 1.92 → 0.01 m — that state is only observable with
       barometer and GNSS altitude both present, so it had never run before
 
+**Actuation**
+
+- [x] Bidirectional DShot300 to four ESCs on GTM ATOM0/TIM, one frame per
+      millisecond per motor, eRPM decoded from the reply on the same wire —
+      agrees with the ESC's KISS telemetry to +0.2 % median
+- [x] Arming state machine with XCP disarm and link-loss failsafe (502 ms
+      measured); kill chain recorded on the bench with a logic analyser on the
+      DShot lines before any propeller was fitted
+- [x] Rotor-speed ceiling as a RAM calibration, default 1600, derived from the
+      thrust rig's current measurement against the 50 A pack criterion
+- [x] Propulsion constants (kT, w_lim) measured on a single-motor thrust rig
+      and mirrored into the PIL replay parameter set
+
 **Robustness**
 
 - [x] In-house bounded I2C transfer engine replacing the iLLD calls, which spin
@@ -494,7 +559,7 @@ reproduces locally with one command.
       60 s of deliberate wire-wiggling
 - [x] I2C bus recovery (9 SCL pulses + kernel and FIFO reset) so a slave
       brown-out no longer takes every device on the bus down until a power cycle
-- [x] 28 debounced diagnostic status bits, four fault classes per peripheral
+- [x] 32 debounced diagnostic status bits, four fault classes per peripheral
 - [x] Persistent parameters in DFLASH0: two-sector ping-pong with CRC, strict
       RAM/NVM split so a calibration experiment can never brick the stored set
 
@@ -520,14 +585,17 @@ reproduces locally with one command.
       firmware, A2L and GUI (`docs/CODEMAP.md`).
 - [ ] **Diagnostic bit word is full.** All 32 bits are allocated (bit 31 is
       `DIAG_CAL_INVALID`). A fifth peripheral needs a second bitmask word.
-- [ ] **CPU2–CPU5 still idle.** CPU1 now carries the flight chain at the IMU's
+- [ ] **CPU2–CPU5 still idle.** CPU1 carries the flight chain at the IMU's
       measured 1014.2 Hz (**15.5 % load, 171 µs worst dispatch** against a
-      300 µs budget); the rest of CPU0's load — I2C sensors, GNSS, NVM, comms —
-      is deliberately unmoved (`docs/REFACTORING_PLAN.md` §2.2, D1)
-      (`docs/REFACTORING_PLAN.md` T14–T16), not yet done.
-- [ ] **DShot ESC output** — bidirectional DShot300 on GTM ATOM0/TIM, with RPM
-      feedback for a notch filter. Pins allocated in `docs/PINNING.md`, driver
-      not yet written.
+      300 µs budget); the rest of CPU0's load — I2C sensors, GNSS, NVM, comms,
+      DShot — is deliberately unmoved (`docs/REFACTORING_PLAN.md` §2.2, D1;
+      T14–T16 not yet done).
+- [ ] **The controller is not closed on the target yet.** `flight_ctrl` runs
+      in the replay harness; the motor state machine's flight-controller input
+      is fed zeros. Closing estimator → controller → DShot is the next step,
+      gated by the test stages in the Quadrocopter repository.
+- [ ] **RPM notch filter** from the bidirectional-DShot speed feedback, once
+      the vibration spectrum has been measured with propellers on.
 - [ ] **CAN (MCMCAN) and EVADC** — planned in `docs/CAN_ADC_PLAN.md`, blocked on
       test hardware.
 - [ ] **Reported uncertainty is ~8× optimistic.** `varN` claims σ = 0.3 m while
@@ -585,6 +653,17 @@ watchdog on CPU0.
 **6. New iLLD subsystems are `.cproject`-excluded by default.** Adding a bus
 means un-excluding its directory *and* using root-relative include paths.
 
+**7. AM32's low-RPM power protect scales with the KV stored in the ESC.** With
+the factory setting of 2220 KV, the 880 KV motor plateaued at 4214 rpm from
+DShot 800 upward — flat, jitter-free, and looking exactly like a driver bug.
+Rewriting the motor-KV byte to 860 removed it (`docs/ESC_AM32.md` §6). The
+ESCs also stay silent across an AURIX reflash until they are power-cycled.
+
+**8. A wrong GCR decode table fails only above a speed.** Five wrong entries
+meant every reply period under 2048 µs was undecodable: eRPM tracked KISS
+perfectly up to 4185 rpm and froze there. Found from the recording, fixed and
+verified by a host round trip over all 4096 code values.
+
 ---
 
 ## Contributing
@@ -603,8 +682,8 @@ functionally safe, safety-certified, or qualified to any automotive or aviation
 standard (ISO 26262, DO-178C or otherwise). The MISRA C:2012 gate and the unit
 tests raise code quality; they do not make the software airworthy.
 
-`src/asw/` contains flight-control code and `docs/PINNING.md` allocates pins for
-DShot ESC output. Spinning propellers are dangerous. If you run any of it on real
+`src/asw/` contains flight-control code and `src/bsw/motor.c` arms and drives
+ESCs. Spinning propellers are dangerous. If you run any of it on real
 hardware: **remove the propellers**, secure the frame, keep the battery
 disconnected until the last moment, and understand that you do so entirely at
 your own risk. See the warranty and liability disclaimer in `LICENSE`.
