@@ -639,52 +639,6 @@
       "maxdiff": "108500",
       "lo": "87000",
       "hi": "108500"
-    },
-    "magOffX": {
-      "name": "NvmMagOffX",
-      "desc": "hard-iron offset X, sensor frame; subtract before use",
-      "unit": "gauss",
-      "lo": "-4",
-      "hi": "4"
-    },
-    "magOffY": {
-      "name": "NvmMagOffY",
-      "desc": "hard-iron offset Y, sensor frame",
-      "unit": "gauss",
-      "lo": "-4",
-      "hi": "4"
-    },
-    "magOffZ": {
-      "name": "NvmMagOffZ",
-      "desc": "hard-iron offset Z, sensor frame",
-      "unit": "gauss",
-      "lo": "-4",
-      "hi": "4"
-    },
-    "magScaleX": {
-      "name": "NvmMagScaleX",
-      "desc": "soft-iron scale X; 1.0 is no correction",
-      "lo": "0.1",
-      "hi": "10"
-    },
-    "magScaleY": {
-      "name": "NvmMagScaleY",
-      "desc": "soft-iron scale Y",
-      "lo": "0.1",
-      "hi": "10"
-    },
-    "magScaleZ": {
-      "name": "NvmMagScaleZ",
-      "desc": "soft-iron scale Z",
-      "lo": "0.1",
-      "hi": "10"
-    },
-    "magDeclDeg": {
-      "name": "NvmMagDeclination",
-      "desc": "magnetic declination, east positive; +3.9 in Munich. Turns magnetic north into true north",
-      "unit": "deg",
-      "lo": "-180",
-      "hi": "180"
     }
   },
   "Xcp_Gpio": {
@@ -1288,6 +1242,26 @@
       "unit": "m/s^2/sqrt(s)",
       "lo": "0.000001",
       "hi": "1"
+    },
+    "magOff": {
+      "name": "MagCalOff{i}",
+      "desc": "CALIBRATION - magnetometer hard-iron offset on sensor axis {i}, subtracted before the mount transform. Compiled default = calibration/board.json (this board, 2026-10-19); RAM-only, a write here is a trial until tools/mag_cal.py --write puts it into FusionCal.c",
+      "unit": "gauss",
+      "lo": "-4",
+      "hi": "4"
+    },
+    "magScale": {
+      "name": "MagCalScale{i}",
+      "desc": "CALIBRATION - magnetometer soft-iron scale on sensor axis {i}; 1.0 is no correction. Same provenance as MagCalOff",
+      "lo": "0.1",
+      "hi": "10"
+    },
+    "magDeclDeg": {
+      "name": "MagCalDeclination",
+      "desc": "CALIBRATION - magnetic declination, east positive; +3.9 in Munich. Turns magnetic north into true north at the AHRS output",
+      "unit": "deg",
+      "lo": "-180",
+      "hi": "180"
     }
   },
   "Xcp_Esc": {

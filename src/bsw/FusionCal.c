@@ -61,6 +61,23 @@ volatile Xcp_FusionCal g_fusionCal;
 #define FCAL_GATE_SIGMA_SQ     (25.0f)
 #define FCAL_GATE_MIN_M        (2.0f)
 
+/* Magnetometer calibration of THIS board, SENSOR frame -- the content of
+ * calibration/board.json, which tools/mag_cal.py --write keeps in step with
+ * these seven lines (it rewrites the values between the MAG-CAL markers).
+ * Measured 2026-10-19 after the remount onto the breakout PCB: 142 s tumble,
+ * ellipsoid fit residual 1.40 %, 100 % octant coverage, corrected |B| 0.484 G
+ * (SYS1-001 B10). Declination: Munich 2026, +3.9 deg east -- a property of
+ * the place, not the board, and 4 deg off is better than pretending it is 0. */
+/* MAG-CAL BEGIN (written by tools/mag_cal.py --write; do not hand-edit the numbers) */
+#define FCAL_MAG_OFF_X         (0.06255056f)
+#define FCAL_MAG_OFF_Y         (-0.03998851f)
+#define FCAL_MAG_OFF_Z         (0.00011762f)
+#define FCAL_MAG_SCALE_X       (1.00198789f)
+#define FCAL_MAG_SCALE_Y       (1.00303375f)
+#define FCAL_MAG_SCALE_Z       (0.99501644f)
+#define FCAL_MAG_DECL_DEG      (3.9f)
+/* MAG-CAL END */
+
 void FusionCal_init(void)
 {
     uint8 i;
@@ -87,6 +104,14 @@ void FusionCal_init(void)
     {
         g_fusionCal.reserved[i] = 0.0f;
     }
+
+    g_fusionCal.magOff[0]   = FCAL_MAG_OFF_X;
+    g_fusionCal.magOff[1]   = FCAL_MAG_OFF_Y;
+    g_fusionCal.magOff[2]   = FCAL_MAG_OFF_Z;
+    g_fusionCal.magScale[0] = FCAL_MAG_SCALE_X;
+    g_fusionCal.magScale[1] = FCAL_MAG_SCALE_Y;
+    g_fusionCal.magScale[2] = FCAL_MAG_SCALE_Z;
+    g_fusionCal.magDeclDeg  = FCAL_MAG_DECL_DEG;
 
     /* Magic last: a master polling for it sees a fully populated block or none
      * of it, never a half-written one. */

@@ -208,7 +208,9 @@ Die `fs*`-Werte skalieren die 8-Bit-Rohwerte in Volt
 ## NVM-Block: persistente Parameter (ab v1.6.0)
 
 Strikt getrennt vom Kalibrierblock gibt es den **persistenten
-Parameterblock** `Xcp_Nvm` an Basisadresse `0x70030200` (44 Bytes,
+Parameterblock** `Xcp_Nvm` an Basisadresse `0x70030200` (16 Bytes seit
+v1.19.28 — die Magnetometer-Kalibrierung ist nach `Xcp_FusionCal` gewandert;
+davor 44 Bytes,
 little-endian, per XCP ab Offset 0x04 schreibbar). **Nur** dieser Block
 wird im on-chip DFLASH gespeichert (EEPROM-Emulation, zwei 4-KB-Sektoren
 ab `0xAF000000` im Ping-Pong-Verfahren — ein Stromausfall während des

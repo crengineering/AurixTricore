@@ -38,7 +38,7 @@
  * whitelist now uses (uint32)&g_fusionCal, so Lcf_Tasking_Tricore_Tc.lsl
  * (LCF_XCP_FUSIONCAL_START) is the only place 0x70030600 is written down. */
 #define XCP_FUSIONCAL_MAGIC  0x4C414346u        /* "FCAL" */
-#define XCP_FUSIONCAL_SIZE   64u
+#define XCP_FUSIONCAL_SIZE   92u
 
 /* Layout (little-endian, all 4-byte aligned; verify against
  * FusionCal.src after any edit — TASKING aligns uint32 to 2 bytes):
@@ -74,6 +74,17 @@
  *                               rate-invariant, unlike sigmaAccD/sigmaAccH
  *                               above, so this is only a live-tuning wire-up
  *   0x38  float32 reserved[2]
+ *
+ *   --- magnetometer calibration, moved here from Xcp_Nvm in v1.19.28
+ *       (Chris, 2026-10-19: "no NVM, flash defaults with a calibration
+ *       possibility"). The measured set of THIS board is the compiled
+ *       default (FCAL_MAG_* in FusionCal.c = calibration/board.json), so a
+ *       reflash comes up calibrated; the block lets tools/mag_cal.py try a
+ *       new fit live before it is committed to code. SENSOR frame. ---
+ *   0x40  float32 magOff[3]     hard-iron offset X/Y/Z [gauss], subtracted first
+ *   0x4C  float32 magScale[3]   soft-iron scale X/Y/Z, dimensionless (1.0 = none)
+ *   0x58  float32 magDeclDeg    magnetic declination [deg], east positive;
+ *                               applied at the AHRS output, not in the filter
  */
 typedef struct
 {
@@ -97,6 +108,10 @@ typedef struct
 
     float32 sigmaAccRw;
     float32 reserved[2];
+
+    float32 magOff[3];
+    float32 magScale[3];
+    float32 magDeclDeg;
 } Xcp_FusionCal;
 
 extern volatile Xcp_FusionCal g_fusionCal;

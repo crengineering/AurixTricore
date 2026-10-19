@@ -249,7 +249,8 @@ brauchte frueher ebenfalls das __at()-Leermakro hier; docs/MEMORY_PLACEMENT.md
 T5 loeschte das letzte __at() im ganzen Baum, GCC ignoriert die unbekannte
 Pragma-Zeile jetzt einfach mit einer Warnung, kein Makro noetig.)
 
-g_xcpNvm (Hard-Iron-Kalibrierung) kommt aus fakes/Nvm.c.
+(fakes/Nvm.c ist seit v1.19.28 weg: die Hard-Iron-Kalibrierung liegt in
+g_fusionCal, Ahrs.c liest Xcp_Nvm nicht mehr.)
 -m ist noetig, weil die Estimator-Mathematik gegen libm linkt (sinf, atan2f...).
 ]]
 #[[
@@ -270,7 +271,6 @@ add_library(estimator STATIC
     ${BSW}/Ahrs.c
     ${BSW}/FusionCal.c
     ${BSW}/SharedRam.c
-    fakes/Nvm.c
 )
 target_include_directories(estimator PUBLIC fakes ${BSW})
 target_compile_options(estimator PRIVATE -Wall -Wextra

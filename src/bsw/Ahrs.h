@@ -41,8 +41,11 @@
  * HARD IRON. The magnetometer sees the board's own magnetics — the DC-DC, the
  * copper pour, anything ferrous — as a constant offset added to Earth's field.
  * Uncorrected it is a heading error that varies with heading, which no amount
- * of filtering removes. Offsets live in Xcp_Nvm (persistent, per board) and
- * default to zero; tools/mag_cal.py computes them from a rotation record.
+ * of filtering removes. Offsets live in Xcp_FusionCal (RAM, XCP-writable);
+ * the compiled defaults ARE this board's measured set (FusionCal.c MAG-CAL
+ * block = calibration/board.json), so a reflash comes up calibrated.
+ * tools/mag_cal.py computes a set from a rotation record and, with --write,
+ * makes it the new default.
  *********************************************************************************************************************/
 #ifndef AHRS_H
 #define AHRS_H

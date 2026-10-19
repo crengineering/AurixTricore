@@ -126,16 +126,17 @@ static inline void mountInverse(const float M[9], const float bodyVec[3], float 
     mat3Tvec(M, bodyVec, sensorVec);
 }
 
-/** The real mag-mount inverse (SYS1-001 B9): AHRS_MAG_MOUNT_* is
- *  diag(+1,-1,+1), no axis permutation, so it is its own inverse. Use this
+/** The real mag-mount inverse (SYS1-001 B10, 2026-10-19 remount; B9 had
+ *  diag(+1,-1,+1)): AHRS_MAG_MOUNT_* is diag(-1,+1,+1), no axis
+ *  permutation, so it is its own inverse. Keep in step with Ahrs.c. Use this
  *  where a test needs the sensor-frame reading that DELIVERS a specific,
  *  known body-frame field through the actual mag path -- e.g. a bit-
  *  identical comparison at a fixed attitude -- as opposed to mountInverse()
  *  above, which is fine for relative/qualitative mag-error scenarios. */
 static inline void magMountInverse(const float bodyVec[3], float sensorVec[3])
 {
-    sensorVec[0] =  bodyVec[0];
-    sensorVec[1] = -bodyVec[1];
+    sensorVec[0] = -bodyVec[0];
+    sensorVec[1] =  bodyVec[1];
     sensorVec[2] =  bodyVec[2];
 }
 
