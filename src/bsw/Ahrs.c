@@ -3,7 +3,6 @@
  * \brief Quaternion Mahony attitude estimator — see Ahrs.h.
  *********************************************************************************************************************/
 #include "Ahrs.h"
-#include "Nvm.h"
 #include "FusionCal.h"
 #include "AhrsLatch.h"
 #include "SharedRam.h"
@@ -273,15 +272,22 @@
  * evidence for this sensor.
  *
  * MAG — the MMC5983MA is a SEPARATE breakout in its own orientation and gets
- * its own transform. MEASURED 2026-09-13 (SYS1-001 B9): a yaw-independent
- * search over all 48 signed axis permutations against three six-position
- * recordings (hard-iron corrected first, tools/mag_cal.py) found angle(mag
- * field, gravity-down) constant only for X_SRC=sensor X (+1), Y_SRC=sensor Y
- * (-1), Z_SRC=sensor Z (+1): spread 3.4-4.9 deg across the three datasets,
- * mean 33 deg from down (Munich dip 64 deg => 26 deg expected, 7 deg residual
- * = soft/hard-iron). The previous mapping (+sensorY, +sensorX, -sensorZ)
- * ranked 31st-32nd of 48 (tied, spread 29.5 deg) with the field pointing UP
- * instead of down.
+ * its own transform. MEASURED 2026-10-19 (SYS1-001 B10), after the sensor
+ * moved onto the breakout PCB drone_breakoutv1 turned 180 deg about Z
+ * relative to its 2026-09 position: tools/mag_mount_search.py (the B9 method
+ * as a tool -- yaw-independent search over all 48 signed axis permutations,
+ * hard-iron corrected first) on an 11-window six-position recording
+ * (Measurement Data/2026-10-19_mag_session_remount.csv, fit residual 1.4 %)
+ * found angle(mag field, gravity-down) constant only for X_SRC=sensor X (-1),
+ * Y_SRC=sensor Y (+1), Z_SRC=sensor Z (+1): spread 0.71 deg, mean 25.1 deg
+ * from down (Munich dip 64 deg => 26 deg expected), margin 9.2 deg to the
+ * runner-up. The previous table (+sX, -sY, +sZ; B9, 2026-09-13, spread
+ * 3.4-4.9 deg at the OLD position) ranks 24th of 48 on the new data, spread
+ * 67 deg: 25 deg at level, 150-170 deg tilted -- the two horizontal
+ * components negated, which hides at level as a 180 deg heading offset and
+ * explodes into yaw once the board tilts (the "yaw runs away on roll/pitch"
+ * symptom of 2026-10-19). Rule: a remount re-runs the search; a predicted
+ * sign is never flashed.
  *
  * This table has determinant -1 and that is INTENTIONAL, unlike the IMU
  * mount above: the magnetometer is a polar vector, not a pseudovector, so the
@@ -296,8 +302,8 @@
  * impossible for a correctly-oriented sensor. No proper mount fits the data;
  * a driver-side mirror is the only hypothesis the search leaves standing.
  * The real fix is a driver sign once a datasheet exists to name the mirrored
- * axis; that would invalidate the NVM/board.json hard-iron offsets (magOffZ
- * or magOffY, whichever axis turns out to be mirrored) and require
+ * axis; that would invalidate the board.json / FusionCal hard-iron offsets
+ * (magOff Z or Y, whichever axis turns out to be mirrored) and require
  * re-calibration, so it is deferred (SYS1-001 B9 alt 1). */
 #define AHRS_MOUNT_X_SRC      (1u)        /* body forward <- sensor Y */
 #define AHRS_MOUNT_X_SGN      ( 1.0f)
@@ -306,10 +312,10 @@
 #define AHRS_MOUNT_Z_SRC      (2u)        /* body down    <- -sensor Z */
 #define AHRS_MOUNT_Z_SGN      (-1.0f)
 
-#define AHRS_MAG_MOUNT_X_SRC  (0u)        /* body forward <- +sensor X */
-#define AHRS_MAG_MOUNT_X_SGN  ( 1.0f)
-#define AHRS_MAG_MOUNT_Y_SRC  (1u)        /* body right   <- -sensor Y */
-#define AHRS_MAG_MOUNT_Y_SGN  (-1.0f)
+#define AHRS_MAG_MOUNT_X_SRC  (0u)        /* body forward <- -sensor X */
+#define AHRS_MAG_MOUNT_X_SGN  (-1.0f)
+#define AHRS_MAG_MOUNT_Y_SRC  (1u)        /* body right   <- +sensor Y */
+#define AHRS_MAG_MOUNT_Y_SGN  ( 1.0f)
 #define AHRS_MAG_MOUNT_Z_SRC  (2u)        /* body down    <- +sensor Z */
 #define AHRS_MAG_MOUNT_Z_SGN  ( 1.0f)
 
@@ -327,6 +333,16 @@ static void ahrs_mountMag(const float32 in[3], float32 out[3])
     out[0] = AHRS_MAG_MOUNT_X_SGN * in[AHRS_MAG_MOUNT_X_SRC];
     out[1] = AHRS_MAG_MOUNT_Y_SGN * in[AHRS_MAG_MOUNT_Y_SRC];
     out[2] = AHRS_MAG_MOUNT_Z_SGN * in[AHRS_MAG_MOUNT_Z_SRC];
+}
+
+/* \return v when |v| <= bound, else def. The magnetometer calibration lives
+ * in the XCP-writable Xcp_FusionCal block (RAM, compiled defaults), so a
+ * master can put anything there -- NaN and both infinities fail the
+ * comparison and fall back too. FusionCal_positive() cannot serve here: an
+ * offset is legitimately zero or negative. */
+static float32 ahrs_finiteOr(float32 v, float32 def, float32 bound)
+{
+    return ((v >= -bound) && (v <= bound)) ? v : def;
 }
 
 /* --- state --------------------------------------------------------------- */
@@ -1341,7 +1357,7 @@ void Ahrs_update(Ahrs_Values *out, const float32 acc[3], const float32 gyro[3],
          * hard-iron offsets location-dependent too. */
         yaw = atan2f(2.0f * ((s_q0 * s_q3) + (s_q1 * s_q2)),
                      1.0f - (2.0f * ((s_q2 * s_q2) + (s_q3 * s_q3))));
-        yaw += g_xcpNvm.magDeclDeg * AHRS_DEG_TO_RAD;
+        yaw += ahrs_finiteOr(g_fusionCal.magDeclDeg, 0.0f, 180.0f) * AHRS_DEG_TO_RAD;
 
         /* Wrap to [0, 2pi) with fmodf rather than a pair of while loops: a
          * floating-point loop counter is a MISRA 14.1 violation, and it is a
@@ -1416,16 +1432,20 @@ void Ahrs_setMag(const float32 mag[3], boolean valid)
         /* Hard iron first, in SENSOR axes — that is the frame the offsets were
          * measured in, and rotating before subtracting would smear a constant
          * offset across all three. Scale factors follow (soft iron, diagonal
-         * only: the full 3x3 needs an ellipsoid fit and buys little here). */
-        const float32 sx = (g_xcpNvm.magScaleX > 0.0f) ? g_xcpNvm.magScaleX : 1.0f;
-        const float32 sy = (g_xcpNvm.magScaleY > 0.0f) ? g_xcpNvm.magScaleY : 1.0f;
-        const float32 sz = (g_xcpNvm.magScaleZ > 0.0f) ? g_xcpNvm.magScaleZ : 1.0f;
+         * only: the full 3x3 needs an ellipsoid fit and buys little here).
+         * Source: Xcp_FusionCal (compiled defaults = calibration/board.json,
+         * live-writable for a trial fit). Bounds: an offset beyond 8 G or a
+         * scale that is not strictly positive and finite is not a
+         * calibration, it is a bad write -- fall back to the identity. */
+        const float32 sx = FusionCal_positive(g_fusionCal.magScale[0], 0.0f, 1.0f);
+        const float32 sy = FusionCal_positive(g_fusionCal.magScale[1], 0.0f, 1.0f);
+        const float32 sz = FusionCal_positive(g_fusionCal.magScale[2], 0.0f, 1.0f);
         float32 corrected[3];
         float32 bodyMag[3];
 
-        corrected[0] = (mag[0] - g_xcpNvm.magOffX) * sx;
-        corrected[1] = (mag[1] - g_xcpNvm.magOffY) * sy;
-        corrected[2] = (mag[2] - g_xcpNvm.magOffZ) * sz;
+        corrected[0] = (mag[0] - ahrs_finiteOr(g_fusionCal.magOff[0], 0.0f, 8.0f)) * sx;
+        corrected[1] = (mag[1] - ahrs_finiteOr(g_fusionCal.magOff[1], 0.0f, 8.0f)) * sy;
+        corrected[2] = (mag[2] - ahrs_finiteOr(g_fusionCal.magOff[2], 0.0f, 8.0f)) * sz;
 
         ahrs_mountMag(corrected, bodyMag);
 

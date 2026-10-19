@@ -166,16 +166,33 @@ them — rotating about one axis gives a ring, and a ring does not determine a
 centre in three dimensions. The tool refuses to `--write` a fit with incomplete
 octant coverage or a residual above 5 %.
 
-Results are stored in `Xcp_Nvm` (`magOffX/Y/Z`, `magScaleX/Y/Z`, `magDeclDeg`),
-survive a power cycle, and default to a **no-op** so an uncalibrated board
-behaves exactly as it did before the fields existed.
+**Where the set lives (since v1.19.28, 2026-10-19):** in `Xcp_FusionCal`
+(`magOff[3]`, `magScale[3]`, `magDeclDeg`), RAM only and XCP-writable, whose
+**compiled defaults are this board's measured set** — the `MAG-CAL` block in
+`FusionCal.c`, identical to `calibration/board.json`. A reflash therefore comes
+up calibrated with nothing to restore; a live write is a trial that a power
+cycle undoes, and `--write` makes a trial permanent by rewriting both files
+(rebuild + flash). Until v1.19.27 the set sat in `Xcp_Nvm` (DFLASH) and had
+to be restored after every reflash — Chris dropped that path: "no NVM, just
+flash memory with a calibration possibility".
 
-### Result on this board, 2026-08-26
+### Result on this board, 2026-10-19 (current — remount, SYS1-001 B10)
 
-This set is versioned in **`calibration/board.json`** — after any reflash
-(`flash.bat` erases DFLASH) restore it with
-`python tools/mag_cal.py --restore-from calibration/board.json`, which also
-verifies by read-back. A later `--write` updates the JSON automatically.
+| | |
+|---|---|
+| hard iron | X **+0.0626**, Y **−0.0400**, Z **+0.0001** G |
+| soft iron | 1.002 / 1.003 / 0.995 |
+| declination | 3.9° (Munich) |
+| raw \|B\| | 0.408 … 0.570 G, spread 33 % |
+| residual | **1.40 %**, 100 % octants, 2628 samples (142 s tumble) |
+
+The 0.85 G Z offset of the sets below belonged to the old mounting spot; the
+sensor on the breakout PCB no longer sees that magnet.
+
+### Result on this board, 2026-08-26 (superseded)
+
+This set was versioned in **`calibration/board.json`** and, in the NVM era,
+restored after a reflash with `mag_cal.py --restore-from`.
 
 | | |
 |---|---|
@@ -269,6 +286,18 @@ mag correction is confined to the vertical axis by construction.
 > applied after the mount, at the AHRS output. **Any "yaw points north"
 > claim needs a handheld-compass re-check at level; this is not yet done**
 > (SYS1-001 B9 task 4, bench, Chris).
+>
+> **Superseded by the remount, 2026-10-19 (SYS1-001 B10).** The sensor now
+> sits on the breakout PCB turned 180° about Z; the same search, as
+> `tools/mag_mount_search.py`, gives **body = (−sensor X, +sensor Y,
+> +sensor Z)** — spread 0.71° over 11 windows, mean 25.1° from down (26°
+> expected), margin 9.2°. The B9 table on the remounted sensor negates both
+> horizontal components: harmless at level (a 180° heading offset), a
+> field that contradicts gravity once tilted — the "yaw runs away on roll or
+> pitch" seen in the GUI that day before the fix. Hard iron re-fitted from the
+> same session (`calibration/board.json`, residual 1.4 %); the level heading
+> shifts again, by 180° this time, so the compass check above is still owed.
+> See `docs/MMC5983MA.md` §7.
 
 ---
 
@@ -1010,4 +1039,4 @@ deceptively good.
   correct ABSOLUTE bearing — only that it advances correctly and that `|B|` is
   orientation-independent. Indoors that check is not worth making: building
   steel shifts the field. Do it outdoors against a known bearing, and expect the
-  3.9° declination in `Xcp_Nvm` to be part of what is being tested.
+  3.9° declination in `Xcp_FusionCal` to be part of what is being tested.

@@ -192,6 +192,21 @@ but it would invalidate the hard-iron offsets already in
 the mirrored one) and force a re-calibration in exchange for encoding a
 currently-unfalsifiable guess — deferred until a datasheet exists.
 
+**Remount 2026-10-19 (SYS1-001 B10).** The sensor moved onto the breakout PCB
+`drone_breakoutv1`, turned 180° about Z relative to the position above. The
+same search, now a committed tool (`tools/mag_mount_search.py`, reads the GUI
+MF4 or a `tools/mag_session_record.py` CSV), on an 11-window six-position
+session gives **`diag(−1, +1, +1)`** — spread 0.71°, mean 25.1° from down
+against the 26° Munich dip, margin 9.2° to the runner-up. The B9 table ranks
+24/48 on that data (spread 67°: 25° at level, 150–170° tilted), which is the
+"yaw runs away on roll or pitch" symptom seen the same day. Still
+determinant −1, same reasoning as above. The hard iron changed with the
+position too: 0.06 / −0.04 / 0.00 G (tumble fit, residual 1.4 %, 100 %
+octants) against −0.18 / −0.13 / −0.79 G before — the 0.8 G permanent-magnet
+offset (open question since 2026-09-13, SYS1-001 B8) belonged to the OLD
+mounting spot and is no longer in the sensor's neighbourhood. Any further remount repeats record → fit → search → table;
+a predicted sign is never flashed.
+
 Two behaviours worth knowing before debugging anything:
 
 1. **The control registers 0x09–0x0C do not read back what you wrote.**
@@ -307,7 +322,10 @@ Reference result, 2026-08-01, indoors, firmware v1.15.0:
 > The **centre** moving so far (Z from +0.144 to −0.851 G) is expected and is
 > not a contradiction: the ICM-42688-P and the NEO-M9N were both added to the
 > assembly in between, and hard iron is a property of the assembly. It is
-> precisely why these numbers live in NVM rather than in a header.
+> precisely why these numbers were kept out of a header at the time; since
+> v1.19.28 they are compiled defaults after all (one board, one set,
+> `FusionCal.c` MAG-CAL block maintained by `mag_cal.py --write`), with the
+> live RAM block for trying a new fit.
 
 ### ⚠️ OPEN ITEM: absolute scale — very likely settled, one outdoor run to confirm
 

@@ -130,14 +130,7 @@ typedef char layout_assert_Xcp_Nvm_magic_offset[(offsetof(Xcp_Nvm, magic) == 0x0
 typedef char layout_assert_Xcp_Nvm_command_offset[(offsetof(Xcp_Nvm, command) == 0x4u) ? 1 : -1];
 typedef char layout_assert_Xcp_Nvm_userValue_offset[(offsetof(Xcp_Nvm, userValue) == 0x8u) ? 1 : -1];
 typedef char layout_assert_Xcp_Nvm_seaLevelPa_offset[(offsetof(Xcp_Nvm, seaLevelPa) == 0xCu) ? 1 : -1];
-typedef char layout_assert_Xcp_Nvm_magOffX_offset[(offsetof(Xcp_Nvm, magOffX) == 0x10u) ? 1 : -1];
-typedef char layout_assert_Xcp_Nvm_magOffY_offset[(offsetof(Xcp_Nvm, magOffY) == 0x14u) ? 1 : -1];
-typedef char layout_assert_Xcp_Nvm_magOffZ_offset[(offsetof(Xcp_Nvm, magOffZ) == 0x18u) ? 1 : -1];
-typedef char layout_assert_Xcp_Nvm_magScaleX_offset[(offsetof(Xcp_Nvm, magScaleX) == 0x1Cu) ? 1 : -1];
-typedef char layout_assert_Xcp_Nvm_magScaleY_offset[(offsetof(Xcp_Nvm, magScaleY) == 0x20u) ? 1 : -1];
-typedef char layout_assert_Xcp_Nvm_magScaleZ_offset[(offsetof(Xcp_Nvm, magScaleZ) == 0x24u) ? 1 : -1];
-typedef char layout_assert_Xcp_Nvm_magDeclDeg_offset[(offsetof(Xcp_Nvm, magDeclDeg) == 0x28u) ? 1 : -1];
-typedef char layout_assert_Xcp_Nvm_sizeof[(sizeof(Xcp_Nvm) == 0x2Cu) ? 1 : -1];
+typedef char layout_assert_Xcp_Nvm_sizeof[(sizeof(Xcp_Nvm) == 0x10u) ? 1 : -1];
 
 /* Xcp_Gpio (gpio.h) */
 typedef char layout_assert_Xcp_Gpio_magic_offset[(offsetof(Xcp_Gpio, magic) == 0x0u) ? 1 : -1];
@@ -218,7 +211,10 @@ typedef char layout_assert_Xcp_FusionCal_gateSigmaSq_offset[(offsetof(Xcp_Fusion
 typedef char layout_assert_Xcp_FusionCal_gateMinM_offset[(offsetof(Xcp_FusionCal, gateMinM) == 0x30u) ? 1 : -1];
 typedef char layout_assert_Xcp_FusionCal_sigmaAccRw_offset[(offsetof(Xcp_FusionCal, sigmaAccRw) == 0x34u) ? 1 : -1];
 typedef char layout_assert_Xcp_FusionCal_reserved_offset[(offsetof(Xcp_FusionCal, reserved) == 0x38u) ? 1 : -1];
-typedef char layout_assert_Xcp_FusionCal_sizeof[(sizeof(Xcp_FusionCal) == 0x40u) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_magOff_offset[(offsetof(Xcp_FusionCal, magOff) == 0x40u) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_magScale_offset[(offsetof(Xcp_FusionCal, magScale) == 0x4Cu) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_magDeclDeg_offset[(offsetof(Xcp_FusionCal, magDeclDeg) == 0x58u) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_sizeof[(sizeof(Xcp_FusionCal) == 0x5Cu) ? 1 : -1];
 
 /* Xcp_Esc (Measurements.h) */
 typedef char layout_assert_Xcp_Esc_magic_offset[(offsetof(Xcp_Esc, magic) == 0x0u) ? 1 : -1];

@@ -12,7 +12,7 @@ heading, which no amount of filtering removes.
 
 Measured on this board 2026-08-26, uncalibrated: |B| swung between 0.428 and
 0.984 gauss depending on orientation, against a true field of about 0.48 G in
-Munich. That is the whole reason Ahrs.c applies the correction and Xcp_Nvm
+Munich. That is the whole reason Ahrs.c applies the correction and Xcp_FusionCal
 stores it.
 
 What it fits
@@ -32,15 +32,27 @@ Usage
 -----
     python tools/mag_cal.py                 # collect, fit, print. Writes nothing.
     python tools/mag_cal.py --seconds 90
-    python tools/mag_cal.py --write         # also store to NVM and SAVE
-                                            # (and update calibration/board.json)
+    python tools/mag_cal.py --write         # write the live cal block AND make
+                                            # it the compiled default: updates
+                                            # calibration/board.json and the
+                                            # MAG-CAL block in src/bsw/FusionCal.c
+                                            # (rebuild + flash to make it stick)
     python tools/mag_cal.py --decl 3.9      # set magnetic declination too
     python tools/mag_cal.py --export F.json # persist the fit to a file
+    python tools/mag_cal.py --load F.csv    # re-fit a saved point cloud offline
     python tools/mag_cal.py --restore-from calibration/board.json
-                                            # push a saved set back to NVM +
-                                            # SAVE, then read it back. This is
-                                            # the restore step after a reflash
-                                            # (flash.bat erases DFLASH).
+                                            # push a saved set into the LIVE
+                                            # block (RAM) for this session and
+                                            # read it back -- a trial, not a
+                                            # restore: the compiled default
+                                            # returns on the next power cycle
+
+Where the calibration lives (since v1.19.28, Chris 2026-10-19: "no NVM, flash
+defaults with a calibration possibility"): the seven values are compiled
+defaults in src/bsw/FusionCal.c (= calibration/board.json) and sit in the
+XCP-writable, RAM-only Xcp_FusionCal block. A reflash therefore comes up
+calibrated; nothing is persisted on the chip, and a live write is a trial
+until --write commits it to code.
 
 While it collects, turn the board slowly through as many orientations as you
 can -- all six faces up, and tumble it between them. The fit needs the samples
@@ -55,6 +67,7 @@ import csv
 import datetime
 import json
 import pathlib
+import re
 import struct
 import sys
 import time
@@ -87,12 +100,14 @@ def octants(p: np.ndarray, centre: np.ndarray) -> set:
 # Xcp_Data: raw (uncorrected) field, see Measurements.h
 MAG_X = 0x70030090
 
-# Xcp_Nvm: where the result goes, see Nvm.h
-NVM_COMMAND = 0x70030204
-NVM_MAG_OFF_X = 0x70030210
-NVM_MAG_SCALE_X = 0x7003021C
-NVM_MAG_DECL = 0x70030228
-NVM_CMD_SAVE = 0x45564153  # "SAVE"
+# Xcp_FusionCal (RAM, LCF_XCP_FUSIONCAL_START 0x70030600): where the result
+# goes, see FusionCal.h -- magOff[3] @ 0x40, magScale[3] @ 0x4C, magDeclDeg @ 0x58.
+CAL_MAG_OFF_X = 0x70030640
+CAL_MAG_SCALE_X = 0x7003064C
+CAL_MAG_DECL = 0x70030658
+
+# The compiled defaults --write keeps in step with the live block.
+FUSIONCAL_C = pathlib.Path(__file__).resolve().parent.parent / "src" / "bsw" / "FusionCal.c"
 
 
 def read_mag(x):
@@ -103,11 +118,6 @@ def read_mag(x):
 def write_f32(x, addr, value):
     x.setMta(addr, 0)
     x.download(struct.pack("<f", float(value)))
-
-
-def write_u32(x, addr, value):
-    x.setMta(addr, 0)
-    x.download(struct.pack("<I", int(value)))
 
 
 def read_f32s(x, addr, n):
@@ -137,27 +147,50 @@ def export_fit(path, centre, scale, residual, cov, samples, decl, note):
     print(f"fit exported to {p}")
 
 
-def restore_from(conf, path):
-    """Push a saved calibration set to NVM + SAVE, then read it back.
+def patch_fusioncal_defaults(centre, scale, decl):
+    """Rewrite the seven FCAL_MAG_* values between the MAG-CAL markers in
+    src/bsw/FusionCal.c so the live set becomes the compiled default. The
+    markers and the define names are the contract; anything else in the file
+    is left untouched. Returns the number of values replaced (7 expected,
+    6 without --decl)."""
+    names = {
+        "FCAL_MAG_OFF_X": centre[0], "FCAL_MAG_OFF_Y": centre[1], "FCAL_MAG_OFF_Z": centre[2],
+        "FCAL_MAG_SCALE_X": scale[0], "FCAL_MAG_SCALE_Y": scale[1], "FCAL_MAG_SCALE_Z": scale[2],
+    }
+    if decl is not None:
+        names["FCAL_MAG_DECL_DEG"] = decl
+    src = FUSIONCAL_C.read_text(encoding="utf-8")
+    begin = src.index("/* MAG-CAL BEGIN")
+    end = src.index("/* MAG-CAL END */", begin)
+    block = src[begin:end]
+    n = 0
+    for name, value in names.items():
+        pat = re.compile(r"(#define\s+" + name + r"\s+\()[-+0-9.eE]+f(\))")
+        block, k = pat.subn(lambda m: f"{m.group(1)}{float(value):.8f}f{m.group(2)}", block)
+        n += k
+    FUSIONCAL_C.write_text(src[:begin] + block + src[end:], encoding="utf-8")
+    return n
 
-    This is the board-discipline restore step after any reflash: verify the
-    read-back matches the file before trusting heading."""
+
+def restore_from(conf, path):
+    """Push a saved calibration set into the LIVE cal block (RAM), then read
+    it back. Session-only: the compiled default returns on the next power
+    cycle. Use it to try an older or an exported set without rebuilding."""
     data = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
     hi, si = data["hard_iron_G"], data["soft_iron"]
     with Master("eth", config=conf) as x:
         x.connect()
         for i, axis in enumerate("xyz"):
-            write_f32(x, NVM_MAG_OFF_X + 4 * i, hi[axis])
-            write_f32(x, NVM_MAG_SCALE_X + 4 * i, si[axis])
+            write_f32(x, CAL_MAG_OFF_X + 4 * i, hi[axis])
+            write_f32(x, CAL_MAG_SCALE_X + 4 * i, si[axis])
         if data.get("declination_deg") is not None:
-            write_f32(x, NVM_MAG_DECL, data["declination_deg"])
-        write_u32(x, NVM_COMMAND, NVM_CMD_SAVE)
-        off = read_f32s(x, NVM_MAG_OFF_X, 3)
-        scl = read_f32s(x, NVM_MAG_SCALE_X, 3)
+            write_f32(x, CAL_MAG_DECL, data["declination_deg"])
+        off = read_f32s(x, CAL_MAG_OFF_X, 3)
+        scl = read_f32s(x, CAL_MAG_SCALE_X, 3)
     want = [hi["x"], hi["y"], hi["z"], si["x"], si["y"], si["z"]]
     got = list(off) + list(scl)
     ok = all(abs(w - g) < 1e-4 for w, g in zip(want, got))
-    print(f"restored from {path} ({data.get('date')}, note: {data.get('note')})")
+    print(f"live block loaded from {path} ({data.get('date')}, note: {data.get('note')}) -- RAM only, until power cycle")
     print(f"read-back offsets {off}  scales {scl}")
     print("read-back MATCHES the file -- heading may be trusted." if ok else
           "!! READ-BACK MISMATCH -- do not trust heading; investigate before flying.")
@@ -266,7 +299,7 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--seconds", type=float, default=60.0, help="collection time")
     ap.add_argument("--rate", type=float, default=0.05, help="sample interval [s]")
-    ap.add_argument("--write", action="store_true", help="store to NVM and SAVE")
+    ap.add_argument("--write", action="store_true", help="write the live cal block and make it the compiled default (board.json + FusionCal.c)")
     ap.add_argument("--decl", type=float, default=None,
                     help="magnetic declination [deg east] to store as well")
     ap.add_argument("--save", default="mag_points.csv",
@@ -277,8 +310,8 @@ def main():
                     help="persist the fit result as JSON (a --write always "
                          f"also updates {BOARD_JSON.name} in calibration/)")
     ap.add_argument("--restore-from", default=None, metavar="FILE",
-                    help="write a saved calibration set to NVM + SAVE and "
-                         "verify by read-back (the after-reflash restore)")
+                    help="load a saved calibration set into the LIVE cal block (RAM, session only) and "
+                         "verify by read-back (a trial of a set, not a restore: defaults are compiled in)")
     args = ap.parse_args()
 
     conf = create_application_from_config({
@@ -399,26 +432,27 @@ def main():
         if args.write:
             if cov < 0.99 or residual > 5.0:
                 sys.exit("\nrefusing to --write a fit this poor; re-collect first")
-            for i, addr in enumerate(range(NVM_MAG_OFF_X, NVM_MAG_OFF_X + 12, 4)):
+            for i, addr in enumerate(range(CAL_MAG_OFF_X, CAL_MAG_OFF_X + 12, 4)):
                 write_f32(x, addr, centre[i])
-            for i, addr in enumerate(range(NVM_MAG_SCALE_X, NVM_MAG_SCALE_X + 12, 4)):
+            for i, addr in enumerate(range(CAL_MAG_SCALE_X, CAL_MAG_SCALE_X + 12, 4)):
                 write_f32(x, addr, scale[i])
             if args.decl is not None:
-                write_f32(x, NVM_MAG_DECL, args.decl)
-            write_u32(x, NVM_COMMAND, NVM_CMD_SAVE)
-            print("\nwritten to NVM and SAVE issued -- survives a power cycle.")
+                write_f32(x, CAL_MAG_DECL, args.decl)
+            print("\nwritten to the live cal block (RAM) -- active now, gone at power cycle.")
             print("Verify: rotate the board and watch MagFieldCorrected "
                   "(0x7003054C) stay put.")
-            # A set that went to NVM is the board's truth -- persist it
-            # OUTSIDE the chip too, unconditionally: flash.bat erases DFLASH,
-            # and calibration/board.json is what --restore-from reads back.
+            # The set the board flies with is the COMPILED default: make this
+            # fit that default, in both of its homes -- board.json (the
+            # versioned record) and the MAG-CAL block in FusionCal.c.
             export_fit(BOARD_JSON, centre, scale, residual, cov, len(p),
-                       args.decl, "live fit, written to NVM")
+                       args.decl, "live fit, written to the cal block and FusionCal.c")
+            n = patch_fusioncal_defaults(centre, scale, args.decl)
+            print(f"FusionCal.c: {n} default(s) rewritten -- rebuild and flash to make the set permanent.")
         else:
             print("\n(nothing written -- re-run with --write to store it)")
         if args.export:
             export_fit(args.export, centre, scale, residual, cov, len(p),
-                       args.decl, "live fit" + (", written to NVM" if args.write else ""))
+                       args.decl, "live fit" + (", written to the cal block" if args.write else ""))
 
 
 if __name__ == "__main__":

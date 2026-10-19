@@ -9,7 +9,7 @@ sensors, estimates attitude and position on a dedicated core, drives four ESCs
 over bidirectional **DShot300**, monitors its own health, and exposes all of it
 live over **XCP-on-UDP** to a PC GUI.
 
-**Firmware version: v1.19.27** (`src/bsw/Version.h`) · sensors, estimator and
+**Firmware version: v1.19.28** (`src/bsw/Version.h`) · sensors, estimator and
 actuation hardware-validated on the bench and on a thrust rig. The aircraft has
 not flown yet.
 
@@ -71,7 +71,7 @@ too, so either file reopens as a diagram.
 | Attitude: quaternion Mahony over accel + gyro + mag | ✅ HW-validated — `docs/FUSION.md` |
 | Vertical channel: altitude, climb rate, accelerometer bias | ✅ HW-validated |
 | Horizontal channel: GNSS pos/vel in a NED tangent plane | ✅ HW-validated outdoors |
-| Magnetometer hard-iron calibration, stored in NVM | ✅ HW-validated — \|B\| spread 135 % → 13 % |
+| Magnetometer hard-iron calibration, compiled default + live RAM block | ✅ HW-validated — residual 1.4 % after the 2026-10-19 remount |
 | Live estimator tuning over XCP (`Xcp_FusionCal`, RAM only) | ✅ HW-validated |
 | Flight-control feedback in `flight_ctrl`'s own units and frames | ✅ published |
 | Host unit tests: 16 suites, ~200 tests, estimator tests spec-based | ✅ — `docs/FUSION_SPEC.md` |

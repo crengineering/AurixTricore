@@ -30,7 +30,6 @@
 #include <string.h>
 #include "Ifx_Types.h"
 #include "Ahrs.h"
-#include "Nvm.h"
 #include "FusionCal.h"
 #include "AhrsLatch.h"
 #include "test_util_math.h"
@@ -39,12 +38,26 @@
 #define G_MPS2  9.80665f
 #define DEG     (float)(M_PI / 180.0)
 
-void NvmFake_identity(void);
+/* Identity magnetometer calibration: zero hard iron, unit scale, zero
+ * declination. FusionCal_init() loads the BOARD's measured set (B10), which
+ * is right for the aircraft and wrong for these tests -- every synthetic
+ * field below is already "corrected", and a 3.9 deg declination would move
+ * every yaw expectation. (Until v1.19.27 this came from fakes/Nvm.c.) */
+static void magCalIdentity(void)
+{
+    uint8 i;
+    for (i = 0u; i < 3u; i++)
+    {
+        g_fusionCal.magOff[i]   = 0.0f;
+        g_fusionCal.magScale[i] = 1.0f;
+    }
+    g_fusionCal.magDeclDeg = 0.0f;
+}
 
 void setUp(void)
 {
-    NvmFake_identity();
     FusionCal_init();
+    magCalIdentity();
     Ahrs_init();
 }
 
@@ -386,50 +399,72 @@ static void holdBody(const float M[9], const float aBody[3], Ahrs_Values *v)
  * and both the old and the new mapping preserve that). A rigid sensor triad
  * in a locally-uniform field sees a CONSTANT angle between the magnetic
  * field and gravity, regardless of the board's attitude -- that is the
- * check the level-only tests could never make. Six-position window means
- * (measured 2026-09-12, evidence 0F542580C307FA1E,
- * Measurement Data/2026-09-12_6pos_r3_window_means.json), fed through the
- * PRODUCTION mag path (Ahrs_setMag: hard-iron subtraction + the real
- * AHRS_MAG_MOUNT_* transform, read back via g_magLatch) and the production
- * IMU mount (measured, mountMatrix()).
+ * check the level-only tests could never make. Six-position window means,
+ * fed through the PRODUCTION mag path (Ahrs_setMag: hard-iron subtraction +
+ * the real AHRS_MAG_MOUNT_* transform, read back via g_magLatch) and the
+ * production IMU mount (measured, mountMatrix()).
+ *
+ * SYS1-001 B10 (2026-10-19) -- the sensor moved onto the breakout PCB,
+ * turned 180 deg about Z. The data below are the 11 stationary windows of
+ * that day's session (Measurement Data/2026-10-19_mag_session_remount.csv,
+ * window means in 2026-10-19_6pos_remount_window_means.json, produced by
+ * tools/mag_mount_search.py --export-means) with the hard-iron set fitted
+ * from the same session's tumble (residual 1.4 %). The B9 data of 2026-09-12
+ * describe the OLD sensor position and were retired with it. After any
+ * remount: record, run the search, replace this table -- never patch the
+ * expectation.
  * ======================================================================== */
 
 void test_mag_mount_field_gravity_angle_is_constant(void)
 {
-    /* sensor-frame magRaw_G / accRaw_g, in JSON order (level, roll_p90,
-     * roll_p90b, roll_m90, roll_m90b, nose_up, nose_down, level_end). */
-    static const float32 magRawG[8][3] = {
-        {  0.05246f, -0.34019f, -0.41305f },
-        { -0.00378f, -0.48328f, -1.01070f },
-        { -0.01235f, -0.48752f, -1.01703f },
-        { -0.06635f,  0.33103f, -0.62561f },
-        { -0.00900f,  0.31426f, -0.63662f },
-        { -0.58533f, -0.26785f, -0.59756f },
-        {  0.15009f, -0.28623f, -1.07743f },
-        {  0.06558f, -0.32375f, -0.41028f },
+    /* sensor-frame magRaw_G / accRaw_g, window order of the 2026-10-19
+     * session (sensor face up per window, from the accelerometer): level,
+     * +Y up (nose up), level, -X up (right side down), level, -Y up (nose
+     * down), level, +Y up, -Y up, level, level. Attitude diversity 178 deg. */
+    static const float32 magRawG[11][3] = {
+        { -0.14164f, -0.06136f,  0.43448f },
+        {  0.51012f, -0.09114f,  0.11043f },
+        { -0.15782f, -0.07665f,  0.42698f },
+        { -0.11146f,  0.40056f, -0.01194f },
+        { -0.11746f, -0.08447f,  0.44392f },
+        { -0.10035f, -0.48456f, -0.07829f },
+        { -0.14341f, -0.06185f,  0.43413f },
+        {  0.49459f, -0.09146f,  0.16041f },
+        { -0.37444f, -0.10629f, -0.18514f },
+        { -0.14312f, -0.07070f,  0.43719f },
+        { -0.14171f, -0.07042f,  0.43460f },
     };
-    static const float32 accRawG[8][3] = {
-        { -0.01772f, -0.05938f,  0.99486f },
-        { -0.99869f, -0.06778f, -0.00534f },
-        { -1.00056f, -0.03295f, -0.02981f },
-        {  0.97494f,  0.16589f,  0.11123f },
-        {  0.99163f,  0.02788f,  0.07277f },
-        { -0.02193f,  0.99352f,  0.05267f },
-        { -0.00343f, -0.99390f, -0.14970f },
-        { -0.01208f, -0.06262f,  0.99353f },
+    static const float32 accRawG[11][3] = {
+        {  0.00032f,  0.00102f,  0.99472f },
+        {  0.00692f,  0.98443f, -0.15927f },
+        {  0.01796f, -0.04083f,  0.99360f },
+        { -0.99451f,  0.06606f, -0.09913f },
+        {  0.04616f,  0.05592f,  0.99330f },
+        {  0.98901f,  0.09058f, -0.08565f },
+        {  0.00154f, -0.00117f,  0.99485f },
+        {  0.01240f,  0.99360f, -0.05001f },
+        { -0.00317f, -1.00445f,  0.01322f },
+        {  0.00066f, -0.00001f,  0.99465f },
+        {  0.00033f,  0.00008f,  0.99463f },
     };
-    static const float32 hardIronG[3] = { -0.1940f, -0.0722f, -0.8510f };
-    const unsigned n = 8u;
+    /* calibration/board.json 2026-10-19 (tumble fit, residual 1.4 %) */
+    static const float32 hardIronG[3] = {  0.06255f, -0.03999f,  0.00012f };
+    const unsigned n = 11u;
     float M[9];
-    float angleDeg[8];
+    float angleDeg[11];
     float sum, sumSq, mean, variance, std;
     unsigned i;
     char msg[192];
 
     mountMatrix(M);           /* real, measured IMU mount -- unaffected by B9 */
-    g_xcpNvm.magOffX = hardIronG[0];
-    g_xcpNvm.magOffY = hardIronG[1];
-    g_xcpNvm.magOffZ = hardIronG[2];
+    /* The compiled FusionCal defaults ARE this set; written explicitly so the
+     * test does not silently depend on FusionCal.c's numbers staying put. */
+    g_fusionCal.magOff[0] = hardIronG[0];
+    g_fusionCal.magOff[1] = hardIronG[1];
+    g_fusionCal.magOff[2] = hardIronG[2];
+    g_fusionCal.magScale[0] = 1.0f;
+    g_fusionCal.magScale[1] = 1.0f;
+    g_fusionCal.magScale[2] = 1.0f;
 
     sum = 0.0f; sumSq = 0.0f;
     for (i = 0u; i < n; ++i)
@@ -476,18 +511,21 @@ void test_mag_mount_field_gravity_angle_is_constant(void)
 
     (void)snprintf(msg, sizeof msg,
         "NEW mag mount: angle(field,gravity) mean=%.2f deg std=%.2f deg "
-        "(want mean in [20,40], std < 6 -- B9: mean 33, spread 3.4-4.9 across 3 datasets)",
+        "(want mean in [20,40], std < 6 -- B10 2026-10-19: mean 25.1, spread 0.71 over 11 windows)",
         (double)mean, (double)std);
     TEST_ASSERT_TRUE_MESSAGE(std < 6.0f, msg);
     TEST_ASSERT_TRUE_MESSAGE((mean >= 20.0f) && (mean <= 40.0f), msg);
 
-    /* The OLD mapping (AHRS_MAG_MOUNT_* before B9: X_SRC=1/+1, Y_SRC=0/+1,
-     * Z_SRC=2/-1 -- identical to the IMU mount) must NOT look constant: it
-     * ranked 32nd of 48 in the B9 search (spread 29.5 deg, field pointing
-     * UP). The mount is a compile-time table, not a runtime parameter, so
-     * this is reproduced directly on the SAME hard-iron-corrected samples
-     * rather than by rebuilding with the old constants -- this is what
-     * proves the fix is what makes the assertion above pass, not a
+    /* The OLD mapping (AHRS_MAG_MOUNT_* before B10: the B9 table
+     * X_SRC=0/+1, Y_SRC=1/-1, Z_SRC=2/+1, correct for the 2026-09 position)
+     * must NOT look constant on the remounted sensor: it ranks 24th of 48
+     * in the B10 search, spread 67 deg -- 25 deg at level (the two negated
+     * horizontal components do not change the angle to gravity while the
+     * board is level, which is why the defect hides there) and 150-170 deg
+     * tilted. The mount is a compile-time table, not a runtime parameter,
+     * so this is reproduced directly on the SAME hard-iron-corrected
+     * samples rather than by rebuilding with the old constants -- this is
+     * what proves the fix is what makes the assertion above pass, not a
      * coincidence of the acceptance band. */
     {
         float oldSum = 0.0f, oldSumSq = 0.0f, oldMean, oldVariance, oldStd;
@@ -508,9 +546,9 @@ void test_mag_mount_field_gravity_angle_is_constant(void)
             corrected[0] = magRawG[i][0] - hardIronG[0];
             corrected[1] = magRawG[i][1] - hardIronG[1];
             corrected[2] = magRawG[i][2] - hardIronG[2];
-            oldMagBody[0] =  corrected[1];   /* old X_SRC=1, +1 */
-            oldMagBody[1] =  corrected[0];   /* old Y_SRC=0, +1 */
-            oldMagBody[2] = -corrected[2];   /* old Z_SRC=2, -1 */
+            oldMagBody[0] =  corrected[0];   /* B9 X_SRC=0, +1 */
+            oldMagBody[1] = -corrected[1];   /* B9 Y_SRC=1, -1 */
+            oldMagBody[2] =  corrected[2];   /* B9 Z_SRC=2, +1 */
 
             dot  = (oldMagBody[0] * gravityDown[0]) + (oldMagBody[1] * gravityDown[1]) + (oldMagBody[2] * gravityDown[2]);
             nMag = sqrtf((oldMagBody[0] * oldMagBody[0]) + (oldMagBody[1] * oldMagBody[1]) + (oldMagBody[2] * oldMagBody[2]));
