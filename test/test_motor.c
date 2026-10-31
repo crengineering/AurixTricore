@@ -24,6 +24,8 @@ void setUp(void)
     g_xcpCal.motorCmd       = 0u;
     g_xcpCal.motorManual    = 0u;
     g_xcpCal.motorSpMax     = 1600u;
+    g_xcpCal.motorSpMode    = (uint16)MOTOR_SETPOINT_MODE_THROTTLE;   /* ceiling tests feed raw DShot;
+                                                                       * the firmware default is SPEED */
     for (uint32 i = 0u; i < DSHOT_MEND; i++) { g_xcpCal.motorManualSp[i] = 0u; }
 }
 
@@ -204,6 +206,51 @@ void test_disarm_zeroes_everything(void)
     }
 }
 
+/* rpm -> DShot lookup table (thrust rig run 5, evidence 4829A25237BFB7C8) in manual
+ * SPEED mode: breakpoints reproduce the table, midpoints interpolate linearly
+ * (integer truncation), 0 stays stop, anything above the last breakpoint is 1600. */
+void test_speed_mode_lut(void)
+{
+    static const uint16 rpm[]      = {0u, 1u,  650u, 1299u, 1300u, 1964u, 2629u, 4929u, 8257u, 9000u, 65535u};
+    static const uint16 expected[] = {0u, 48u, 123u,  199u,  200u,  299u,  400u,  800u, 1600u, 1600u,  1600u};
+
+    arm();
+    g_xcpCal.motorManual = MOTOR_CMD_MANUAL;
+    g_xcpCal.motorSpMode = (uint16)MOTOR_SETPOINT_MODE_SPEED;
+    for (uint32 i = 0u; i < (sizeof(rpm) / sizeof(rpm[0])); i++)
+    {
+        TEST_ASSERT_EQUAL_UINT16(expected[i], clampM1(rpm[i]));
+    }
+
+    /* the ceiling still caps the table output */
+    g_xcpCal.motorSpMax = 1000u;
+    TEST_ASSERT_EQUAL_UINT16(1000u, clampM1(8257u));
+    TEST_ASSERT_EQUAL_UINT16(800u,  clampM1(4929u));
+
+    /* any mode value other than THROTTLE is read as SPEED (the conservative reading:
+     * a throttle number taken as rpm gives less thrust, never more) */
+    g_xcpCal.motorSpMax  = 1600u;
+    g_xcpCal.motorSpMode = 7u;
+    TEST_ASSERT_EQUAL_UINT16(800u, clampM1(4929u));
+}
+
+/* The flight-controller input of Motor_task is rpm and always goes through the
+ * table, whatever motorSpMode says (the mode is the unit of motorManualSp[] only). */
+void test_controller_path_is_rpm(void)
+{
+    static const uint16 rqst[DSHOT_MEND] = {4929u, 0u, 1u, 9000u};
+    uint16 cmd[DSHOT_MEND] = {0u, 0u, 0u, 0u};
+
+    arm();
+    g_xcpCal.motorManual = 0u;
+    g_xcpCal.motorSpMode = (uint16)MOTOR_SETPOINT_MODE_THROTTLE;
+    (void)Motor_task(rqst, cmd, &s_state);
+    TEST_ASSERT_EQUAL_UINT16(800u,  cmd[0]);
+    TEST_ASSERT_EQUAL_UINT16(0u,    cmd[1]);
+    TEST_ASSERT_EQUAL_UINT16(48u,   cmd[2]);
+    TEST_ASSERT_EQUAL_UINT16(1600u, cmd[3]);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -214,5 +261,7 @@ int main(void)
     RUN_TEST(test_ceiling_validation_reverts_to_last_valid);
     RUN_TEST(test_manual_sp_not_rewritten_and_all_motors_same_ceiling);
     RUN_TEST(test_disarm_zeroes_everything);
+    RUN_TEST(test_speed_mode_lut);
+    RUN_TEST(test_controller_path_is_rpm);
     return UNITY_END();
 }

@@ -199,7 +199,7 @@ Defaults. Persistente Parameter leben strikt getrennt im NVM-Block.
 | 0x44 | `motorManual` | – | 0 | 1 = `motorManualSp[]` statt Flugregler als Sollwertquelle (Inbetriebnahme); wird mit `motorCmd` bei jedem Verlassen von ARMED gelöscht |
 | 0x48 | `motorManualSp[4]` | DShot | 0 | manuelle DShot-Werte M1..M4 (`uint16`): 0 = Stopp, 48..2047 = Gas; nur wirksam mit `motorManual` und ARMED; bei jedem Verlassen von ARMED genullt |
 | 0x50 | `motorSpMax` | DShot | 1600 | Gas-Obergrenze für jede Sollwertquelle (48..2047), nach jedem Reset 1600, 2047 nur am Schubprüfstand; Werte außerhalb 48..2047 werden auf den letzten gültigen Wert zurückgeschrieben |
-| 0x52 | `motorSpReserved` | – | 0 | Füllwort |
+| 0x52 | `motorSpMode` | – | 1 | Einheit von `motorManualSp[]`: 0 = DShot-Gas (48..2047), 1 = Drehzahl in rpm, über die Kennlinie aus Schubprüfstandslauf 5 in motor.c (0 = Stopp, 1..8257 rpm → 48..1600, darüber 1600); nach jedem Reset 1, damit ein als rpm gemeinter GUI-Wert nach einem Reset nie als Gaswert gelesen wird (umgekehrt ergibt ein Gaswert als rpm nur weniger Schub); der Flugregler-Pfad geht immer über die Kennlinie |
 
 Die `fs*`-Werte skalieren die 8-Bit-Rohwerte in Volt
 (`U = raw · fs / 255`) — eine Änderung wirkt direkt auf die Messwerte

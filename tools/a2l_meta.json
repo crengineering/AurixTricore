@@ -610,8 +610,12 @@
       "lo": "48",
       "hi": "2047"
     },
-    "motorSpReserved": {
-      "skip": true
+    "motorSpMode": {
+      "name": "CAL_motorSpMode",
+      "desc": "unit of CAL_motorManualSp_Mn: 0 = DShot throttle 48..2047, 1 = rpm through the thrust-rig lookup table in motor.c (0 = stop, 1..8257 rpm -> 48..1600, above 8257 -> 1600); default 1 after every reset; the flight-controller path always uses the table",
+      "maxdiff": "1",
+      "lo": "0",
+      "hi": "1"
     }
   },
   "Xcp_Nvm": {

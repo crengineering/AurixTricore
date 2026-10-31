@@ -58,7 +58,7 @@ static void diag_loadDefaults(void)
      * four (50 A criterion SYS2-PWR-001); thrust rig run 5 2026-10-18, evidence
      * 4829A25237BFB7C8; raise over XCP for rig runs only, back to 1600 at every reset. */
     g_xcpCal.motorSpMax   = 1600u;
-    g_xcpCal.motorSpReserved = 0u;
+    g_xcpCal.motorSpMode  = 1u; /* default is setpoint mode */
     g_xcpCal.magic        = XCP_CAL_MAGIC;
 }
 
