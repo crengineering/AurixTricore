@@ -82,6 +82,7 @@ too, so either file reopens as a diagram.
 | DShot300 to four ESCs, bidirectional eRPM + KISS telemetry | ✅ HW-validated — `docs/DSHOT.md` |
 | Arming state machine, XCP disarm, link-loss failsafe | ✅ bench-recorded, 502 ms measured |
 | Rotor-speed ceiling as a RAM calibration (`CAL_motorSpMax`, default 1600) | ✅ |
+| Speed setpoints in rpm: thrust-rig lookup table rpm → DShot in `motor.c`, manual unit switch `CAL_motorSpMode` (default rpm) | ✅ rig-validated — `docs/DSHOT.md` §8 |
 | CAN, EVADC | 📋 planned — `docs/CAN_ADC_PLAN.md` |
 
 **CPU1 is the dedicated flight core** (`NavTask_step`: IMU read → AHRS →
@@ -405,6 +406,7 @@ on a 0.1 g scale with its measurement protocol and fit scripts (`thrustrig`).
 | reply validity | one valid eRPM reply per frame on all four motors, spinning or not |
 | thrust rig, one motor on the flight pack | 1410 g at 9886 rpm and 17.6 A at full throttle · kT = 12.45 µN/(rad/s)² |
 | rotor-speed ceiling | setpoint 1600 ≈ 865 rad/s keeps four motors under the 50 A pack criterion |
+| rpm → DShot table (speed mode) | DShot sent = table on every step of two ladders · measured rpm −2.3 % mean against the request over 129–8257 rpm (pack voltage, open loop) |
 
 ---
 
