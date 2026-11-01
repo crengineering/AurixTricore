@@ -206,13 +206,13 @@ void test_disarm_zeroes_everything(void)
     }
 }
 
-/* rpm -> DShot lookup table (thrust rig run 5, evidence 4829A25237BFB7C8) in manual
+/* rpm -> DShot lookup table (thrust rig run 5, evidence 4829A25237BFB7C8; 129 rpm breakpoint from run 6, CBE4FEFADEAE4CC9) in manual
  * SPEED mode: breakpoints reproduce the table, midpoints interpolate linearly
  * (integer truncation), 0 stays stop, anything above the last breakpoint is 1600. */
 void test_speed_mode_lut(void)
 {
-    static const uint16 rpm[]      = {0u, 1u,  650u, 1299u, 1300u, 1964u, 2629u, 4929u, 8257u, 9000u, 65535u};
-    static const uint16 expected[] = {0u, 48u, 123u,  199u,  200u,  299u,  400u,  800u, 1600u, 1600u,  1600u};
+    static const uint16 rpm[]      = {0u, 1u,  128u, 129u, 650u, 1299u, 1300u, 1964u, 2629u, 4929u, 8257u, 9000u, 65535u};
+    static const uint16 expected[] = {0u, 48u,  48u,  48u, 115u,  199u,  200u,  299u,  400u,  800u, 1600u, 1600u,  1600u};
 
     arm();
     g_xcpCal.motorManual = MOTOR_CMD_MANUAL;

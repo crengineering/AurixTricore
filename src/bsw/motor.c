@@ -20,7 +20,7 @@
 
 #define DSHOT_BEEP_DELAY 1000u  /* 1s between beeps */
 
-#define MOTOR_TABLE_SIZE 9u
+#define MOTOR_TABLE_SIZE 10u
 
 
 /******************************************************************************/
@@ -49,10 +49,10 @@ static uint32 Motor_interpolate(uint32 x0, uint32 x1, uint32 y0, uint32 y1, uint
 
 static uint16 Motor_convert_speed_to_throttle(const uint16 speed_rpm)
 {
-    const uint32 bp_speed[MOTOR_TABLE_SIZE]    = {0u,  1u, 1300u, 2629u, 3829u, 4929u, 5929u, 6814u, 8257u };
-    const uint32 td_throttle[MOTOR_TABLE_SIZE] = {0u, 48u,  200u,  400u,  600u,  800u, 1000u, 1200u, 1600u };
+    const uint32 bp_speed[MOTOR_TABLE_SIZE]    = {0u,  1u, 129u, 1300u, 2629u, 3829u, 4929u, 5929u, 6814u, 8257u };
+    const uint32 td_throttle[MOTOR_TABLE_SIZE] = {0u, 48u,  48u,  200u,  400u,  600u,  800u, 1000u, 1200u, 1600u };
           uint32 speed_sp                      = 0u;
-          uint8 lower_index                    = 0u;
+          uint8  lower_index                   = 0u;
 
     for (uint8 i = 0u; i < MOTOR_TABLE_SIZE - 1u; i++)
     {
