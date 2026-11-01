@@ -30,7 +30,7 @@ typedef enum {
     MOTOR_SETPOINT_MODE_THROTTLE = 0,
     MOTOR_SETPOINT_MODE_SPEED,
     MOTOR_SETPOINT_MODE_END
-}Motor_setpoint_mode_t;
+} Motor_setpoint_mode_t;
 /******************************************************************************/
 /*-------------------------Global Function Prototypes-------------------------*/
 /******************************************************************************/

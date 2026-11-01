@@ -54,7 +54,7 @@ static uint16 Motor_convert_speed_to_throttle(const uint16 speed_rpm)
           uint32 speed_sp                      = 0u;
           uint8  lower_index                   = 0u;
 
-    for (uint8 i = 0u; i < MOTOR_TABLE_SIZE - 1u; i++)
+    for (uint8 i = 0u; i < (MOTOR_TABLE_SIZE - 1u); i++)
     {
         if ( bp_speed[i] < speed_rpm)
         {
@@ -170,7 +170,20 @@ static void Motor_state_armed(boolean *dshot_stream_allowed, Motor_states_t *sta
     {
         if(g_xcpCal.motorManual == MOTOR_CMD_MANUAL)
         {
-            for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++) {setpoint[motor_id] = (g_xcpCal.motorSpMode == (uint16)MOTOR_SETPOINT_MODE_THROTTLE) ? g_xcpCal.motorManualSp[motor_id] : Motor_convert_speed_to_throttle(g_xcpCal.motorManualSp[motor_id]);}
+            /* unit of motorManualSp[]: 0 = DShot throttle, anything else = rpm (the safe reading) */
+            const Motor_setpoint_mode_t mode = (g_xcpCal.motorSpMode == 0u) ? MOTOR_SETPOINT_MODE_THROTTLE : MOTOR_SETPOINT_MODE_SPEED;
+
+            for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
+            {
+                if (mode == MOTOR_SETPOINT_MODE_THROTTLE)
+                {
+                    setpoint[motor_id] = g_xcpCal.motorManualSp[motor_id];
+                }
+                else
+                {
+                    setpoint[motor_id] = Motor_convert_speed_to_throttle(g_xcpCal.motorManualSp[motor_id]);
+                }
+            }
         }
         else
         {
