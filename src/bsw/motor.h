@@ -25,6 +25,12 @@ typedef enum {
     MOTOR_FAILSAFE,
     MOTOR_END
 } Motor_states_t;
+
+typedef enum {
+    MOTOR_SETPOINT_MODE_THROTTLE = 0,
+    MOTOR_SETPOINT_MODE_SPEED,
+    MOTOR_SETPOINT_MODE_END
+} Motor_setpoint_mode_t;
 /******************************************************************************/
 /*-------------------------Global Function Prototypes-------------------------*/
 /******************************************************************************/

@@ -370,9 +370,31 @@ paths specific to this use.
 
 ## 8. FC-side setpoint chain
 
-Every throttle setpoint (`motorManualSp[]` today, the flight controller's
-`motor_speed_rqst[]` later) passes the one clamp in `motor.c` while ARMED
-(`Motor_calc_clamp` in `motor.c`, SWE1-FW-025 / SWE1-FW-022):
+Every setpoint passes the same two stages in `motor.c` while ARMED: the speed table
+(`Motor_convert_speed_to_throttle`) and then the one clamp (`Motor_calc_clamp`,
+SWE1-FW-025 / SWE1-FW-022).
+
+**Stage 0 — unit.** The flight controller's `motor_speed_rqst[]` (first argument of
+`Motor_task`) is mechanical speed in rpm and always goes through the table. The manual
+source `motorManualSp[]` is read in the unit `Xcp_Cal.motorSpMode` (`CAL_motorSpMode`,
+offset 0x52) selects: `0` = DShot throttle (the table is skipped), `1` = rpm (default after
+every reset — an rpm number taken as throttle would hit the ceiling, the reverse only gives
+less thrust; any value other than 0 counts as rpm).
+
+**Stage 1 — rpm → DShot table** (thrust rig run 5, QuadSE evidence `4829A25237BFB7C8`;
+low breakpoint 129 rpm from run 6, `CBE4FEFADEAE4CC9` / `22077EE9A717352C`), linear
+interpolation with uint32 integer truncation, above the last breakpoint the last value:
+
+| rpm   | 0 | 1  | 129 | 1300 | 2629 | 3829 | 4929 | 5929 | 6814 | 8257 |
+|-------|---|----|-----|------|------|------|------|------|------|------|
+| DShot | 0 | 48 | 48  | 200  | 400  | 600  | 800  | 1000 | 1200 | 1600 |
+
+`0` stays stop; anything from 1 rpm spins at the floor 48 (≈ 129 rpm on this ESC/prop);
+the table is open-loop feed-forward — measured speed sits ≈ 2–4 % below the request
+depending on pack voltage (run 6/6b), which the rate loop absorbs. Host test
+`test/test_motor.c` pins the table values.
+
+**Stage 2 — clamp** (`Motor_calc_clamp`):
 
 1. `0` stays `0` (stop).
 2. limited to the ceiling `Xcp_Cal.motorSpMax` (`CAL_motorSpMax`, default 1600 from
@@ -382,8 +404,8 @@ Every throttle setpoint (`motorManualSp[]` today, the flight controller's
    never produce 1..47 ESC commands or > 2047);
 4. the driver (`Dshot.c`) validates the frame again.
 
-The INIT beacons (1..5) are not throttle and bypass the ceiling. `motorManualSp[]` is
-never rewritten by the clamp.
+The INIT beacons (1..5) are not throttle and bypass table and ceiling. `motorManualSp[]`
+is never rewritten by the table or the clamp.
 
 ---
 

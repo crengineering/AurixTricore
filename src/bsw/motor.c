@@ -20,6 +20,8 @@
 
 #define DSHOT_BEEP_DELAY 1000u  /* 1s between beeps */
 
+#define MOTOR_TABLE_SIZE 10u
+
 
 /******************************************************************************/
 /*--------------------------Function Declaration------------------------------*/
@@ -30,6 +32,8 @@ static void    Motor_state_disarmed(boolean *dshot_stream_allowed, Motor_states_
 static void    Motor_state_init    (boolean *dshot_stream_allowed, Motor_states_t *state, uint16 dshot_command_set[DSHOT_MEND]);
 static void    Motor_state_armed   (boolean *dshot_stream_allowed, Motor_states_t *state, uint16 dshot_command_set[DSHOT_MEND], const boolean *eth_link_alive, const uint16 motor_speed_rqst[DSHOT_MEND], uint16  setpoint[DSHOT_MEND], uint16 ceiling);
 static void    Motor_state_failsafe(boolean *dshot_stream_allowed, Motor_states_t *state, const boolean *eth_link_alive);
+static uint32 Motor_interpolate(uint32 x0, uint32 x1, uint32 y0, uint32 y1, uint32 x);
+static uint16 Motor_convert_speed_to_throttle(const uint16 speed_rpm);
 
 /******************************************************************************/
 /*--------------------------Interrupts----------------------------------------*/
@@ -38,6 +42,39 @@ static void    Motor_state_failsafe(boolean *dshot_stream_allowed, Motor_states_
 /******************************************************************************/
 /*--------------------------Function Implementations--------------------------*/
 /******************************************************************************/
+static uint32 Motor_interpolate(uint32 x0, uint32 x1, uint32 y0, uint32 y1, uint32 x)
+{
+    return y0 + (x - x0) * (y1 - y0) / (x1 - x0);
+}
+
+static uint16 Motor_convert_speed_to_throttle(const uint16 speed_rpm)
+{
+    const uint32 bp_speed[MOTOR_TABLE_SIZE]    = {0u,  1u, 129u, 1300u, 2629u, 3829u, 4929u, 5929u, 6814u, 8257u };
+    const uint32 td_throttle[MOTOR_TABLE_SIZE] = {0u, 48u,  48u,  200u,  400u,  600u,  800u, 1000u, 1200u, 1600u };
+          uint32 speed_sp                      = 0u;
+          uint8  lower_index                   = 0u;
+
+    for (uint8 i = 0u; i < (MOTOR_TABLE_SIZE - 1u); i++)
+    {
+        if ( bp_speed[i] < speed_rpm)
+        {
+            lower_index = i;
+        }
+    }
+
+    if (speed_rpm > bp_speed[MOTOR_TABLE_SIZE -1u])
+    {
+        speed_sp = td_throttle[MOTOR_TABLE_SIZE - 1u];
+    }
+    else
+    {
+        speed_sp = Motor_interpolate(bp_speed[lower_index], bp_speed[lower_index + 1u], td_throttle[lower_index], td_throttle[lower_index + 1u], (uint32)speed_rpm);
+    }
+
+    return (uint16) speed_sp;
+}
+
+
 static boolean Motor_beep(uint16 dshot_command_set[DSHOT_MEND])
 {
     static boolean motor_beep[DSHOT_MEND] = {FALSE, FALSE, FALSE, FALSE};
@@ -133,11 +170,24 @@ static void Motor_state_armed(boolean *dshot_stream_allowed, Motor_states_t *sta
     {
         if(g_xcpCal.motorManual == MOTOR_CMD_MANUAL)
         {
-            for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++) {setpoint[motor_id] = g_xcpCal.motorManualSp[motor_id];}
+            /* unit of motorManualSp[]: 0 = DShot throttle, anything else = rpm (the safe reading) */
+            const Motor_setpoint_mode_t mode = (g_xcpCal.motorSpMode == 0u) ? MOTOR_SETPOINT_MODE_THROTTLE : MOTOR_SETPOINT_MODE_SPEED;
+
+            for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
+            {
+                if (mode == MOTOR_SETPOINT_MODE_THROTTLE)
+                {
+                    setpoint[motor_id] = g_xcpCal.motorManualSp[motor_id];
+                }
+                else
+                {
+                    setpoint[motor_id] = Motor_convert_speed_to_throttle(g_xcpCal.motorManualSp[motor_id]);
+                }
+            }
         }
         else
         {
-            for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++) {setpoint[motor_id] = motor_speed_rqst[motor_id];}
+            for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++) {setpoint[motor_id] = Motor_convert_speed_to_throttle(motor_speed_rqst[motor_id]);}
         }
         Motor_calc_clamp( setpoint, dshot_command_set, ceiling);
     }

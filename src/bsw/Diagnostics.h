@@ -39,7 +39,7 @@
  *   0x50  uint16   motorSpMax     DShot throttle ceiling for every setpoint source, 48..2047;
  *                                  an out-of-range write is reverted by motor.c to the last valid
  *                                  value; default 1600 (diag_loadDefaults); SWE1-FW-025
- *   0x52  uint16   motorSpReserved  pad (TASKING packs uint32 at 2-byte alignment, GCC at 4), 0
+ *   0x52  uint16   motorSpMode  Motor Mode for setpoints: 0 = Throttle, 1 = Speed
  */
 /* XCP_CAL_ADDR deleted, T5 (docs/MEMORY_PLACEMENT.md): Xcp.c's whitelist
  * now uses (uint32)&g_xcpCal, so Lcf_Tasking_Tricore_Tc.lsl
@@ -69,7 +69,7 @@ typedef struct
     uint32  motorManual;
     uint16  motorManualSp[4];
     uint16  motorSpMax;
-    uint16  motorSpReserved;
+    uint16  motorSpMode;
 } Xcp_Cal;
 
 /* Xcp_Cal.motorCmd: 1 = ARM, 0 = DISARM (plain boolean by decision of 2026-09-24;
