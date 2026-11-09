@@ -16,7 +16,7 @@
 /******************************************************************************/
 typedef struct
 {
-    uint32 gen;               /**< +1 per accepted new dshot frame (producer only)                */
+    uint32 gen;               /**< +1 per Dshot_task call (1 ms), reply decoded or not (producer only) */
     uint32 rpm[4];            /**< mechanical rpm = eRPM / pole pairs, last valid, 0 until first  */
     uint32 dshot_ok_count[4]; /**< valid bidir replies since boot; unchanged = this motor stale   */
     uint32 pad[1];            /**< 40 bytes: SharedRam.h rule 2, own 64-bit lines                 */

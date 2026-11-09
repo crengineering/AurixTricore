@@ -13,7 +13,7 @@
  * no latch protocol. Amplitudes are measured as max|y| over the last WINDOW samples
  * after SETTLE samples, so the transient of the cascade is excluded. */
 
-#define FS_HZ      1000.0
+#define FS_HZ      1014.2          /* IMUFILTER_FS_HZ: the sensor's measured DRDY rate */
 #define TWO_PI     6.283185307179586
 #define SETTLE     2500u
 #define WINDOW     500u
@@ -332,6 +332,77 @@ static void test_acc_lowpass_off_is_exact_passthrough(void)
     }
 }
 
+/* 14. ImuFilter_restart(): after a gap the next sample passes through every stage and the
+ *     stages take their history from it -- no ringing off the pre-gap state. Pre-gap: an 80 Hz
+ *     line with the notches hot; gap; then a constant 1 g must come out as 1 g from tick 1. */
+static void test_restart_takes_state_from_first_sample(void)
+{
+    Icm42688_Sample s;
+    uint32 k;
+    set_rpm_all(4800u);
+    g_fusionCal.accLpfHz = 15.0f;
+    (void)run_sine(80.0, 1000u);              /* notch + low-pass states full of 80 Hz history */
+    ImuFilter_restart();
+    for (k = 0u; k < 50u; k++)
+    {
+        uint32 i;
+        for (i = 0u; i < 3u; i++) { s.acc[i] = 1.0f; s.gyro[i] = 1.0f; }
+        s.tempC = 25.0f;
+        core0_frame();
+        ImuFilter_step(&s);
+        TEST_ASSERT_FLOAT_WITHIN(1.0e-3f, 1.0f, s.acc[2]);
+        TEST_ASSERT_FLOAT_WITHIN(1.0e-3f, 1.0f, s.gyro[0]);
+    }
+}
+
+/* 15. A mis-decoded rpm above the Nyquist guard (20000 rpm: 2/rev at 667 Hz > fs/2) must not
+ *     run a stage unstable: the stage bypasses, the output stays finite; back at 4800 rpm the
+ *     cascade works again. */
+static void test_rpm_above_nyquist_is_bypassed_and_recovers(void)
+{
+    Icm42688_Sample s;
+    uint32 k;
+    set_rpm_all(4800u);
+    g_dshot_bidir_rpm.rpm[1] = 20000u;        /* one motor's frame decoded to nonsense */
+    for (k = 0u; k < 3000u; k++)
+    {
+        const float32 v = (float32)sin(TWO_PI * 80.0 * ((double)k / FS_HZ));
+        uint32 i;
+        for (i = 0u; i < 3u; i++) { s.acc[i] = v; s.gyro[i] = v; }
+        s.tempC = 25.0f;
+        core0_frame();
+        ImuFilter_step(&s);
+        TEST_ASSERT_TRUE_MESSAGE(fabsf(s.gyro[0]) < 2.0f, "stage ran away on an above-Nyquist rpm");
+        TEST_ASSERT_TRUE_MESSAGE(fabsf(s.acc[0]) < 2.0f, "acc stage ran away on an above-Nyquist rpm");
+    }
+    set_rpm_all(4800u);
+    const float32 peak = run_sine(80.0, SETTLE + WINDOW);
+    TEST_ASSERT_TRUE_MESSAGE(peak < 0.03f, "cascade did not recover after the bad rpm went away");
+}
+
+/* 16. A poisoned stage state (NaN) is caught by the finite guard: the cascade is back to
+ *     normal after the bad samples. Poison through NaN inputs. */
+static void test_nan_input_does_not_poison_the_filter(void)
+{
+    union { float32 f; uint32 u; } nan_bits;
+    Icm42688_Sample s;
+    uint32 k;
+    nan_bits.u = 0x7FC00000u;
+    set_rpm_all(4800u);
+    (void)run_sine(80.0, 500u);
+    for (k = 0u; k < 3u; k++)                  /* three NaN samples in a row */
+    {
+        uint32 i;
+        for (i = 0u; i < 3u; i++) { s.acc[i] = nan_bits.f; s.gyro[i] = nan_bits.f; }
+        s.tempC = 25.0f;
+        core0_frame();
+        ImuFilter_step(&s);
+    }
+    const float32 peak = run_sine(80.0, SETTLE + WINDOW);
+    TEST_ASSERT_TRUE_MESSAGE(peak == peak, "output NaN after a NaN input");
+    TEST_ASSERT_TRUE_MESSAGE(peak < 0.03f, "cascade did not recover after NaN samples");
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -348,5 +419,8 @@ int main(void)
     RUN_TEST(test_q_word_changes_width_and_is_clamped);
     RUN_TEST(test_acc_lowpass_attenuates_acc_only);
     RUN_TEST(test_acc_lowpass_off_is_exact_passthrough);
+    RUN_TEST(test_restart_takes_state_from_first_sample);
+    RUN_TEST(test_rpm_above_nyquist_is_bypassed_and_recovers);
+    RUN_TEST(test_nan_input_does_not_poison_the_filter);
     return UNITY_END();
 }
