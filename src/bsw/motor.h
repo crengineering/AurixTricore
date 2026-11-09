@@ -18,7 +18,7 @@
 /*-----------------------------Data Structures--------------------------------*/
 /******************************************************************************/
 #define MOTOR_POLES       14u                    /* X2216-III 12N14P */
-#define MOTOR_POLE_PAIRS  (MOTOR_POLES / 2u)     /* 7, eRPM -> mechanical rpm */
+#define MOTOR_POLE_PAIRS  7u                     /* = MOTOR_POLES / 2, eRPM -> mechanical rpm (literal: MISRA 10.8 on the casts) */
 
 
 typedef enum {

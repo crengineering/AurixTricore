@@ -106,7 +106,8 @@ static void ImuFilter_calc_lowpass(ImuFilter_coefficients *coeff, const float32 
 /* Biquad step: y[k] = (b0 x[k] + b1 x[k-1] + b2 x[k-2] - a1 y[k-1] - a2 y[k-2]) / a0 */
 static float32 ImuFilter_calc_rpm_notch(const float32 x_k, const ImuFilter_coefficients coeff, const ImuFilter_prev_values prev_values)
 {
-    return (coeff.b0 * x_k + coeff.b1 * prev_values.xk1 + coeff.b2 * prev_values.xk2 - coeff.a1 * prev_values.yk1 - coeff.a2 * prev_values.yk2) / (coeff.a0);
+    return ((coeff.b0 * x_k) + (coeff.b1 * prev_values.xk1) + (coeff.b2 * prev_values.xk2)
+          - (coeff.a1 * prev_values.yk1) - (coeff.a2 * prev_values.yk2)) / coeff.a0;
 }
 
 
@@ -154,7 +155,8 @@ static void ImuFilter_flatten(ImuFilter_prev_values *prev_values)
  * then track the signal and come back without ringing when the set is enabled again. */
 static void ImuFilter_filter_axisPackage(float32 sensor_sample[3], const ImuFilter_coefficients coeff[4], const boolean active[4], ImuFilter_prev_values prev_values[3][4])
 {
-    uint8 i,j;
+    uint8 i;
+    uint8 j;
     for (i = 0u; i <3u; i++) /* 3 iterations for 3 axes */
     {
        for (j = 0u; j < 4u; j++) /* 4 iterations for 4 motors */
@@ -229,10 +231,11 @@ void ImuFilter_step(Icm42688_Sample *imu_sample)
     static ImuFilter_coefficients s_coeff_acc_lpf;
     static float32                s_acc_lpf_hz_previous = -1.0f;
 
-    /* One snapshot of the latch per step (gen once, rpm once per motor): coefficients and
-     * stage activation then see the same rpm set, and a publish between two reads cannot
-     * drop a set. Each word is atomic; a torn old/new pair is 0.13 Hz at 8000 rpm/s. */
-    const uint32 gen = g_dshot_bidir_rpm.gen;
+    /* One snapshot of the latch per step (rpm once per motor, then gen): coefficients and
+     * stage activation see the same snapshot; reading gen last means a publish between the
+     * reads shows up as a changed gen on the next step, never as a dropped set. Each word
+     * is atomic; a torn old/new pair is 0.13 Hz at 8000 rpm/s. */
+    uint32  gen;
     uint32  rpm[4];
     boolean active_h1[4];
     boolean active_h2[4];
@@ -250,6 +253,7 @@ void ImuFilter_step(Icm42688_Sample *imu_sample)
     {
         rpm[j] = g_dshot_bidir_rpm.rpm[j];
     }
+    gen = g_dshot_bidir_rpm.gen;   /* AFTER the rpm words: a publish in between is caught next tick */
 
     /* restart tick (after a gap): every stage passes through and takes its state from
      * this sample -- the sets ARE called below, with nothing active, and the history is

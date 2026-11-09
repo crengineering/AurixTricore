@@ -694,6 +694,8 @@ static void Dshot_setLMU(void)
         g_dshot_bidir_rpm.dshot_ok_count[motor_id] = g_dshot_reply_ok[motor_id];
     }
 
+    /* cppcheck-suppress misra-c2012-17.3 ; deviation: Ifx__dsync() wraps
+     * TASKING's __dsync() intrinsic (see SharedRam.h), same as Ahrs.c */
     Ifx__dsync();
     g_dshot_bidir_rpm.gen++;
 }
