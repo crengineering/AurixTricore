@@ -386,7 +386,6 @@ extern volatile Xcp_Fusion g_xcpFusion;
  * the KISS fields above arrive round-robin on the shared UART wire).
  * --------------------------------------------------------------------------- */
 #define XCP_ESC_MAGIC        0x32435345u
-#define XCP_ESC_MOTOR_POLES  14u        /* X2216-III 12N14P, docs/ESC_BRINGUP_2026-09-16.md */
 
 typedef struct
 {

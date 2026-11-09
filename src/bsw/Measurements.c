@@ -9,6 +9,7 @@
 #include "IfxScuWdt.h"
 #include "Ifx_Lwip.h"
 #include <math.h>
+#include "motor.h"
 
 
 /* The full-scale voltages of the 8-bit PMS monitor ADCs live in the
@@ -238,7 +239,7 @@ void measurementsSetEsc(const Dshot_TelemetryStatus tlm[DSHOT_MEND], uint32 crcF
         g_xcpEsc.mAh[m]       = tlm[m].packet.mAh;
         g_xcpEsc.alive[m]     = (tlm[m].alive != FALSE) ? 1u : 0u;
         /* eRPM counts electrical revolutions; one mechanical turn = poles/2 of them */
-        g_xcpEsc.rpm[m]       = ((float32)tlm[m].packet.eRPM * 100.0f) / ((float32)XCP_ESC_MOTOR_POLES / 2.0f);
+        g_xcpEsc.rpm[m]       = ((float32)tlm[m].packet.eRPM * 100.0f) / ((float32)MOTOR_POLE_PAIRS);
     }
 }
 
@@ -270,7 +271,7 @@ void measurementsSetEscBidir(const uint32 eRPM[DSHOT_MEND], const uint32 ok[DSHO
         g_xcpEsc.bidirErpm[m] = eRPM[m];
         g_xcpEsc.bidirOk[m]   = ok[m];
         /* eRPM counts electrical revolutions; one mechanical turn = poles/2 of them */
-        g_xcpEsc.bidirRpm[m]  = (float32)eRPM[m] / ((float32)XCP_ESC_MOTOR_POLES / 2.0f);
+        g_xcpEsc.bidirRpm[m]  = (float32)eRPM[m] / ((float32)MOTOR_POLE_PAIRS);
     }
 }
 
