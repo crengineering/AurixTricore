@@ -323,6 +323,7 @@ void NavTask_step(void)
     else
     {
         Icm42688_Sample sample = { { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 0.0f };
+        Icm42688_Sample filtered;     /* sample after ImuFilter_step(), the AHRS input */
         boolean         present;
         boolean         ahrsInputOk;
         boolean         fusionInputOk;
@@ -490,8 +491,21 @@ void NavTask_step(void)
                 g_dbgNavInvalidTicks++;
             }
 
-            /* rpm notch filter for gyro and acc signals */
-            ImuFilter_step(&sample);
+            /* Rotor-vibration filter (ImuFilter.c): rpm-tracked notches on acc
+             * and gyro, BEFORE the AHRS. Works on a copy so that the slew check
+             * above, Icm42688_plausible() and NavState_publish() below keep
+             * seeing the RAW sample (ImuAccel/ImuGyro stay raw on XCP -- the
+             * before/after comparison and the vibration spectrum need them).
+             * Stepped only on a new, accepted sample: on the no-new-edge path
+             * the same sample would be filtered twice (state shifted twice),
+             * and an absent sensor's all-zero sample would put a step into the
+             * filter history. Otherwise the copy is the raw sample and
+             * Ahrs_update() freezes on ahrsInputOk anyway. */
+            filtered = sample;
+            if ((newSample != FALSE) && (ahrsInputOk != FALSE))
+            {
+                ImuFilter_step(&filtered);
+            }
 
             /* flight-reviewer FAIL, SYS1-001 regression: elapsedTime is
              * deliberately 0.0f above when there was no new edge at all
@@ -510,7 +524,7 @@ void NavTask_step(void)
                     ahrsDt = NAVTASK_TIMEDOUT_FAULT_DT_S;
                 }
 
-                Ahrs_update(&ahrs, sample.acc, sample.gyro, ahrsDt, ahrsInputOk);
+                Ahrs_update(&ahrs, filtered.acc, filtered.gyro, ahrsDt, ahrsInputOk);
             }
 
             /* Gate the navigation filter on the attitude being usable, not
