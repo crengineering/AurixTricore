@@ -11,6 +11,7 @@
 #include "SysTime.h"
 #include "ImuInt.h"
 #include "ImuEdge.h"
+#include "ImuFilter.h"
 
 /* Below NAVTASK_DT_MIN_S the tick fired twice inside one STM period (nothing
  * to integrate), above NAVTASK_DT_MAX_S the previous tick was so late that
@@ -488,6 +489,9 @@ void NavTask_step(void)
                  * bucket as every other invalid-input case. */
                 g_dbgNavInvalidTicks++;
             }
+
+            /* rpm notch filter for gyro and acc signals */
+            ImuFilter_step(&sample);
 
             /* flight-reviewer FAIL, SYS1-001 regression: elapsedTime is
              * deliberately 0.0f above when there was no new edge at all
