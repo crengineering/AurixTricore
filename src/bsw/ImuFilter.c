@@ -42,6 +42,8 @@ typedef struct
 /*--------------------------Function Declaration------------------------------*/
 /******************************************************************************/
 static void    ImuFilter_calc_coefficients   (ImuFilter_coefficients coeff[4], const float32 harmonic, const float32 q);
+static void    ImuFilter_calc_lowpass        (ImuFilter_coefficients *coeff, const float32 fc);
+static void    ImuFilter_lowpass_axisPackage (float32 sensor_sample[3], const ImuFilter_coefficients *coeff, const boolean active, ImuFilter_prev_values prev_values[3]);
 static float32 ImuFilter_calc_rpm_notch      (const float32 x_k, const ImuFilter_coefficients coeff, const ImuFilter_prev_values prev_values);
 static void    ImuFilter_filter_axisPackage  (float32 sensor_sample[3], const ImuFilter_coefficients coeff[4], ImuFilter_prev_values prev_values[3][4]);
 
@@ -72,6 +74,24 @@ static void ImuFilter_calc_coefficients(ImuFilter_coefficients coeff[4], const f
     }
 }
 
+/* 2nd-order Butterworth low-pass (RBJ cookbook, Q = 1/sqrt(2)) at fc. Same biquad form
+ * as the notch, only the numerator differs, so ImuFilter_calc_rpm_notch() runs it too. */
+static void ImuFilter_calc_lowpass(ImuFilter_coefficients *coeff, const float32 fc)
+{
+    float32 w0    = (2.0f * IMUFILTER_PI * fc) / (IMUFILTER_FS_HZ);
+    float32 cosw0 = cosf(w0);
+    float32 alpha = sinf(w0) / (2.0f * 0.70710678f);
+
+    coeff->b0 = (1.0f - cosw0) / 2.0f;
+    coeff->b1 =  1.0f - cosw0;
+    coeff->b2 = (1.0f - cosw0) / 2.0f;
+
+    coeff->a0 = 1.0f + alpha;
+    coeff->a1 = -2.0f * cosw0;
+    coeff->a2 = 1.0f - alpha;
+}
+
+/* Biquad step: y[k] = (b0 x[k] + b1 x[k-1] + b2 x[k-2] - a1 y[k-1] - a2 y[k-2]) / a0 */
 static float32 ImuFilter_calc_rpm_notch(const float32 x_k, const ImuFilter_coefficients coeff, const ImuFilter_prev_values prev_values)
 {
     return (coeff.b0 * x_k + coeff.b1 * prev_values.xk1 + coeff.b2 * prev_values.xk2 - coeff.a1 * prev_values.yk1 - coeff.a2 * prev_values.yk2) / (coeff.a0);
@@ -99,9 +119,40 @@ static void ImuFilter_filter_axisPackage(float32 sensor_sample[3], const ImuFilt
        }
    }
 }
+/* One low-pass stage per axis behind the notch cascade. Inactive: pass through, state
+ * glued to the signal -- same rule as a bypassed notch stage. */
+static void ImuFilter_lowpass_axisPackage(float32 sensor_sample[3], const ImuFilter_coefficients *coeff, const boolean active, ImuFilter_prev_values prev_values[3])
+{
+    uint8 i;
+    for (i = 0u; i < 3u; i++)
+    {
+        float32 sample_prev = sensor_sample[i];
+        if (active != FALSE)
+        {
+            sensor_sample[i] = ImuFilter_calc_rpm_notch(sample_prev, *coeff, prev_values[i]);
+        }
+        prev_values[i].xk2 = prev_values[i].xk1;
+        prev_values[i].xk1 = sample_prev;
+
+        prev_values[i].yk2 = prev_values[i].yk1;
+        prev_values[i].yk1 = sensor_sample[i];
+    }
+}
+
+/* Set by ImuFilter_restart(): the next step passes the sample through every stage
+ * untouched and glues all states to it. Used after a sensor dropout, so the first good
+ * sample reaches the AHRS as it is (its re-alignment needs the real |a|, not a low-pass
+ * transient from the stale pre-dropout state). */
+static boolean s_restart = FALSE;
+
 /******************************************************************************/
 /*--------------------------Global Functions----------------------------------*/
 /******************************************************************************/
+void ImuFilter_restart(void)
+{
+    s_restart = TRUE;
+}
+
 void ImuFilter_step(Icm42688_Sample *imu_sample)
 {
     /* one state block per axis, motor AND harmonic -- the 2/rev stages are their own
@@ -118,12 +169,29 @@ void ImuFilter_step(Icm42688_Sample *imu_sample)
     static ImuFilter_coefficients s_coeff_h1[4];
     static ImuFilter_coefficients s_coeff_h2[4];
 
+    /* accelerometer low-pass behind the notches: one stage per axis, coefficients only
+     * recomputed when the cal word changes */
+    static ImuFilter_prev_values  s_prev_values_acc_lpf[3];
+    static ImuFilter_coefficients s_coeff_acc_lpf;
+    static float32                s_acc_lpf_hz_previous = -1.0f;
 
     /* Calibration words (FusionCal.h, XCP-writable, read every tick like Ahrs.c does):
      * Q of every stage, and which harmonics run. A stage that is switched off is simply
      * not called -- its state goes stale, which is harmless (two samples of memory). */
     const float32 q      = FusionCal_positive(g_fusionCal.notchQ, FILTER_Q_MIN, FCAL_NOTCH_Q);
-    const uint32  enable = g_fusionCal.notchEnable;
+    /* restart tick: every stage in pass-through for this one sample (see s_restart) */
+    const uint32  enable = (s_restart != FALSE) ? 0u : g_fusionCal.notchEnable;
+    const float32 lpf_hz = g_fusionCal.accLpfHz;
+    /* in range = on; 0, negatives, NaN (comparisons false) and absurd corners = off */
+    const boolean lpf_on = (boolean)((s_restart == FALSE) && (lpf_hz >= FCAL_ACC_LPF_HZ_MIN) && (lpf_hz <= FCAL_ACC_LPF_HZ_MAX));
+
+    s_restart = FALSE;
+
+    if ((lpf_on != FALSE) && (lpf_hz != s_acc_lpf_hz_previous))
+    {
+        ImuFilter_calc_lowpass(&s_coeff_acc_lpf, lpf_hz);
+        s_acc_lpf_hz_previous = lpf_hz;
+    }
 
     if (g_dshot_bidir_rpm.gen != s_dshot_bidir_gen_previous)
     {
@@ -132,7 +200,9 @@ void ImuFilter_step(Icm42688_Sample *imu_sample)
         ImuFilter_calc_coefficients(s_coeff_h2, FILTER_HARMONIC_2, q);
     }
 
-    /* notch filter acc, 1/rev then 2/rev (order of linear stages does not matter) */
+    /* notch filter acc, 1/rev then 2/rev (order of linear stages does not matter).
+     * A set that is switched off is not called: its state goes stale, harmless (two samples
+     * of memory) -- except after a dropout, where the restart tick glues it below. */
     if ((enable & FCAL_NOTCH_ENABLE_H1) != 0u)
     {
         ImuFilter_filter_axisPackage(imu_sample->acc, s_coeff_h1, s_prev_values_acc_h1);
@@ -141,6 +211,9 @@ void ImuFilter_step(Icm42688_Sample *imu_sample)
     {
         ImuFilter_filter_axisPackage(imu_sample->acc, s_coeff_h2, s_prev_values_acc_h2);
     }
+
+    /* low-pass acc behind the notches (broadband residual, frame run 8c); gyro is not low-passed */
+    ImuFilter_lowpass_axisPackage(imu_sample->acc, &s_coeff_acc_lpf, lpf_on, s_prev_values_acc_lpf);
 
     /* notch filter gyro */
     if ((enable & FCAL_NOTCH_ENABLE_H1) != 0u)

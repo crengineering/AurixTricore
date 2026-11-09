@@ -1278,6 +1278,13 @@
       "desc": "TUNING - bit 0: 1/rev (unbalance) stages, bit 1: 2/rev (blade pass) stages. 3 = both (default), 0 = raw IMU into the AHRS for the before/after comparison on the frame",
       "lo": "0",
       "hi": "3"
+    },
+    "accLpfHz": {
+      "name": "AccLpfHz",
+      "desc": "TUNING - corner of the 2nd-order low-pass on the accelerometer behind the rpm notches, in front of the AHRS gate (ImuFilter.c). 15 = default; 0 (or outside 1..400) = off. Gyro is not low-passed",
+      "unit": "Hz",
+      "lo": "0",
+      "hi": "400"
     }
   },
   "Xcp_Esc": {

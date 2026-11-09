@@ -212,6 +212,11 @@ static uint32 s_lastEdgeTicks;
  * reason a rejected sample must not update the reference at all). */
 static float32 s_lastGyroSensor[3];
 
+/* ImuFilter (rpm notch + acc low-pass): TRUE after any tick that skipped the filter (no new
+ * sample, or input rejected), so the next accepted sample restarts the filter from itself
+ * instead of running on the stale pre-gap state. */
+static boolean s_imuFilterGap = FALSE;
+
 /* cppcheck-suppress-begin misra-c2012-8.7 ; deviation: read over XCP
  * SHORT_UPLOAD by raw address (tools/xcp_read.py), never referenced by C
  * code outside this file -- same class of deviation as g_imuDrdy* (ImuInt.c).
@@ -504,7 +509,19 @@ void NavTask_step(void)
             filtered = sample;
             if ((newSample != FALSE) && (ahrsInputOk != FALSE))
             {
+                if (s_imuFilterGap != FALSE)
+                {
+                    /* first accepted sample after a gap: restart the filter from
+                     * it, so the AHRS re-alignment sees the real |a|, not a
+                     * low-pass transient off the stale pre-gap state */
+                    ImuFilter_restart();
+                    s_imuFilterGap = FALSE;
+                }
                 ImuFilter_step(&filtered);
+            }
+            else
+            {
+                s_imuFilterGap = TRUE;
             }
 
             /* flight-reviewer FAIL, SYS1-001 regression: elapsedTime is

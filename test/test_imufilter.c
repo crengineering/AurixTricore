@@ -81,7 +81,8 @@ static void flush(void)
 void setUp(void)
 {
     s_genRuns = TRUE;
-    FusionCal_init();          /* notchQ 5, notchEnable = both harmonics */
+    FusionCal_init();          /* notchQ 5, notchEnable = both harmonics, accLpfHz 15 */
+    g_fusionCal.accLpfHz = 0.0f;   /* notch tests run with the acc low-pass OFF; 12/13 switch it on */
     flush();
 }
 
@@ -266,6 +267,71 @@ static void test_q_word_changes_width_and_is_clamped(void)
     TEST_ASSERT_FLOAT_WITHIN(1.0e-3f, qdef, qnan);
 }
 
+/* 12. Accelerometer low-pass behind the notches (AccLpfHz 15, notches off): an 80 Hz line on
+ *     the ACC is ~-30 dB down, 1 Hz passes within 1 %, and the GYRO is untouched by it. */
+static void test_acc_lowpass_attenuates_acc_only(void)
+{
+    Icm42688_Sample s;
+    float32 peak_acc = 0.0f, peak_gyro = 0.0f;
+    uint32 k;
+    set_rpm_all(4800u);
+    g_fusionCal.notchEnable = 0u;
+    g_fusionCal.accLpfHz = 15.0f;
+    for (k = 0u; k < (SETTLE + WINDOW); k++)
+    {
+        const float32 v = (float32)sin(TWO_PI * 80.0 * ((double)k / FS_HZ));
+        uint32 i;
+        for (i = 0u; i < 3u; i++) { s.acc[i] = v; s.gyro[i] = v; }
+        s.tempC = 25.0f;
+        core0_frame();
+        ImuFilter_step(&s);
+        if ((k + WINDOW) >= (SETTLE + WINDOW))
+        {
+            if (fabsf(s.acc[0]) > peak_acc)   { peak_acc = fabsf(s.acc[0]); }
+            if (fabsf(s.gyro[0]) > peak_gyro) { peak_gyro = fabsf(s.gyro[0]); }
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(peak_acc < 0.05f, "acc 80 Hz not attenuated by the 15 Hz low-pass");
+    TEST_ASSERT_TRUE_MESSAGE(peak_gyro > 0.99f, "gyro must not be low-passed");
+
+    /* 1 Hz through the same low-pass: within 1 % (window = 500 samples = half a period,
+     * so run long enough that the window holds a crest) */
+    peak_acc = 0.0f;
+    for (k = 0u; k < 4000u; k++)
+    {
+        const float32 v = (float32)sin(TWO_PI * 1.0 * ((double)k / FS_HZ));
+        uint32 i;
+        for (i = 0u; i < 3u; i++) { s.acc[i] = v; s.gyro[i] = 0.0f; }
+        s.tempC = 25.0f;
+        core0_frame();
+        ImuFilter_step(&s);
+        if ((k >= 2000u) && (fabsf(s.acc[2]) > peak_acc)) { peak_acc = fabsf(s.acc[2]); }
+    }
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 1.0f, peak_acc);
+}
+
+/* 13. AccLpfHz 0 (and NaN) = off: acc passes sample for sample with the notches off. */
+static void test_acc_lowpass_off_is_exact_passthrough(void)
+{
+    union { float32 f; uint32 u; } nan_bits;
+    Icm42688_Sample s;
+    uint32 k;
+    set_rpm_all(4800u);
+    g_fusionCal.notchEnable = 0u;
+    nan_bits.u = 0x7FC00000u;
+    for (k = 0u; k < 2000u; k++)
+    {
+        const float32 v = (float32)sin(TWO_PI * 80.0 * ((double)k / FS_HZ));
+        uint32 i;
+        g_fusionCal.accLpfHz = (k < 1000u) ? 0.0f : nan_bits.f;
+        for (i = 0u; i < 3u; i++) { s.acc[i] = v; s.gyro[i] = v; }
+        s.tempC = 25.0f;
+        core0_frame();
+        ImuFilter_step(&s);
+        TEST_ASSERT_EQUAL_FLOAT(v, s.acc[0]);
+    }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -280,5 +346,7 @@ int main(void)
     RUN_TEST(test_enable_zero_is_raw_passthrough);
     RUN_TEST(test_enable_h2_only);
     RUN_TEST(test_q_word_changes_width_and_is_clamped);
+    RUN_TEST(test_acc_lowpass_attenuates_acc_only);
+    RUN_TEST(test_acc_lowpass_off_is_exact_passthrough);
     return UNITY_END();
 }

@@ -118,6 +118,7 @@ void FusionCal_init(void)
 
     g_fusionCal.notchQ      = FCAL_NOTCH_Q;
     g_fusionCal.notchEnable = FCAL_NOTCH_ENABLE;
+    g_fusionCal.accLpfHz    = FCAL_ACC_LPF_HZ;
 
     /* Magic last: a master polling for it sees a fully populated block or none
      * of it, never a half-written one. */
