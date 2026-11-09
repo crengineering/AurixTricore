@@ -30,7 +30,9 @@ typedef struct
 }ImuFilter_prev_values;
 
 #define FILTER_Q         5.0f
-#define FILTER_HARMONICS 2.0f
+#define FILTER_HARMONIC_1 1.0f              /* 1/rev: unbalance                         */
+#define FILTER_HARMONIC_2 2.0f              /* 2/rev: blade pass of the two-blade prop  */
+#define FILTER_H2_ENABLE  1u                /* 0 = first harmonic only (cal word later)  */
 #define IMUFILTER_FS_HZ  1000.0f
 #define IMUFILTER_PI     3.14159265f
 #define IMUFILTER_SEC_PER_MINUTE 60.0f
@@ -39,7 +41,7 @@ typedef struct
 /******************************************************************************/
 /*--------------------------Function Declaration------------------------------*/
 /******************************************************************************/
-static void    ImuFilter_calc_coefficients   (ImuFilter_coefficients coeff[4]);
+static void    ImuFilter_calc_coefficients   (ImuFilter_coefficients coeff[4], const float32 harmonic);
 static float32 ImuFilter_calc_rpm_notch      (const float32 x_k, const ImuFilter_coefficients coeff, const ImuFilter_prev_values prev_values);
 static void    ImuFilter_filter_axisPackage  (float32 sensor_sample[3], const ImuFilter_coefficients coeff[4], ImuFilter_prev_values prev_values[3][4]);
 
@@ -50,11 +52,13 @@ static void    ImuFilter_filter_axisPackage  (float32 sensor_sample[3], const Im
 /******************************************************************************/
 /*--------------------------Function Implementations--------------------------*/
 /******************************************************************************/
-static void ImuFilter_calc_coefficients(ImuFilter_coefficients coeff[4])
+/* Notch coefficients for one harmonic: f0 = harmonic * rpm / 60 per motor. Same formula
+ * and Q for every harmonic, only the centre frequency differs. */
+static void ImuFilter_calc_coefficients(ImuFilter_coefficients coeff[4], const float32 harmonic)
 {
     for (uint8 i = 0u; i < 4u; i++)
     {
-        float32 f0    = (float32)g_dshot_bidir_rpm.rpm[i] / IMUFILTER_SEC_PER_MINUTE;
+        float32 f0    = (harmonic * (float32)g_dshot_bidir_rpm.rpm[i]) / IMUFILTER_SEC_PER_MINUTE;
         float32 w0    = (2.0f * IMUFILTER_PI * f0) / (IMUFILTER_FS_HZ);
         float32 alpha = sinf(w0) / (2 * FILTER_Q);
 
@@ -100,27 +104,41 @@ static void ImuFilter_filter_axisPackage(float32 sensor_sample[3], const ImuFilt
 /******************************************************************************/
 void ImuFilter_step(Icm42688_Sample *imu_sample)
 {
-    static ImuFilter_prev_values s_prev_values_acc[3][4];
-    static ImuFilter_prev_values s_prev_values_gyro[3][4];
+    /* one state block per axis, motor AND harmonic -- the 2/rev stages are their own
+     * filters and must not share history with the 1/rev stages */
+    static ImuFilter_prev_values s_prev_values_acc_h1[3][4];
+    static ImuFilter_prev_values s_prev_values_gyro_h1[3][4];
+    static ImuFilter_prev_values s_prev_values_acc_h2[3][4];
+    static ImuFilter_prev_values s_prev_values_gyro_h2[3][4];
     static uint32 s_dshot_bidir_gen_previous;
 
     /* static: the coefficients are only recomputed when Core 0 has published a new
      * rpm set (gen moved). On a tick with unchanged gen the previous set must still
      * be there -- as a plain local it would be uninitialised on that tick. */
-    static ImuFilter_coefficients s_coeff[4];
+    static ImuFilter_coefficients s_coeff_h1[4];
+    static ImuFilter_coefficients s_coeff_h2[4];
 
 
     if (g_dshot_bidir_rpm.gen != s_dshot_bidir_gen_previous)
     {
-        /* filter coefficients for frist harmony */
-        ImuFilter_calc_coefficients(s_coeff);
+        /* filter coefficients for first and second harmonic */
+        ImuFilter_calc_coefficients(s_coeff_h1, FILTER_HARMONIC_1);
+        ImuFilter_calc_coefficients(s_coeff_h2, FILTER_HARMONIC_2);
     }
 
-    /* notch filter acc */
-    ImuFilter_filter_axisPackage(imu_sample->acc, s_coeff, s_prev_values_acc);
+    /* notch filter acc, 1/rev then 2/rev (order of linear stages does not matter) */
+    ImuFilter_filter_axisPackage(imu_sample->acc, s_coeff_h1, s_prev_values_acc_h1);
+    if (FILTER_H2_ENABLE != 0u)
+    {
+        ImuFilter_filter_axisPackage(imu_sample->acc, s_coeff_h2, s_prev_values_acc_h2);
+    }
 
     /* notch filter gyro */
-    ImuFilter_filter_axisPackage(imu_sample->gyro, s_coeff, s_prev_values_gyro);
+    ImuFilter_filter_axisPackage(imu_sample->gyro, s_coeff_h1, s_prev_values_gyro_h1);
+    if (FILTER_H2_ENABLE != 0u)
+    {
+        ImuFilter_filter_axisPackage(imu_sample->gyro, s_coeff_h2, s_prev_values_gyro_h2);
+    }
 
     s_dshot_bidir_gen_previous = g_dshot_bidir_rpm.gen;
 }

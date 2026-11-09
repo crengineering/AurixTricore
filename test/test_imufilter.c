@@ -182,6 +182,30 @@ static void test_unchanged_gen_tick_is_still_filtered(void)
     TEST_ASSERT_TRUE_MESSAGE(peak < 0.03f, "a tick with unchanged gen let the 80 Hz line through");
 }
 
+/* 7. Second harmonic: four motors at 4800 rpm -> the 160 Hz blade-pass line goes away too
+ *    (> 30 dB), while the 1/rev line at 80 Hz is still gone and 5 Hz still passes. */
+static void test_second_harmonic_kills_blade_pass_line(void)
+{
+    set_rpm_all(4800u);
+    float32 peak = run_sine(160.0, SETTLE + WINDOW);
+    TEST_ASSERT_TRUE_MESSAGE(peak < 0.03f, "160 Hz (2/rev) line not attenuated by > 30 dB");
+    peak = run_sine(80.0, SETTLE + WINDOW);
+    TEST_ASSERT_TRUE_MESSAGE(peak < 0.03f, "80 Hz (1/rev) line lost with the 2/rev stages added");
+    peak = run_sine(5.0, SETTLE + WINDOW);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 1.0f, peak);
+}
+
+/* 8. The 2/rev stages sit between the two lines, not on them: 120 Hz (midway at 4800 rpm)
+ *    is attenuated by the skirts of both cascades but must still come through at > -6 dB
+ *    -- a guard that the second set is placed at 2 * rpm / 60 and not on top of the first. */
+static void test_second_harmonic_sits_at_twice_rpm(void)
+{
+    set_rpm_all(4800u);
+    const float32 peak = run_sine(120.0, SETTLE + WINDOW);
+    TEST_ASSERT_TRUE_MESSAGE(peak > 0.5f, "120 Hz attenuated by more than 6 dB: 2/rev set misplaced?");
+    TEST_ASSERT_TRUE_MESSAGE(peak < 0.99f, "120 Hz untouched: 2/rev set inactive?");
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -191,5 +215,7 @@ int main(void)
     RUN_TEST(test_bypass_below_threshold_is_exact);
     RUN_TEST(test_activation_has_no_step);
     RUN_TEST(test_unchanged_gen_tick_is_still_filtered);
+    RUN_TEST(test_second_harmonic_kills_blade_pass_line);
+    RUN_TEST(test_second_harmonic_sits_at_twice_rpm);
     return UNITY_END();
 }
