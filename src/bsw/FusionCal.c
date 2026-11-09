@@ -78,6 +78,9 @@ volatile Xcp_FusionCal g_fusionCal;
 #define FCAL_MAG_DECL_DEG      (3.9f)
 /* MAG-CAL END */
 
+/* Rotor-vibration notch (ImuFilter.c): FCAL_NOTCH_Q / FCAL_NOTCH_ENABLE live in
+ * FusionCal.h, the reader needs the Q default as its clamp fallback. */
+
 void FusionCal_init(void)
 {
     uint8 i;
@@ -112,6 +115,9 @@ void FusionCal_init(void)
     g_fusionCal.magScale[1] = FCAL_MAG_SCALE_Y;
     g_fusionCal.magScale[2] = FCAL_MAG_SCALE_Z;
     g_fusionCal.magDeclDeg  = FCAL_MAG_DECL_DEG;
+
+    g_fusionCal.notchQ      = FCAL_NOTCH_Q;
+    g_fusionCal.notchEnable = FCAL_NOTCH_ENABLE;
 
     /* Magic last: a master polling for it sees a fully populated block or none
      * of it, never a half-written one. */

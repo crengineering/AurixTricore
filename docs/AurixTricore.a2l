@@ -15,7 +15,7 @@
  *   Xcp_Nvm   (persistent, DFLASH)    0x70030200, 16 bytes, Nvm.h
  *   Xcp_Gpio  (GPIO control, RAM only) 0x70030300, 52 bytes, gpio.h
  *   Xcp_Fusion (navigation state)     0x70030500, 252 bytes, Measurements.h
- *   Xcp_FusionCal (estimator tuning)  0x70030600, 92 bytes, FusionCal.h
+ *   Xcp_FusionCal (estimator tuning)  0x70030600, 100 bytes, FusionCal.h
  *   Xcp_Esc   (ESC telemetry)         0x70030700, 176 bytes, Measurements.h
  * Transport: XCP on UDP/IP, port 5555, station 192.168.0.10.
  * DAQ: dynamic, 1 list, event channel 0 = 100 ms task.
@@ -1491,6 +1491,14 @@ ASAP2_VERSION 1 61
     /begin CHARACTERISTIC MagCalDeclination "CALIBRATION - magnetic declination, east positive; +3.9 in Munich. Turns magnetic north into true north at the AHRS output"
       VALUE 0x70030658 RL_FLOAT32 180 NO_COMPU_METHOD -180 180
       PHYS_UNIT "deg"
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC NotchQ "TUNING - quality of every rpm-tracked notch stage on acc and gyro in front of the AHRS (ImuFilter.c); width = f0 / Q, 5 = 16 Hz wide at 80 Hz. Reader clamps to > 0.5. Takes effect on the next tick"
+      VALUE 0x7003065C RL_FLOAT32 50 NO_COMPU_METHOD 0.5 50
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC NotchEnable "TUNING - bit 0: 1/rev (unbalance) stages, bit 1: 2/rev (blade pass) stages. 3 = both (default), 0 = raw IMU into the AHRS for the before/after comparison on the frame"
+      VALUE 0x70030660 RL_ULONG 3 NO_COMPU_METHOD 0 3
     /end CHARACTERISTIC
 
     /* ESC telemetry: Xcp_Esc @ 0x70030700 (see Measurements.h) */

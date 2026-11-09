@@ -171,12 +171,14 @@ add_test(NAME imuedge COMMAND test_imuedge)
 ImuFilter (rpm-tracked IMU notch, follow-up of frame run 7): the four-stage notch
 cascade through the public ImuFilter_step(). Pure float math + sinf/cosf, no iLLD;
 g_dshot_bidir_rpm (DshotLatch.h) comes from SharedRam.c, the test plays Core 0 and
-writes rpm / gen / dshot_ok_count directly. Not in `estimator` on purpose -- the filter
+writes rpm / gen / dshot_ok_count directly. FusionCal.c supplies g_fusionCal (notchQ,
+notchEnable) and FusionCal_positive(). Not in `estimator` on purpose -- the filter
 sits in front of the AHRS, it is not part of it.
 ]]
 add_executable(test_imufilter
     test_imufilter.c
     ${BSW}/ImuFilter.c
+    ${BSW}/FusionCal.c
     ${BSW}/SharedRam.c
 )
 target_link_libraries(test_imufilter PRIVATE unity test_common m)

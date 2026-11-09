@@ -9,6 +9,7 @@
 /******************************************************************************/
 #include "ImuFilter.h"
 #include "DshotLatch.h"
+#include "FusionCal.h"
 #include <math.h>
 
 typedef struct
@@ -29,10 +30,9 @@ typedef struct
   float32 xk1;
 }ImuFilter_prev_values;
 
-#define FILTER_Q         5.0f
+#define FILTER_Q_MIN      0.5f              /* reader clamp for g_fusionCal.notchQ (default FCAL_NOTCH_Q) */
 #define FILTER_HARMONIC_1 1.0f              /* 1/rev: unbalance                         */
 #define FILTER_HARMONIC_2 2.0f              /* 2/rev: blade pass of the two-blade prop  */
-#define FILTER_H2_ENABLE  1u                /* 0 = first harmonic only (cal word later)  */
 #define IMUFILTER_FS_HZ  1000.0f
 #define IMUFILTER_PI     3.14159265f
 #define IMUFILTER_SEC_PER_MINUTE 60.0f
@@ -41,7 +41,7 @@ typedef struct
 /******************************************************************************/
 /*--------------------------Function Declaration------------------------------*/
 /******************************************************************************/
-static void    ImuFilter_calc_coefficients   (ImuFilter_coefficients coeff[4], const float32 harmonic);
+static void    ImuFilter_calc_coefficients   (ImuFilter_coefficients coeff[4], const float32 harmonic, const float32 q);
 static float32 ImuFilter_calc_rpm_notch      (const float32 x_k, const ImuFilter_coefficients coeff, const ImuFilter_prev_values prev_values);
 static void    ImuFilter_filter_axisPackage  (float32 sensor_sample[3], const ImuFilter_coefficients coeff[4], ImuFilter_prev_values prev_values[3][4]);
 
@@ -54,13 +54,13 @@ static void    ImuFilter_filter_axisPackage  (float32 sensor_sample[3], const Im
 /******************************************************************************/
 /* Notch coefficients for one harmonic: f0 = harmonic * rpm / 60 per motor. Same formula
  * and Q for every harmonic, only the centre frequency differs. */
-static void ImuFilter_calc_coefficients(ImuFilter_coefficients coeff[4], const float32 harmonic)
+static void ImuFilter_calc_coefficients(ImuFilter_coefficients coeff[4], const float32 harmonic, const float32 q)
 {
     for (uint8 i = 0u; i < 4u; i++)
     {
         float32 f0    = (harmonic * (float32)g_dshot_bidir_rpm.rpm[i]) / IMUFILTER_SEC_PER_MINUTE;
         float32 w0    = (2.0f * IMUFILTER_PI * f0) / (IMUFILTER_FS_HZ);
-        float32 alpha = sinf(w0) / (2 * FILTER_Q);
+        float32 alpha = sinf(w0) / (2.0f * q);
 
         coeff[i].b0 = 1.0f;
         coeff[i].b1 = -2.0f * cosf(w0);
@@ -119,23 +119,35 @@ void ImuFilter_step(Icm42688_Sample *imu_sample)
     static ImuFilter_coefficients s_coeff_h2[4];
 
 
+    /* Calibration words (FusionCal.h, XCP-writable, read every tick like Ahrs.c does):
+     * Q of every stage, and which harmonics run. A stage that is switched off is simply
+     * not called -- its state goes stale, which is harmless (two samples of memory). */
+    const float32 q      = FusionCal_positive(g_fusionCal.notchQ, FILTER_Q_MIN, FCAL_NOTCH_Q);
+    const uint32  enable = g_fusionCal.notchEnable;
+
     if (g_dshot_bidir_rpm.gen != s_dshot_bidir_gen_previous)
     {
         /* filter coefficients for first and second harmonic */
-        ImuFilter_calc_coefficients(s_coeff_h1, FILTER_HARMONIC_1);
-        ImuFilter_calc_coefficients(s_coeff_h2, FILTER_HARMONIC_2);
+        ImuFilter_calc_coefficients(s_coeff_h1, FILTER_HARMONIC_1, q);
+        ImuFilter_calc_coefficients(s_coeff_h2, FILTER_HARMONIC_2, q);
     }
 
     /* notch filter acc, 1/rev then 2/rev (order of linear stages does not matter) */
-    ImuFilter_filter_axisPackage(imu_sample->acc, s_coeff_h1, s_prev_values_acc_h1);
-    if (FILTER_H2_ENABLE != 0u)
+    if ((enable & FCAL_NOTCH_ENABLE_H1) != 0u)
+    {
+        ImuFilter_filter_axisPackage(imu_sample->acc, s_coeff_h1, s_prev_values_acc_h1);
+    }
+    if ((enable & FCAL_NOTCH_ENABLE_H2) != 0u)
     {
         ImuFilter_filter_axisPackage(imu_sample->acc, s_coeff_h2, s_prev_values_acc_h2);
     }
 
     /* notch filter gyro */
-    ImuFilter_filter_axisPackage(imu_sample->gyro, s_coeff_h1, s_prev_values_gyro_h1);
-    if (FILTER_H2_ENABLE != 0u)
+    if ((enable & FCAL_NOTCH_ENABLE_H1) != 0u)
+    {
+        ImuFilter_filter_axisPackage(imu_sample->gyro, s_coeff_h1, s_prev_values_gyro_h1);
+    }
+    if ((enable & FCAL_NOTCH_ENABLE_H2) != 0u)
     {
         ImuFilter_filter_axisPackage(imu_sample->gyro, s_coeff_h2, s_prev_values_gyro_h2);
     }

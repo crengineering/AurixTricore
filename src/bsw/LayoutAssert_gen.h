@@ -214,7 +214,9 @@ typedef char layout_assert_Xcp_FusionCal_reserved_offset[(offsetof(Xcp_FusionCal
 typedef char layout_assert_Xcp_FusionCal_magOff_offset[(offsetof(Xcp_FusionCal, magOff) == 0x40u) ? 1 : -1];
 typedef char layout_assert_Xcp_FusionCal_magScale_offset[(offsetof(Xcp_FusionCal, magScale) == 0x4Cu) ? 1 : -1];
 typedef char layout_assert_Xcp_FusionCal_magDeclDeg_offset[(offsetof(Xcp_FusionCal, magDeclDeg) == 0x58u) ? 1 : -1];
-typedef char layout_assert_Xcp_FusionCal_sizeof[(sizeof(Xcp_FusionCal) == 0x5Cu) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_notchQ_offset[(offsetof(Xcp_FusionCal, notchQ) == 0x5Cu) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_notchEnable_offset[(offsetof(Xcp_FusionCal, notchEnable) == 0x60u) ? 1 : -1];
+typedef char layout_assert_Xcp_FusionCal_sizeof[(sizeof(Xcp_FusionCal) == 0x64u) ? 1 : -1];
 
 /* Xcp_Esc (Measurements.h) */
 typedef char layout_assert_Xcp_Esc_magic_offset[(offsetof(Xcp_Esc, magic) == 0x0u) ? 1 : -1];

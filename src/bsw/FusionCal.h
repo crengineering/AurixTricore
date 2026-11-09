@@ -38,7 +38,7 @@
  * whitelist now uses (uint32)&g_fusionCal, so Lcf_Tasking_Tricore_Tc.lsl
  * (LCF_XCP_FUSIONCAL_START) is the only place 0x70030600 is written down. */
 #define XCP_FUSIONCAL_MAGIC  0x4C414346u        /* "FCAL" */
-#define XCP_FUSIONCAL_SIZE   92u
+#define XCP_FUSIONCAL_SIZE   100u
 
 /* Layout (little-endian, all 4-byte aligned; verify against
  * FusionCal.src after any edit — TASKING aligns uint32 to 2 bytes):
@@ -85,6 +85,13 @@
  *   0x4C  float32 magScale[3]   soft-iron scale X/Y/Z, dimensionless (1.0 = none)
  *   0x58  float32 magDeclDeg    magnetic declination [deg], east positive;
  *                               applied at the AHRS output, not in the filter
+ *
+ *   --- rotor-vibration notch (ImuFilter.c, CPU1, in front of the AHRS) ---
+ *   0x5C  float32 notchQ        quality of every notch stage, width = f0 / Q;
+ *                               read every tick, clamped to > 0.5 by the reader
+ *   0x60  uint32  notchEnable   bit 0: 1/rev stages, bit 1: 2/rev (blade pass)
+ *                               stages; 0 = IMU raw into the AHRS (for the
+ *                               before/after comparison on the frame)
  */
 typedef struct
 {
@@ -112,7 +119,23 @@ typedef struct
     float32 magOff[3];
     float32 magScale[3];
     float32 magDeclDeg;
+
+    float32 notchQ;
+    uint32  notchEnable;
 } Xcp_FusionCal;
+
+/* notchEnable bits (ImuFilter.c) */
+#define FCAL_NOTCH_ENABLE_H1   (0x1u)   /* 1/rev stages (unbalance)   */
+#define FCAL_NOTCH_ENABLE_H2   (0x2u)   /* 2/rev stages (blade pass)  */
+
+/* Notch defaults -- public (unlike the other FCAL_* in FusionCal.c) because the
+ * reader uses FCAL_NOTCH_Q as the fallback of its FusionCal_positive() clamp.
+ * Q 5 per stage = 16 Hz wide at 80 Hz; four stages per harmonic stacked near the
+ * same frequency widen the skirt (-1.9 dB at 60 Hz, -3.4 dB at 100 Hz on the host
+ * probe, 2026-11-09), so a higher Q is the candidate once the 1 kHz spectrum is
+ * in. Both harmonics on by default; 0 puts the raw IMU into the AHRS. */
+#define FCAL_NOTCH_Q           (5.0f)
+#define FCAL_NOTCH_ENABLE      (FCAL_NOTCH_ENABLE_H1 | FCAL_NOTCH_ENABLE_H2)
 
 extern volatile Xcp_FusionCal g_fusionCal;
 

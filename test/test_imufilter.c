@@ -3,6 +3,7 @@
 #include "fakes/Ifx_Types.h"
 #include "../src/bsw/ImuFilter.h"
 #include "../src/bsw/DshotLatch.h"
+#include "../src/bsw/FusionCal.h"
 
 /* ImuFilter (rpm-tracked IMU notch, SWE1-FW follow-up of frame run 7): the four-stage
  * notch cascade through the public ImuFilter_step(). g_dshot_bidir_rpm comes from
@@ -80,6 +81,7 @@ static void flush(void)
 void setUp(void)
 {
     s_genRuns = TRUE;
+    FusionCal_init();          /* notchQ 5, notchEnable = both harmonics */
     flush();
 }
 
@@ -206,6 +208,64 @@ static void test_second_harmonic_sits_at_twice_rpm(void)
     TEST_ASSERT_TRUE_MESSAGE(peak < 0.99f, "120 Hz untouched: 2/rev set inactive?");
 }
 
+/* 9. notchEnable 0: the IMU goes through untouched, sample for sample (no stage is
+ *    called). Compared per sample, not by peak: a 1 kHz-sampled 80 Hz sine never hits
+ *    its crest exactly (max sample 0.998). */
+static void test_enable_zero_is_raw_passthrough(void)
+{
+    Icm42688_Sample s;
+    uint32 k;
+    set_rpm_all(4800u);
+    g_fusionCal.notchEnable = 0u;
+    for (k = 0u; k < 1000u; k++)
+    {
+        const float32 v = (float32)sin(TWO_PI * 80.0 * ((double)k / FS_HZ));
+        uint32 i;
+        for (i = 0u; i < 3u; i++) { s.acc[i] = v; s.gyro[i] = v; }
+        s.tempC = 25.0f;
+        core0_frame();
+        ImuFilter_step(&s);
+        TEST_ASSERT_EQUAL_FLOAT(v, s.acc[1]);
+        TEST_ASSERT_EQUAL_FLOAT(v, s.gyro[2]);
+    }
+}
+
+/* 10. notchEnable bit 1 only: 160 Hz gone, 80 Hz untouched -- the bits select the sets. */
+static void test_enable_h2_only(void)
+{
+    set_rpm_all(4800u);
+    g_fusionCal.notchEnable = FCAL_NOTCH_ENABLE_H2;
+    float32 peak = run_sine(160.0, SETTLE + WINDOW);
+    TEST_ASSERT_TRUE_MESSAGE(peak < 0.03f, "2/rev set off although bit 1 is set");
+    peak = run_sine(80.0, SETTLE + WINDOW);
+    /* not notched: only the skirt of the 160 Hz stages touches 80 Hz (-0.25 dB) */
+    TEST_ASSERT_TRUE_MESSAGE(peak > 0.9f, "80 Hz attenuated although only the 2/rev set is enabled");
+}
+
+/* 11. notchQ widens / narrows the stage: at 72 Hz (8 Hz below the 80 Hz notch) Q 2 bites
+ *     harder than Q 10. A nonsense Q (0, NaN) falls back to the default via the clamp. */
+static void test_q_word_changes_width_and_is_clamped(void)
+{
+    union { float32 f; uint32 u; } nan_bits;
+    set_rpm_all(4800u);
+
+    g_fusionCal.notchQ = 2.0f;
+    const float32 wide = run_sine(72.0, SETTLE + WINDOW);
+    g_fusionCal.notchQ = 10.0f;
+    const float32 narrow = run_sine(72.0, SETTLE + WINDOW);
+    TEST_ASSERT_TRUE_MESSAGE(wide < (narrow - 0.2f), "Q 2 should attenuate 72 Hz clearly more than Q 10");
+
+    g_fusionCal.notchQ = 0.0f;
+    const float32 q0 = run_sine(72.0, SETTLE + WINDOW);
+    nan_bits.u = 0x7FC00000u;
+    g_fusionCal.notchQ = nan_bits.f;
+    const float32 qnan = run_sine(72.0, SETTLE + WINDOW);
+    g_fusionCal.notchQ = FCAL_NOTCH_Q;
+    const float32 qdef = run_sine(72.0, SETTLE + WINDOW);
+    TEST_ASSERT_FLOAT_WITHIN(1.0e-3f, qdef, q0);
+    TEST_ASSERT_FLOAT_WITHIN(1.0e-3f, qdef, qnan);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -217,5 +277,8 @@ int main(void)
     RUN_TEST(test_unchanged_gen_tick_is_still_filtered);
     RUN_TEST(test_second_harmonic_kills_blade_pass_line);
     RUN_TEST(test_second_harmonic_sits_at_twice_rpm);
+    RUN_TEST(test_enable_zero_is_raw_passthrough);
+    RUN_TEST(test_enable_h2_only);
+    RUN_TEST(test_q_word_changes_width_and_is_clamped);
     return UNITY_END();
 }
