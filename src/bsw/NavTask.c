@@ -11,6 +11,7 @@
 #include "SysTime.h"
 #include "ImuInt.h"
 #include "ImuEdge.h"
+#include "ImuFilter.h"
 
 /* Below NAVTASK_DT_MIN_S the tick fired twice inside one STM period (nothing
  * to integrate), above NAVTASK_DT_MAX_S the previous tick was so late that
@@ -322,6 +323,12 @@ void NavTask_step(void)
     else
     {
         Icm42688_Sample sample = { { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 0.0f };
+        Icm42688_Sample filtered;     /* sample after ImuFilter_step(), the AHRS input */
+        /* ImuFilter: TRUE after any tick that skipped the filter (no new sample, or
+         * input rejected), so the next accepted sample restarts the filter from
+         * itself instead of running on the stale pre-gap state (block scope: used
+         * only here, MISRA 8.9) */
+        static boolean  s_imuFilterGap = FALSE;
         boolean         present;
         boolean         ahrsInputOk;
         boolean         fusionInputOk;
@@ -489,6 +496,34 @@ void NavTask_step(void)
                 g_dbgNavInvalidTicks++;
             }
 
+            /* Rotor-vibration filter (ImuFilter.c): rpm-tracked notches on acc
+             * and gyro, BEFORE the AHRS. Works on a copy so that the slew check
+             * above, Icm42688_plausible() and NavState_publish() below keep
+             * seeing the RAW sample (ImuAccel/ImuGyro stay raw on XCP -- the
+             * before/after comparison and the vibration spectrum need them).
+             * Stepped only on a new, accepted sample: on the no-new-edge path
+             * the same sample would be filtered twice (state shifted twice),
+             * and an absent sensor's all-zero sample would put a step into the
+             * filter history. Otherwise the copy is the raw sample and
+             * Ahrs_update() freezes on ahrsInputOk anyway. */
+            filtered = sample;
+            if ((newSample != FALSE) && (ahrsInputOk != FALSE))
+            {
+                if (s_imuFilterGap != FALSE)
+                {
+                    /* first accepted sample after a gap: restart the filter from
+                     * it, so the AHRS re-alignment sees the real |a|, not a
+                     * low-pass transient off the stale pre-gap state */
+                    ImuFilter_restart();
+                    s_imuFilterGap = FALSE;
+                }
+                ImuFilter_step(&filtered);
+            }
+            else
+            {
+                s_imuFilterGap = TRUE;
+            }
+
             /* flight-reviewer FAIL, SYS1-001 regression: elapsedTime is
              * deliberately 0.0f above when there was no new edge at all
              * (NAVTASK_TIMEDOUT_FAULT_DT_S's own comment) -- correct for the
@@ -506,7 +541,7 @@ void NavTask_step(void)
                     ahrsDt = NAVTASK_TIMEDOUT_FAULT_DT_S;
                 }
 
-                Ahrs_update(&ahrs, sample.acc, sample.gyro, ahrsDt, ahrsInputOk);
+                Ahrs_update(&ahrs, filtered.acc, filtered.gyro, ahrsDt, ahrsInputOk);
             }
 
             /* Gate the navigation filter on the attitude being usable, not

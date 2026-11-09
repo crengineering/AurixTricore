@@ -17,6 +17,11 @@
 /******************************************************************************/
 /*-----------------------------Data Structures--------------------------------*/
 /******************************************************************************/
+/* X2216-III 12N14P: 14 poles = 7 pole pairs; eRPM / MOTOR_POLE_PAIRS = mechanical rpm.
+ * A literal, not (14u / 2u): the float casts in Measurements.c hit MISRA 10.8 on a
+ * composite expression, and a separate MOTOR_POLES would be unused (2.5). */
+#define MOTOR_POLE_PAIRS  7u
+
 
 typedef enum {
     MOTOR_DISARMED = 0,

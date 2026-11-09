@@ -168,6 +168,23 @@ target_link_libraries(test_imuedge PRIVATE unity test_common)
 add_test(NAME imuedge COMMAND test_imuedge)
 
 #[[
+ImuFilter (rpm-tracked IMU notch, follow-up of frame run 7): the four-stage notch
+cascade through the public ImuFilter_step(). Pure float math + sinf/cosf, no iLLD;
+g_dshot_bidir_rpm (DshotLatch.h) comes from SharedRam.c, the test plays Core 0 and
+writes rpm / gen / dshot_ok_count directly. FusionCal.c supplies g_fusionCal (notchQ,
+notchEnable) and FusionCal_positive(). Not in `estimator` on purpose -- the filter
+sits in front of the AHRS, it is not part of it.
+]]
+add_executable(test_imufilter
+    test_imufilter.c
+    ${BSW}/ImuFilter.c
+    ${BSW}/FusionCal.c
+    ${BSW}/SharedRam.c
+)
+target_link_libraries(test_imufilter PRIVATE unity test_common m)
+add_test(NAME imufilter COMMAND test_imufilter)
+
+#[[
 NavState (T10, docs/REFACTORING_PLAN.md §2.4/§4): the generation-counter
 publish/get protocol, still unwired to anything real. g_navState's placement
 lives in SharedRam.c now (docs/MEMORY_PLACEMENT.md T3 -- NavStatePlace.c is
@@ -198,7 +215,10 @@ g_magLatch/g_imuEdge all come from there; NavState.c and SysTime.c are the
 real (iLLD-free) implementations, fakes/IfxStm.c satisfies SysTime.c's own
 dependency -- only the genuinely target-only calls (IMU bus read, XCP
 publish, peripheral diagnostics) are stubbed inside test_navtask.c itself,
-purely to satisfy the linker. NavTask.c gained a g_imuDrdyStaleTicks/
+purely to satisfy the linker. NavTask_step() calls ImuFilter_step() (rpm notch,
+2026-11) -- ImuFilter.c is iLLD-free and its g_dshot_bidir_rpm comes from the
+SharedRam.c already inside `estimator`, so it is simply listed as a source here.
+NavTask.c gained a g_imuDrdyStaleTicks/
 g_imuDrdyLastTicks reference in I5 (docs/IMU_INTERRUPT.md) -- ImuInt.h's
 declarations are iLLD-free and included fine, but the real storage is in
 ImuInt.c, which pulls in ERU/SRC/Port headers with no host fakes, so those
@@ -211,6 +231,7 @@ link two definitions of g_coreStats et al. into the same executable.
 add_executable(test_navtask
     test_navtask.c
     ${BSW}/NavState.c
+    ${BSW}/ImuFilter.c
     ${BSW}/SysTime.c
     fakes/IfxStm.c
 )

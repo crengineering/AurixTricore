@@ -38,7 +38,7 @@
  * whitelist now uses (uint32)&g_fusionCal, so Lcf_Tasking_Tricore_Tc.lsl
  * (LCF_XCP_FUSIONCAL_START) is the only place 0x70030600 is written down. */
 #define XCP_FUSIONCAL_MAGIC  0x4C414346u        /* "FCAL" */
-#define XCP_FUSIONCAL_SIZE   92u
+#define XCP_FUSIONCAL_SIZE   104u
 
 /* Layout (little-endian, all 4-byte aligned; verify against
  * FusionCal.src after any edit — TASKING aligns uint32 to 2 bytes):
@@ -85,6 +85,17 @@
  *   0x4C  float32 magScale[3]   soft-iron scale X/Y/Z, dimensionless (1.0 = none)
  *   0x58  float32 magDeclDeg    magnetic declination [deg], east positive;
  *                               applied at the AHRS output, not in the filter
+ *
+ *   --- rotor-vibration notch (ImuFilter.c, CPU1, in front of the AHRS) ---
+ *   0x5C  float32 notchQ        quality of every notch stage, width = f0 / Q;
+ *                               read every tick, clamped to > 0.5 by the reader
+ *   0x60  uint32  notchEnable   bit 0: 1/rev stages, bit 1: 2/rev (blade pass)
+ *                               stages; 0 = IMU raw into the AHRS (for the
+ *                               before/after comparison on the frame)
+ *   0x64  float32 accLpfHz      corner of the 2nd-order low-pass on the
+ *                               accelerometer BEHIND the notches, in front of
+ *                               the AHRS gate [Hz]; 0 (or anything outside
+ *                               1 … 400) = off. Gyro is not low-passed here.
  */
 typedef struct
 {
@@ -112,7 +123,33 @@ typedef struct
     float32 magOff[3];
     float32 magScale[3];
     float32 magDeclDeg;
+
+    float32 notchQ;
+    uint32  notchEnable;
+    float32 accLpfHz;
 } Xcp_FusionCal;
+
+/* notchEnable bits (ImuFilter.c) */
+#define FCAL_NOTCH_ENABLE_H1   (0x1u)   /* 1/rev stages (unbalance)   */
+#define FCAL_NOTCH_ENABLE_H2   (0x2u)   /* 2/rev stages (blade pass)  */
+
+/* Notch defaults -- public (unlike the other FCAL_* in FusionCal.c) because the
+ * reader uses FCAL_NOTCH_Q as the fallback of its FusionCal_positive() clamp.
+ * Q 5 per stage = 16 Hz wide at 80 Hz; four stages per harmonic stacked near the
+ * same frequency widen the skirt (-1.9 dB at 60 Hz, -3.4 dB at 100 Hz on the host
+ * probe, 2026-11-09), so a higher Q is the candidate once the 1 kHz spectrum is
+ * in. Both harmonics on by default; 0 puts the raw IMU into the AHRS. */
+#define FCAL_NOTCH_Q           (5.0f)
+#define FCAL_NOTCH_ENABLE      (FCAL_NOTCH_ENABLE_H1 | FCAL_NOTCH_ENABLE_H2)
+
+/* Accelerometer low-pass behind the notches (frame run 8c, 2026-11-09: with both
+ * harmonic sets on, the residual |a| scatter of 0,15 g is broadband -- Q 3 … 8 made
+ * no difference -- so the AHRS gate still sees only 20 … 25 % of the ticks inside its
+ * ±5 % full-weight window). 15 Hz: ~-30 dB at 80 Hz, phase irrelevant on the gravity
+ * reference, ~15 ms extra lag on accNed for the vertical fusion. 0 = off. */
+#define FCAL_ACC_LPF_HZ        (15.0f)
+#define FCAL_ACC_LPF_HZ_MIN    (1.0f)       /* below: off; also catches 0, negatives, NaN */
+#define FCAL_ACC_LPF_HZ_MAX    (400.0f)     /* above: off; keeps the biquad clear of Nyquist */
 
 extern volatile Xcp_FusionCal g_fusionCal;
 

@@ -7,8 +7,8 @@
 /******************************************************************************/
 /*----------------------------------Includes----------------------------------*/
 /******************************************************************************/
-
 #include "Dshot.h"
+#include "DshotLatch.h"
 #include "Uart.h"
 #include "IfxGtm_Atom_Pwm.h"
 #include "IfxGtm_PinMap.h"
@@ -18,6 +18,8 @@
 #include "ConfigurationIsr.h"
 #include "Dshot_cfg.h"
 #include "IfxStm.h"
+#include "SharedRam.h"
+#include "motor.h"
 
 #define ESC_T_MESSAGE_LENGTH DSHOT_ESC_TLM_LENGTH
 
@@ -102,8 +104,9 @@ static void    Dshot_telem_request    (boolean *telem_requested, uint8 dshot_tlm
 static void    Dshot_sending          (uint16 frames[DSHOT_MEND], const uint16 dshot_command[DSHOT_MEND], const Dshot_Motor_t *dshot_motor, const boolean *telem, const boolean dshot_stream_allowed, Dshot_ReplyCapture reply[DSHOT_MEND]);
 static void    Dshot_receive_decode   (const Dshot_ReplyCapture reply[DSHOT_MEND], uint32 dshot_eRPM[DSHOT_MEND]);
 static void    Dshot_telem_decode     (boolean *telem_requested, uint8 dshot_tlm_miss_streak[DSHOT_MEND], Dshot_Motor_t *dshot_motor);
-
+static void    Dshot_setLMU           (void);
 void           asclin6IsrReceive      (void);
+
 
 /******************************************************************************/
 /*--------------------------Interrupts----------------------------------------*/
@@ -682,6 +685,21 @@ static void Dshot_receive_decode(const Dshot_ReplyCapture reply[DSHOT_MEND], uin
     }
 }
 
+static void Dshot_setLMU(void)
+{
+    Dshot_Motor_t motor_id;
+    for (motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++)
+    {
+        g_dshot_bidir_rpm.rpm[motor_id]      = g_dshot_eRPM[motor_id] / MOTOR_POLE_PAIRS;
+        g_dshot_bidir_rpm.dshot_ok_count[motor_id] = g_dshot_reply_ok[motor_id];
+    }
+
+    /* cppcheck-suppress misra-c2012-17.3 ; deviation: Ifx__dsync() wraps
+     * TASKING's __dsync() intrinsic (see SharedRam.h), same as Ahrs.c */
+    Ifx__dsync();
+    g_dshot_bidir_rpm.gen++;
+}
+
 /******************************************************************************/
 /*--------------------------Global Functions----------------------------------*/
 /******************************************************************************/
@@ -724,6 +742,9 @@ void Dshot_task(const uint16 dshot_command[DSHOT_MEND], boolean dshot_stream_all
 
     /* decode telemetrics*/
     Dshot_telem_decode(&telem_requested, dshot_tlm_miss_streak, &dshot_motor);
+
+    /* publish to LMU for notch rpm filtering of IMU */
+    Dshot_setLMU();
 
 }
 
