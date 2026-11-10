@@ -75,6 +75,28 @@ static uint16 Motor_convert_speed_to_throttle(const uint16 speed_rpm)
 }
 
 
+void Motor_ctrlRelease(void)
+{
+    g_xcpCal.ctrlMode        = 0u;
+    g_xcpCal.ctrlThrustN     = 0.0f;                  /* an old collective must not be waiting at the next engage */
+    g_xcpCal.ctrlAttSpDeg[0] = 0.0f;                  /* level */
+    g_xcpCal.ctrlAttSpDeg[1] = 0.0f;
+    g_xcpCal.ctrlAttSpDeg[2] = MOTOR_CTRL_YAW_HOLD;   /* keep the heading it has */
+}
+
+boolean Motor_ctrlTrip(boolean request_usable, Motor_states_t state)
+{
+    boolean tripped = FALSE;
+
+    if ((request_usable == FALSE) && (g_xcpCal.ctrlMode != 0u))
+    {
+        Motor_ctrlRelease();
+        /* a mode word written while not ARMED is refused by Motor_task anyway: not a trip */
+        tripped = (state == MOTOR_ARMED) ? TRUE : FALSE;
+    }
+    return tripped;
+}
+
 static boolean Motor_beep(uint16 dshot_command_set[DSHOT_MEND])
 {
     static boolean motor_beep[DSHOT_MEND] = {FALSE, FALSE, FALSE, FALSE};
@@ -138,6 +160,7 @@ static void Motor_calc_clamp(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 d
 static void Motor_state_disarmed(boolean *dshot_stream_allowed, Motor_states_t *state)
 {
     *dshot_stream_allowed = TRUE;
+    Motor_ctrlRelease();                          /* the controller is engaged after arming, never before */
     if (g_xcpCal.motorCmd == MOTOR_CMD_ARM)
     {
         *state = MOTOR_INIT;
@@ -147,6 +170,7 @@ static void Motor_state_disarmed(boolean *dshot_stream_allowed, Motor_states_t *
 static void Motor_state_init(boolean *dshot_stream_allowed, Motor_states_t *state, uint16 dshot_command_set[DSHOT_MEND])
 {
     *dshot_stream_allowed = TRUE;
+    Motor_ctrlRelease();
     if (Motor_beep(dshot_command_set) != FALSE)
     {
       *state = MOTOR_ARMED;
@@ -164,12 +188,14 @@ static void Motor_state_armed(boolean *dshot_stream_allowed, Motor_states_t *sta
     {
         *state = MOTOR_DISARMED;
         g_xcpCal.motorManual = 0u;
+        Motor_ctrlRelease();
         for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++) {g_xcpCal.motorManualSp[motor_id] = 0u;}
     }
     else
     {
         if(g_xcpCal.motorManual == MOTOR_CMD_MANUAL)
         {
+            Motor_ctrlRelease();                  /* manual takes over: the controller must be engaged again by hand afterwards */
             /* unit of motorManualSp[]: 0 = DShot throttle, anything else = rpm (the safe reading) */
             const Motor_setpoint_mode_t mode = (g_xcpCal.motorSpMode == 0u) ? MOTOR_SETPOINT_MODE_THROTTLE : MOTOR_SETPOINT_MODE_SPEED;
 
@@ -185,9 +211,13 @@ static void Motor_state_armed(boolean *dshot_stream_allowed, Motor_states_t *sta
                 }
             }
         }
-        else
+        else if (g_xcpCal.ctrlMode == MOTOR_CTRL_DRIVE)
         {
             for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++) {setpoint[motor_id] = Motor_convert_speed_to_throttle(motor_speed_rqst[motor_id]);}
+        }
+        else
+        {
+            /* shadow: the controller's request is logged, setpoint[] stays 0 = motor stop */
         }
         Motor_calc_clamp( setpoint, dshot_command_set, ceiling);
     }
@@ -198,6 +228,7 @@ static void Motor_state_failsafe(boolean *dshot_stream_allowed, Motor_states_t *
     *dshot_stream_allowed = FALSE;                /* no frames at all while in failsafe */
     g_xcpCal.motorCmd    = 0u;
     g_xcpCal.motorManual = 0u;
+    Motor_ctrlRelease();
     for (Dshot_Motor_t motor_id = DSHOT_M1; motor_id < DSHOT_MEND; motor_id++) {g_xcpCal.motorManualSp[motor_id] = 0u;}
 
     if (*eth_link_alive != FALSE)                 /* 2026-10-16: compared the POINTER before - left failsafe unconditionally */

@@ -616,6 +616,62 @@
       "maxdiff": "1",
       "lo": "0",
       "hi": "1"
+    },
+    "ctrlMode": {
+      "name": "CAL_ctrlMode",
+      "desc": "flight controller on the motor path: 0 = shadow (computed and logged, motors get no request), 1 = the controller drives the motors; accepted only while ARMED (the firmware writes 0 in every other state, when the request is unusable: flight core silent, estimate invalid, tilt limit, and when CAL_motorManual is set: after manual it must be engaged again)",
+      "maxdiff": "1",
+      "lo": "0",
+      "hi": "1"
+    },
+    "ctrlThrustN": {
+      "name": "CAL_ctrlThrustN",
+      "desc": "collective thrust of the flight controller, set by hand (no altitude loop yet); only kept while ARMED: the firmware resets it to 0 in every other state and whenever CAL_ctrlMode is dropped",
+      "unit": "N",
+      "lo": "0",
+      "hi": "40"
+    },
+    "ctrlTiltMaxDeg": {
+      "name": "CAL_ctrlTiltMaxDeg",
+      "desc": "tilt limit: |roll| or |pitch| beyond this drops CAL_ctrlMode to 0 (motors stop); default 30, out of range reads as 30",
+      "unit": "deg",
+      "lo": "0",
+      "hi": "90"
+    },
+    "ctrlRpmMin": {
+      "name": "CAL_ctrlRpmMin",
+      "desc": "lowest rotor-speed request per motor from the flight controller (a request of 0 would stop the motor); default 1300; outside 129..3000 reads as 1300",
+      "unit": "rpm",
+      "lo": "129",
+      "hi": "3000"
+    },
+    "ctrlOmKp": {
+      "name": "CAL_ctrlOmKp_{i}",
+      "desc": "attitude loop P gain (index 0 roll, 1 pitch, 2 yaw); rig start value, yaw 0; a value outside the limits reads as 0",
+      "unit": "1/s",
+      "lo": "0",
+      "hi": "20"
+    },
+    "ctrlTauKp": {
+      "name": "CAL_ctrlTauKp_{i}",
+      "desc": "rate loop P gain (index 0 roll, 1 pitch, 2 yaw); rig start value, yaw 0; a value outside the limits reads as 0",
+      "unit": "Nm/(rad/s)",
+      "lo": "0",
+      "hi": "1"
+    },
+    "ctrlTauKi": {
+      "name": "CAL_ctrlTauKi_{i}",
+      "desc": "rate loop I gain (index 0 roll, 1 pitch, 2 yaw); rig start value, yaw 0; a value outside the limits reads as 0",
+      "unit": "Nm/rad",
+      "lo": "0",
+      "hi": "2"
+    },
+    "ctrlAttSpDeg": {
+      "name": "CAL_ctrlAttSp_{i}",
+      "desc": "attitude setpoint of the flight controller (index 0 roll, 1 pitch, 2 yaw): roll/pitch limited to +/- CAL_ctrlTiltMaxDeg; yaw 0..360 = heading to hold (shortest way round), anything else (-1) = keep the current heading; only kept while ARMED, the firmware resets them to 0 / 0 / -1 in every other state and whenever CAL_ctrlMode is dropped",
+      "unit": "deg",
+      "lo": "-90",
+      "hi": "360"
     }
   },
   "Xcp_Nvm": {
@@ -1403,6 +1459,65 @@
     },
     "reserved": {
       "skip": true
+    },
+    "ctrlRpm": {
+      "name": "CtrlM{i1}Rpm",
+      "desc": "flight controller rotor-speed request for M{i1}; reaches the motor only while ARMED with CAL_ctrlMode = 1 - compare with EscM{i1}BidirRpm",
+      "unit": "rpm",
+      "lo": "0",
+      "hi": "10000"
+    },
+    "ctrlTau": {
+      "name": "CtrlTau_{i}",
+      "desc": "flight controller torque demand (index 0 roll, 1 pitch, 2 yaw)",
+      "unit": "Nm",
+      "lo": "-2",
+      "hi": "2"
+    },
+    "ctrlOmSoll": {
+      "name": "CtrlOmSoll_{i}",
+      "desc": "flight controller rate setpoint (index 0 roll, 1 pitch, 2 yaw)",
+      "unit": "rad/s",
+      "lo": "-40",
+      "hi": "40"
+    },
+    "ctrlTauI": {
+      "name": "CtrlTauI_{i}",
+      "desc": "flight controller rate-loop integrator (index 0 roll, 1 pitch, 2 yaw); 0 in shadow",
+      "unit": "Nm",
+      "lo": "-2",
+      "hi": "2"
+    },
+    "ctrlStatus": {
+      "name": "CtrlStatus",
+      "desc": "flight controller status bits: 1 = driving (integrator live), 2 = navigation estimate invalid, 4 = tilt limit exceeded, 8 = flight core silent (no controller output for 5 ms)",
+      "lo": "0",
+      "hi": "15"
+    },
+    "ctrlTrips": {
+      "name": "CtrlTrips",
+      "desc": "times the firmware dropped CAL_ctrlMode to 0 because the controller request was unusable, since boot",
+      "lo": "0",
+      "hi": "4294967295"
+    },
+    "ctrlAttSpDeg": {
+      "name": "CtrlAttSp_{i}",
+      "desc": "attitude setpoint in force (index 0 roll, 1 pitch, 2 yaw) - compare with AttRoll / AttPitch / AttYaw; yaw equals the current heading while no heading setpoint is given",
+      "unit": "deg",
+      "lo": "-90",
+      "hi": "360"
+    },
+    "ctrlTripReason": {
+      "name": "CtrlTripReason",
+      "desc": "reason of the last forced drop of CAL_ctrlMode (CtrlTrips): 2 = navigation estimate invalid, 4 = tilt limit exceeded, 8 = flight core silent; latched until the next drop, 0 = none since boot",
+      "lo": "0",
+      "hi": "15"
+    },
+    "ctrlMode": {
+      "name": "CtrlMode",
+      "desc": "CAL_ctrlMode as in force: 0 = shadow, 1 = the controller drives the motors (same word as the calibration, published as a measurement so it is sampled with the rest)",
+      "lo": "0",
+      "hi": "1"
     }
   }
 }

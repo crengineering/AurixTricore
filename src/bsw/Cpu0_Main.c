@@ -25,6 +25,7 @@
 #include "Mmc5983.h"
 #include "GnssM9N.h"
 #include "SharedRam.h"
+#include "CtrlLatch.h"
 #include "CoreStats.h"
 #include "BringUp.h"
 #include "ImuInt.h"
@@ -78,12 +79,17 @@ static void Task_Dshot(void)
            uint32         dshot_eRPM     [DSHOT_MEND]   = {0};
            uint16         dshot_command_set[DSHOT_MEND] = {0};
            boolean        dshot_stream_allowed          = FALSE;
+           CtrlLatch_t    ctrl;
+           boolean        ctrl_tripped                  = FALSE;
 
-    /* link to flight_ctrl for speed requests still open
-     * handle here if the user wants to send speed requests via GUI and XCP
-     * e.g. for testing or commissioning purposes
-     * */
+    /* Speed requests of the flight controller (FlightTask_step, CPU1) in rpm.
+     * They reach the motors only while ARMED with ctrlMode = 1 (motor.c). An
+     * unusable request (flight core silent, estimate invalid, tilt limit) drops
+     * ctrlMode back to shadow: the motors then get 0 = stop. */
+    ctrl_tripped = Motor_ctrlTrip(CtrlLatch_request(speed_setpoints, &ctrl), state);
+
     dshot_stream_allowed = Motor_task(speed_setpoints, dshot_command_set, &state);
+    measurementsSetCtrl(&ctrl, ctrl_tripped, g_xcpCal.ctrlMode);
     Dshot_task(dshot_command_set, dshot_stream_allowed, dshot_eRPM);
     measurementsSetMotorState((uint8)state);
 }

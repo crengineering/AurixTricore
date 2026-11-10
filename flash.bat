@@ -28,6 +28,18 @@ rem verdict from the flasher above. build.bat now forces those TUs to
 rem recompile every time, but this is the check that fails loudly if that
 rem is ever wrong again, instead of relying on a human to read it back.
 echo.
+rem The Ethernet link needs 10-15 s to come back after the flasher's reset; a
+rem version check before that is a connection failure, not a wrong firmware.
+echo === waiting for the board's Ethernet link (max 40 s) ===
+set /a LINKTRIES=0
+:waitlink
+ping -n 1 -w 1000 192.168.0.10 | find "TTL=" >nul
+if not errorlevel 1 goto linkup
+set /a LINKTRIES+=1
+if %LINKTRIES% GEQ 40 goto linkup
+goto waitlink
+:linkup
+
 echo === VERSION CHECK (XCP) ===
 python "%~dp0tools\xcp_verify_version.py"
 if errorlevel 1 (

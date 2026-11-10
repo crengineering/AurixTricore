@@ -1,8 +1,11 @@
 # Application Software (ASW)
 
 Flight-control application code. Today that is the cascade controller
-(`flight_ctrl.c`) and the replay endpoint that feeds it (`CtrlReplay.c`);
-the state estimator lands here as well.
+(`flight_ctrl.c`), the replay endpoint that feeds it (`CtrlReplay.c`) and the
+flight task that runs it on the real signal path (`FlightTask.c`, CPU1, once
+per IMU sample: navigation state in, four rotor-speed requests out through
+`src/bsw/CtrlLatch.h` to the DShot task on CPU0). `flight_ctrl_params.h` is
+the one parameter initialiser both use. The state estimator lands here as well.
 
 `flight_ctrl.c` is byte-identical to its original in the Quadrocopter
 repository — the same translation unit runs as a Simulink S-function, as a

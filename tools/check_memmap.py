@@ -56,6 +56,7 @@ LMU_SECTIONS = [
     ".bss.shared_lmu.maglatch",
     ".bss.shared_lmu.imuedge",
     ".bss.shared_lmu.dshot_bidir_rpm",
+    ".bss.shared_lmu.ctrllatch",
 ]
 
 LMU_BASE = 0xB00F0000

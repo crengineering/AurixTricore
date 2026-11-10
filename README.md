@@ -9,7 +9,7 @@ sensors, estimates attitude and position on a dedicated core, drives four ESCs
 over bidirectional **DShot300**, monitors its own health, and exposes all of it
 live over **XCP-on-UDP** to a PC GUI.
 
-**Firmware version: v1.19.31** (`src/bsw/Version.h`) · sensors, estimator and
+**Firmware version: v1.19.34** (`src/bsw/Version.h`) · sensors, estimator and
 actuation hardware-validated on the bench and on a thrust rig. The aircraft has
 not flown yet.
 

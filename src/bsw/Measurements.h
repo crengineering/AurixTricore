@@ -6,6 +6,7 @@
 #include "Dshot.h"
 #include "fusion.h"
 #include "Ahrs.h"
+#include "CtrlLatch.h"
 
 /* Live measurement block read by XCP masters (pyXCP, AurixGUI) via
  * SHORT_UPLOAD. Pinned to a fixed address so clients do not need the map
@@ -379,8 +380,19 @@ extern volatile Xcp_Fusion g_xcpFusion;
  *   0x88  float32 bidirRpm[4]    mechanical rpm = bidirErpm / (poles / 2), poles = 14
  *   0x98  uint32  bidirOk[4]     CRC-valid bidir replies per motor since boot (freshness)
  *   0xA8  uint16  dshotCmd[4]    DShot value on the wire in the last frame: 0 stop, 1..47 cmd, 48..2047 throttle
+ *   --- flight-controller output (CtrlLatch.h, written by Task_Dshot from the CPU1 latch) ---
+ *   0xB0  float32 ctrlRpm[4]     rotor-speed request M1..M4 [rpm]; reaches the motors only with ctrlMode = 1
+ *   0xC0  float32 ctrlTau[3]     torque demand roll/pitch/yaw [Nm]
+ *   0xCC  float32 ctrlOmSoll[3]  rate setpoint p/q/r [rad/s]
+ *   0xD8  float32 ctrlTauI[3]    rate-loop integrator [Nm] (0 in shadow)
+ *   0xE4  uint32  ctrlStatus     CTRLLATCH_ST_*: 1 drive, 2 nav invalid, 4 tilt limit
+ *   0xE8  uint32  ctrlTrips      times Task_Dshot dropped ctrlMode to 0 (request unusable) since boot
+ *   0xEC  float32 ctrlAttSpDeg[3] attitude setpoint in force roll/pitch/yaw [deg], yaw 0..360 like AttYaw
+ *   0xF8  uint32  ctrlTripReason ctrlStatus fault bits at the LAST forced drop (2 nav invalid, 4 tilt,
+ *                                8 flight core silent); latched until the next one, 0 = none since boot
+ *   0xFC  uint32  ctrlMode       Xcp_Cal.ctrlMode as in force after this tick's Motor_task (0 shadow, 1 drive)
  *
- * Total 0xB0 = 176 bytes. v1 (one motor, 32 bytes, 2026-09-17) was replaced
+ * Total 0x100 = 256 bytes: THE SLOT IS FULL. The next controller measurement needs its own block. v1 (one motor, 32 bytes, 2026-09-17) was replaced
  * in place on 2026-09-21 before any release carried it; bidir fields added
  * 2026-10-16 (every DShot frame is answered, so these update at 1 kHz while
  * the KISS fields above arrive round-robin on the shared UART wire).
@@ -408,6 +420,15 @@ typedef struct
     float32 bidirRpm[4];
     uint32  bidirOk[4];
     uint16  dshotCmd[4];
+    float32 ctrlRpm[4];
+    float32 ctrlTau[3];
+    float32 ctrlOmSoll[3];
+    float32 ctrlTauI[3];
+    uint32  ctrlStatus;
+    uint32  ctrlTrips;
+    float32 ctrlAttSpDeg[3];
+    uint32  ctrlTripReason;
+    uint32  ctrlMode;
 } Xcp_Esc;
 
 extern volatile Xcp_Esc g_xcpEsc;
@@ -450,6 +471,12 @@ void measurementsSetEscBidir(const uint32 eRPM[DSHOT_MEND], const uint32 ok[DSHO
 /* Publish the DShot value each motor received in the last frame (the driver's
  * view of the wire, after Motor.c's clamping). Called by SensorTask_esc. */
 void measurementsSetEscCommand(const uint16 cmd[DSHOT_MEND]);
+
+/* Publish the flight controller's output (CPU1 latch snapshot) next to the
+ * DShot values. Called by Task_Dshot (CPU0, 1 ms) after Motor_task. tripped =
+ * TRUE counts one forced drop of ctrlMode and latches its reason; mode is
+ * Xcp_Cal.ctrlMode as in force. */
+void measurementsSetCtrl(const CtrlLatch_t *ctrl, boolean tripped, uint32 mode);
 
 /*
  * Publish the latest gnss sample into the XCP block. Called by the measurement task

@@ -10,7 +10,7 @@
  * Calibration block, pinned at a fixed address, writable via XCP
  * DOWNLOAD/SHORT_DOWNLOAD. RAM only — after a reset the defaults apply
  * (persistent parameters live in the separate Xcp_Nvm block, see Nvm.h).
- * Little-endian, 84 bytes, float32 except the motor words at the end:
+ * Little-endian, 148 bytes, float32 except the motor words:
  *
  *   0x00  uint32   magic          0x4C414358 ("XCAL")
  *   0x04  float32  dtsMin         [degC]  PMS DTS lower limit
@@ -40,12 +40,34 @@
  *                                  an out-of-range write is reverted by motor.c to the last valid
  *                                  value; default 1600 (diag_loadDefaults); SWE1-FW-025
  *   0x52  uint16   motorSpMode  Motor Mode for setpoints: 0 = Throttle, 1 = Speed
+ *   --- flight controller on the motor path (FlightTask.c on CPU1, motor.c) ---
+ *   0x54  uint32   ctrlMode       0 = shadow: the controller computes and is logged, the motors
+ *                                  get no request; 1 = the controller drives the motors. Only
+ *                                  accepted while ARMED: motor.c writes 0 in every other state,
+ *                                  Task_Dshot writes 0 when the request is unusable
+ *                                  (Motor_ctrlTrip). motorManual = 1 wins and releases the
+ *                                  controller: after manual it must be engaged again.
+ *   0x58  float32  ctrlThrustN    [N]    collective thrust, set by hand (no altitude loop yet);
+ *                                         only lives while ARMED, reset to 0 like ctrlAttSpDeg[]
+ *   0x5C  float32  ctrlTiltMaxDeg [deg]  |roll| or |pitch| beyond this drops ctrlMode to 0
+ *   0x60  float32  ctrlRpmMin     [rpm]  lowest request per motor while the controller computes
+ *                                         (a request of 0 would stop the motor)
+ *   0x64  float32  ctrlOmKp[3]    [1/s]          attitude loop P, roll/pitch/yaw
+ *   0x70  float32  ctrlTauKp[3]   [Nm/(rad/s)]   rate loop P
+ *   0x7C  float32  ctrlTauKi[3]   [Nm/rad]       rate loop I
+ *   0x88  float32  ctrlAttSpDeg[3] [deg]  attitude setpoint roll/pitch/yaw. Roll and pitch are
+ *                                  limited to +/- ctrlTiltMaxDeg. Yaw 0..360 = heading to hold
+ *                                  (shortest way round); anything else (default -1) = keep the
+ *                                  current heading, yaw rate setpoint 0. Like ctrlMode these only
+ *                                  live while ARMED: motor.c resets them to 0 / 0 / -1 (and
+ *                                  ctrlThrustN to 0) in every other state and whenever ctrlMode
+ *                                  is dropped (Motor_ctrlRelease).
  */
 /* XCP_CAL_ADDR deleted, T5 (docs/MEMORY_PLACEMENT.md): Xcp.c's whitelist
  * now uses (uint32)&g_xcpCal, so Lcf_Tasking_Tricore_Tc.lsl
  * (LCF_XCP_CAL_START) is the only place 0x70030100 is written down. */
 #define XCP_CAL_MAGIC   0x4C414358u
-#define XCP_CAL_SIZE    84u
+#define XCP_CAL_SIZE    148u
 
 typedef struct
 {
@@ -70,6 +92,14 @@ typedef struct
     uint16  motorManualSp[4];
     uint16  motorSpMax;
     uint16  motorSpMode;
+    uint32  ctrlMode;
+    float32 ctrlThrustN;
+    float32 ctrlTiltMaxDeg;
+    float32 ctrlRpmMin;
+    float32 ctrlOmKp[3];
+    float32 ctrlTauKp[3];
+    float32 ctrlTauKi[3];
+    float32 ctrlAttSpDeg[3];
 } Xcp_Cal;
 
 /* Xcp_Cal.motorCmd: 1 = ARM, 0 = DISARM (plain boolean by decision of 2026-09-24;
@@ -78,6 +108,10 @@ typedef struct
 #define MOTOR_CMD_ARM    1u
 /* Xcp_Cal.motorManual: 1 = motorManualSp[] is the setpoint source, 0 = flight controller. */
 #define MOTOR_CMD_MANUAL 1u
+/* Xcp_Cal.ctrlMode: 1 = the flight controller's request reaches the motors, anything else = shadow. */
+#define MOTOR_CTRL_DRIVE 1u
+/* Xcp_Cal.ctrlAttSpDeg[2]: any value outside 0..360 = no heading setpoint. */
+#define MOTOR_CTRL_YAW_HOLD (-1.0f)
 
 /* diagStatus bits in Xcp_Data (see DIAGNOSTICS.md). Hex literals instead
  * of (1u << n): MISRA 12.2 sees 1u as essentially unsigned char, making

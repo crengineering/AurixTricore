@@ -208,6 +208,7 @@ order (also physical layout order, `ordered` group):
 | `g_magLatch` | CPU0 (`SensorTask_mag`) | `AhrsLatch.h` / `SharedRam.c` |
 | `g_imuEdge` | CPU1 (`imuDrdyIsr`) | `ImuEdge.h` / `SharedRam.c` |
 | `g_dshot_bidir_rpm` | CPU0 (`Dshot_task`, 1 ms) | `DshotLatch.h` / `SharedRam.c` |
+| `g_ctrlLatch` | CPU1 (`FlightTask_step`, per IMU sample) — seqlock (odd `gen` = writer inside) | `CtrlLatch.h` / `SharedRam.c` |
 
 
 The three latches (T12) are the "three input latches" of §2.4/§2.3 — moved off
