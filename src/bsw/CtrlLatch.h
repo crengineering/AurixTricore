@@ -30,8 +30,13 @@
 
 /* CtrlLatch_request(): calls without a new publish before the request counts
  * as dead. The controller publishes at the IMU rate (1014 Hz), the reader
- * runs at 1 kHz: 5 calls = 5 ms without the flight core. */
-#define CTRLLATCH_STALE_CALLS     5u
+ * runs at 1 kHz: 50 calls = 50 ms without the flight core; the last request
+ * holds meanwhile. Was 5 (fw 1.19.34): tripped every few seconds on the
+ * attitude rig, 2026-11-11 -- the nav task publishes per IMU data-ready edge
+ * and only re-reads the bus after NAVTASK_NO_EDGE_TIMEOUT_S (20 ms), so one
+ * stalled edge sequence is already 4x that limit. 50 ms covers two such
+ * fallbacks; cause of the gaps not yet measured. */
+#define CTRLLATCH_STALE_CALLS     50u
 
 typedef struct
 {

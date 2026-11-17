@@ -1490,7 +1490,7 @@
     },
     "ctrlStatus": {
       "name": "CtrlStatus",
-      "desc": "flight controller status bits: 1 = driving (integrator live), 2 = navigation estimate invalid, 4 = tilt limit exceeded, 8 = flight core silent (no controller output for 5 ms)",
+      "desc": "flight controller status bits: 1 = driving (integrator live), 2 = navigation estimate invalid, 4 = tilt limit exceeded, 8 = flight core silent (no controller output for 50 ms)",
       "lo": "0",
       "hi": "15"
     },
