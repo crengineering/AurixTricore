@@ -40,6 +40,13 @@ typedef enum {
 /*-------------------------Global Function Prototypes-------------------------*/
 /******************************************************************************/
 
+/* Back to shadow with zero collective and a neutral attitude setpoint (level, keep heading). Called on every
+ * state except ARMED, and by Task_Dshot when the controller's request is unusable. */
+void    Motor_ctrlRelease(void);
+/* Call once per tick BEFORE Motor_task with CtrlLatch_request()'s result: an unusable request
+ * while ctrlMode is set releases the controller. Returns TRUE when that was a trip, i.e. it
+ * happened while ARMED (state = the state Motor_task is about to run in). */
+boolean Motor_ctrlTrip(boolean request_usable, Motor_states_t state);
 boolean Motor_task(const uint16 motor_speed_rqst[DSHOT_MEND], uint16 dshot_command_set[DSHOT_MEND], Motor_states_t *state);
 
 #endif /* MOTOR_H */

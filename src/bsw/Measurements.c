@@ -264,6 +264,43 @@ void measurementsSetEscCommand(const uint16 cmd[DSHOT_MEND])
     }
 }
 
+void measurementsSetCtrl(const CtrlLatch_t *ctrl, boolean tripped, uint32 mode)
+{
+    uint8 i;
+
+    for (i = 0u; i < 4u; i++)
+    {
+        g_xcpEsc.ctrlRpm[i] = ctrl->rpm[i];
+    }
+    for (i = 0u; i < 3u; i++)
+    {
+        g_xcpEsc.ctrlTau[i]    = ctrl->tau[i];
+        g_xcpEsc.ctrlOmSoll[i] = ctrl->omSoll[i];
+        g_xcpEsc.ctrlTauI[i]   = ctrl->tauI[i];
+        g_xcpEsc.ctrlAttSpDeg[i] = ctrl->phiSoll[i] * 57.29578f;
+    }
+    /* the attitude loop works on yaw + shortest error, which can leave 0..360; AttYaw never does */
+    if (g_xcpEsc.ctrlAttSpDeg[2] >= 360.0f)
+    {
+        g_xcpEsc.ctrlAttSpDeg[2] -= 360.0f;
+    }
+    else if (g_xcpEsc.ctrlAttSpDeg[2] < 0.0f)
+    {
+        g_xcpEsc.ctrlAttSpDeg[2] += 360.0f;
+    }
+    else
+    {
+        /* already in range */
+    }
+    g_xcpEsc.ctrlStatus = ctrl->status;
+    g_xcpEsc.ctrlMode   = mode;
+    if (tripped != FALSE)
+    {
+        g_xcpEsc.ctrlTrips++;
+        g_xcpEsc.ctrlTripReason = ctrl->status & CTRLLATCH_ST_FAULTS;
+    }
+}
+
 void measurementsSetEscBidir(const uint32 eRPM[DSHOT_MEND], const uint32 ok[DSHOT_MEND])
 {
     for (uint8 m = 0u; m < (uint8)DSHOT_MEND; m++)

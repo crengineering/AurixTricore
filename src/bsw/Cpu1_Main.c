@@ -35,6 +35,8 @@
 #include "Icm42688.h"
 #include "NavTask.h"
 #include "BringUp.h"
+#include "FlightTask.h"   /* ASW flight controller; BSW->ASW task callout --
+                           * documented deviation 4 in docs/CTRL_REPLAY.md     */
 
 extern IfxCpu_syncEvent cpuSyncEvent;
 
@@ -112,6 +114,10 @@ void core1_main(void)
      * shared by every core's task registration, not something T15 (the rate
      * change and only the rate change) should be touching. */
     (void)Scheduler_addTask(&g_sched, NavTask_step, SCHED_US(NAVTASK_DISPATCH_PERIOD_US));
+    /* Flight controller directly behind the estimate it consumes: same dispatch,
+     * runs only when NavTask_step has just published a new sample. */
+    /* cppcheck-suppress misra-c2012-10.8 ; deviation: see above. */
+    (void)Scheduler_addTask(&g_sched, FlightTask_step, SCHED_US(NAVTASK_DISPATCH_PERIOD_US));
     Scheduler_addTask(&g_sched, Task_LedToggle, SCHED_MS(500u));
 
     while (TRUE)

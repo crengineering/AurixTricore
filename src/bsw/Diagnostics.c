@@ -59,6 +59,25 @@ static void diag_loadDefaults(void)
      * 4829A25237BFB7C8; raise over XCP for rig runs only, back to 1600 at every reset. */
     g_xcpCal.motorSpMax   = 1600u;
     g_xcpCal.motorSpMode  = 1u; /* default is setpoint mode */
+    /* Flight controller: boots in shadow. Gains are START values for the attitude rig,
+     * not tuned: half the rate gains of the Simulink-verified set (flight_ctrl_params.h),
+     * yaw off (the rig is 2-DoF, yaw locked). */
+    g_xcpCal.ctrlMode       = 0u;
+    g_xcpCal.ctrlThrustN    = 0.0f;
+    g_xcpCal.ctrlTiltMaxDeg = 30.0f;
+    g_xcpCal.ctrlRpmMin     = 1300.0f;   /* table breakpoint, DShot 200 */
+    g_xcpCal.ctrlOmKp[0]    = 3.0f;
+    g_xcpCal.ctrlOmKp[1]    = 3.0f;
+    g_xcpCal.ctrlOmKp[2]    = 0.0f;
+    g_xcpCal.ctrlTauKp[0]   = 0.05f;
+    g_xcpCal.ctrlTauKp[1]   = 0.05f;
+    g_xcpCal.ctrlTauKp[2]   = 0.0f;
+    g_xcpCal.ctrlTauKi[0]   = 0.0625f;
+    g_xcpCal.ctrlTauKi[1]   = 0.0625f;
+    g_xcpCal.ctrlTauKi[2]   = 0.0f;
+    g_xcpCal.ctrlAttSpDeg[0] = 0.0f;
+    g_xcpCal.ctrlAttSpDeg[1] = 0.0f;
+    g_xcpCal.ctrlAttSpDeg[2] = MOTOR_CTRL_YAW_HOLD;
     g_xcpCal.magic        = XCP_CAL_MAGIC;
 }
 

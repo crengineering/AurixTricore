@@ -28,10 +28,12 @@ schickt die Ausgänge samt Ausführungszeit zurück.
   MISRA-Findings in dieser Datei werden über `tools/misra_baseline.txt`
   grandfathered statt gefixt, damit die Datei identisch zur verifizierten
   Referenz bleibt.
-- **Parameter:** `ctrl_params_t` liegt als `const` in `CtrlReplay.c` und
-  ist ein Spiegel von `quad_params.m` (via `flight_ctrl_lct.c`). Bei
-  Parameteränderungen in Simulink muss dieser Block nachgezogen werden,
-  sonst sind Vektorvergleiche wertlos.
+- **Parameter:** `ctrl_params_t` liegt als `const` in `CtrlReplay.c`, der
+  Initialisierer kommt aus `src/asw/flight_ctrl_params.h` (derselbe Satz, den
+  `FlightTask.c` als Basis nimmt) und ist ein Spiegel des Parametersatzes im
+  Quadrocopter-Repo (`quadsim/params.py`, früher `quad_params.m` via
+  `flight_ctrl_lct.c`). Bei Parameteränderungen dort muss dieser Block
+  nachgezogen werden, sonst sind Vektorvergleiche wertlos.
 - **Layering (dokumentierte Ausnahmen zu `src/asw/README.md`):**
   1. `Cpu0_Main.c` (BSW) ruft `CtrlReplay_init()` — einmaliger
      Init-Callout in die ASW.
@@ -39,6 +41,12 @@ schickt die Ausgänge samt Ausführungszeit zurück.
      lwIP-Poll-Kontext leben muss (NO_SYS=1, Stack gehört CPU0).
   3. `CtrlReplay.c` nutzt lwIP direkt (Library, kein iLLD); die
      iLLD-Zeitbasis ist über den BSW-Dienst `SysTime` gekapselt.
+  4. `Cpu1_Main.c` (BSW) registriert `FlightTask_step()` (ASW) als
+     Scheduler-Task hinter `NavTask_step` — zweiter BSW→ASW-Callout, seit
+     fw 1.19.32 (Regler auf dem Motorpfad, `src/asw/FlightTask.h`). Die
+     Gegenrichtung bleibt regelkonform: `FlightTask.c` ruft nur BSW
+     (`NavState`, `CtrlLatch`, `Diagnostics`), die BSW liest das Ergebnis
+     über `src/bsw/CtrlLatch.h`, nie über einen ASW-Header.
 
 ## Protokoll (UDP 5556, roh, alles little-endian)
 

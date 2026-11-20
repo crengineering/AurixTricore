@@ -1280,6 +1280,7 @@ derivative tc39
                     select "(.bss.shared_lmu.maglatch|.bss.shared_lmu.maglatch.*)";
                     select "(.bss.shared_lmu.imuedge|.bss.shared_lmu.imuedge.*)";
                     select "(.bss.shared_lmu.dshot_bidir_rpm|.bss.shared_lmu.dshot_bidir_rpm.*)";
+                    select "(.bss.shared_lmu.ctrllatch|.bss.shared_lmu.ctrllatch.*)";
                 }
             }
 

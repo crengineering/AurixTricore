@@ -40,6 +40,7 @@
 #include "AhrsLatch.h"
 #include "ImuEdge.h"
 #include "DshotLatch.h"
+#include "CtrlLatch.h"
 
 /* First consumer of the block (T9), and its first live-on-hardware proof:
  * six independent 16-byte slots, one writer per core, all fields 32-bit
@@ -113,6 +114,16 @@ volatile ImuEdge_t g_imuEdge;
 #pragma section farbss "shared_lmu.dshot_bidir_rpm"
 #endif
 volatile Dshot_bidir_rpm g_dshot_bidir_rpm;
+#if defined(__TASKING__)
+#pragma section farbss restore
+#endif
+
+/* Flight-controller output, CPU1 (FlightTask_step) -> CPU0 (Task_Dshot): the four
+ * rotor-speed requests. Sole writer is the flight core -- see CtrlLatch.c. */
+#if defined(__TASKING__)
+#pragma section farbss "shared_lmu.ctrllatch"
+#endif
+volatile CtrlLatch_t g_ctrlLatch;
 #if defined(__TASKING__)
 #pragma section farbss restore
 #endif

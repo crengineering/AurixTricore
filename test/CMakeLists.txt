@@ -71,6 +71,41 @@ target_link_libraries(test_motor PRIVATE unity test_common)
 add_test(NAME motor COMMAND test_motor)
 
 #[[
+CtrlLatch: the CPU1 -> CPU0 handoff of the flight controller's rotor-speed
+requests (seqlock publish/get + CtrlLatch_request's staleness/status/range
+handling). g_ctrlLatch comes from SharedRam.c; CtrlLatch.c needs Ifx__dsync()
+faked away like NavState.c.
+]]
+set_source_files_properties(${BSW}/CtrlLatch.c PROPERTIES
+    COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/fakes/tasking_shim.h")
+
+add_executable(test_ctrllatch
+    test_ctrllatch.c
+    ${BSW}/CtrlLatch.c
+    ${BSW}/SharedRam.c
+)
+target_link_libraries(test_ctrllatch PRIVATE unity test_common m)
+add_test(NAME ctrllatch COMMAND test_ctrllatch)
+
+#[[
+FlightTask: the flight controller on the real signal path (src/asw). The test
+plays NavTask through the real NavState_publish() and reads the result from the
+real CtrlLatch -- signs from estimate to motor, shadow/drive integrator, tilt
+limit, invalid estimate, calibration fallbacks. g_xcpCal is stubbed in the test.
+]]
+add_executable(test_flighttask
+    test_flighttask.c
+    ../src/asw/FlightTask.c
+    ../src/asw/flight_ctrl.c
+    ${BSW}/CtrlLatch.c
+    ${BSW}/NavState.c
+    ${BSW}/SharedRam.c
+)
+target_include_directories(test_flighttask PRIVATE ../src/asw)
+target_link_libraries(test_flighttask PRIVATE unity test_common m)
+add_test(NAME flighttask COMMAND test_flighttask)
+
+#[[
 GnssM9N: der Treiber steht NICHT in dieser Liste. test_GnssM9N.c zieht
 GnssM9N.c per #include herein, weil die interessante Logik (Checksumme,
 ASCII-Wandlung, Feldparser, Decoder) static ist und sonst unerreichbar waere.

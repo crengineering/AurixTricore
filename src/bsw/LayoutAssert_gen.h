@@ -123,7 +123,15 @@ typedef char layout_assert_Xcp_Cal_motorManual_offset[(offsetof(Xcp_Cal, motorMa
 typedef char layout_assert_Xcp_Cal_motorManualSp_offset[(offsetof(Xcp_Cal, motorManualSp) == 0x48u) ? 1 : -1];
 typedef char layout_assert_Xcp_Cal_motorSpMax_offset[(offsetof(Xcp_Cal, motorSpMax) == 0x50u) ? 1 : -1];
 typedef char layout_assert_Xcp_Cal_motorSpMode_offset[(offsetof(Xcp_Cal, motorSpMode) == 0x52u) ? 1 : -1];
-typedef char layout_assert_Xcp_Cal_sizeof[(sizeof(Xcp_Cal) == 0x54u) ? 1 : -1];
+typedef char layout_assert_Xcp_Cal_ctrlMode_offset[(offsetof(Xcp_Cal, ctrlMode) == 0x54u) ? 1 : -1];
+typedef char layout_assert_Xcp_Cal_ctrlThrustN_offset[(offsetof(Xcp_Cal, ctrlThrustN) == 0x58u) ? 1 : -1];
+typedef char layout_assert_Xcp_Cal_ctrlTiltMaxDeg_offset[(offsetof(Xcp_Cal, ctrlTiltMaxDeg) == 0x5Cu) ? 1 : -1];
+typedef char layout_assert_Xcp_Cal_ctrlRpmMin_offset[(offsetof(Xcp_Cal, ctrlRpmMin) == 0x60u) ? 1 : -1];
+typedef char layout_assert_Xcp_Cal_ctrlOmKp_offset[(offsetof(Xcp_Cal, ctrlOmKp) == 0x64u) ? 1 : -1];
+typedef char layout_assert_Xcp_Cal_ctrlTauKp_offset[(offsetof(Xcp_Cal, ctrlTauKp) == 0x70u) ? 1 : -1];
+typedef char layout_assert_Xcp_Cal_ctrlTauKi_offset[(offsetof(Xcp_Cal, ctrlTauKi) == 0x7Cu) ? 1 : -1];
+typedef char layout_assert_Xcp_Cal_ctrlAttSpDeg_offset[(offsetof(Xcp_Cal, ctrlAttSpDeg) == 0x88u) ? 1 : -1];
+typedef char layout_assert_Xcp_Cal_sizeof[(sizeof(Xcp_Cal) == 0x94u) ? 1 : -1];
 
 /* Xcp_Nvm (Nvm.h) */
 typedef char layout_assert_Xcp_Nvm_magic_offset[(offsetof(Xcp_Nvm, magic) == 0x0u) ? 1 : -1];
@@ -239,6 +247,15 @@ typedef char layout_assert_Xcp_Esc_bidirErpm_offset[(offsetof(Xcp_Esc, bidirErpm
 typedef char layout_assert_Xcp_Esc_bidirRpm_offset[(offsetof(Xcp_Esc, bidirRpm) == 0x88u) ? 1 : -1];
 typedef char layout_assert_Xcp_Esc_bidirOk_offset[(offsetof(Xcp_Esc, bidirOk) == 0x98u) ? 1 : -1];
 typedef char layout_assert_Xcp_Esc_dshotCmd_offset[(offsetof(Xcp_Esc, dshotCmd) == 0xA8u) ? 1 : -1];
-typedef char layout_assert_Xcp_Esc_sizeof[(sizeof(Xcp_Esc) == 0xB0u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_ctrlRpm_offset[(offsetof(Xcp_Esc, ctrlRpm) == 0xB0u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_ctrlTau_offset[(offsetof(Xcp_Esc, ctrlTau) == 0xC0u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_ctrlOmSoll_offset[(offsetof(Xcp_Esc, ctrlOmSoll) == 0xCCu) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_ctrlTauI_offset[(offsetof(Xcp_Esc, ctrlTauI) == 0xD8u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_ctrlStatus_offset[(offsetof(Xcp_Esc, ctrlStatus) == 0xE4u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_ctrlTrips_offset[(offsetof(Xcp_Esc, ctrlTrips) == 0xE8u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_ctrlAttSpDeg_offset[(offsetof(Xcp_Esc, ctrlAttSpDeg) == 0xECu) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_ctrlTripReason_offset[(offsetof(Xcp_Esc, ctrlTripReason) == 0xF8u) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_ctrlMode_offset[(offsetof(Xcp_Esc, ctrlMode) == 0xFCu) ? 1 : -1];
+typedef char layout_assert_Xcp_Esc_sizeof[(sizeof(Xcp_Esc) == 0x100u) ? 1 : -1];
 
 #endif /* AURIXTRICORE_LAYOUT_ASSERT_GEN_H */

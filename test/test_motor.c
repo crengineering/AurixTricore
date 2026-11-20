@@ -23,6 +23,7 @@ void setUp(void)
     s_state     = MOTOR_DISARMED;
     g_xcpCal.motorCmd       = 0u;
     g_xcpCal.motorManual    = 0u;
+    g_xcpCal.ctrlMode       = 0u;
     g_xcpCal.motorSpMax     = 1600u;
     g_xcpCal.motorSpMode    = (uint16)MOTOR_SETPOINT_MODE_THROTTLE;   /* ceiling tests feed raw DShot;
                                                                        * the firmware default is SPEED */
@@ -243,12 +244,176 @@ void test_controller_path_is_rpm(void)
 
     arm();
     g_xcpCal.motorManual = 0u;
+    g_xcpCal.ctrlMode    = MOTOR_CTRL_DRIVE;
     g_xcpCal.motorSpMode = (uint16)MOTOR_SETPOINT_MODE_THROTTLE;
     (void)Motor_task(rqst, cmd, &s_state);
     TEST_ASSERT_EQUAL_UINT16(800u,  cmd[0]);
     TEST_ASSERT_EQUAL_UINT16(0u,    cmd[1]);
     TEST_ASSERT_EQUAL_UINT16(48u,   cmd[2]);
     TEST_ASSERT_EQUAL_UINT16(1600u, cmd[3]);
+}
+
+/* Shadow (ctrlMode != 1): the controller's request is ignored, the motors stay stopped. */
+void test_controller_request_ignored_in_shadow(void)
+{
+    static const uint16 rqst[DSHOT_MEND] = {4929u, 4929u, 4929u, 4929u};
+    static const uint32 modes[]          = {0u, 2u, 0xFFFFFFFFu};
+    uint16 cmd[DSHOT_MEND];
+
+    arm();
+    for (uint32 m = 0u; m < 3u; m++)
+    {
+        g_xcpCal.ctrlMode = modes[m];
+        for (uint32 i = 0u; i < DSHOT_MEND; i++) { cmd[i] = 0u; }
+        (void)Motor_task(rqst, cmd, &s_state);
+        TEST_ASSERT_EQUAL_INT(MOTOR_ARMED, s_state);
+        for (uint32 i = 0u; i < DSHOT_MEND; i++) { TEST_ASSERT_EQUAL_UINT16(0u, cmd[i]); }
+    }
+}
+
+/* Manual wins over the controller: with both set, motorManualSp[] is the source -- and
+ * manual RELEASES the controller, so switching manual off again does not hand the motors
+ * back to a controller nobody engaged (old mode, old thrust). */
+void test_manual_wins_over_controller(void)
+{
+    static const uint16 rqst[DSHOT_MEND] = {4929u, 4929u, 4929u, 4929u};
+    uint16 cmd[DSHOT_MEND] = {0u, 0u, 0u, 0u};
+
+    arm();
+    g_xcpCal.ctrlMode    = MOTOR_CTRL_DRIVE;
+    g_xcpCal.ctrlThrustN = 10.0f;
+    g_xcpCal.motorManual = MOTOR_CMD_MANUAL;
+    g_xcpCal.motorManualSp[0] = 300u;
+    (void)Motor_task(rqst, cmd, &s_state);
+    TEST_ASSERT_EQUAL_UINT16(300u, cmd[0]);
+    TEST_ASSERT_EQUAL_UINT16(0u,   cmd[1]);
+    TEST_ASSERT_EQUAL_UINT32(0u,   g_xcpCal.ctrlMode);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f,  g_xcpCal.ctrlThrustN);
+
+    g_xcpCal.motorManual = 0u;                               /* manual off again */
+    for (uint32 i = 0u; i < DSHOT_MEND; i++) { cmd[i] = 0u; }
+    (void)Motor_task(rqst, cmd, &s_state);
+    TEST_ASSERT_EQUAL_INT(MOTOR_ARMED, s_state);
+    for (uint32 i = 0u; i < DSHOT_MEND; i++) { TEST_ASSERT_EQUAL_UINT16(0u, cmd[i]); }
+}
+
+/* The trip decision of Task_Dshot: an unusable controller request while the mode is set
+ * releases the controller; it counts as a trip only while ARMED. */
+void test_ctrl_trip(void)
+{
+    static const uint16 rqst[DSHOT_MEND] = {4929u, 4929u, 4929u, 4929u};
+    uint16 cmd[DSHOT_MEND] = {0u, 0u, 0u, 0u};
+
+    /* disarmed, somebody wrote the mode, request unusable: released, but not a trip */
+    g_xcpCal.ctrlMode = MOTOR_CTRL_DRIVE;
+    TEST_ASSERT_FALSE(Motor_ctrlTrip(FALSE, s_state));
+    TEST_ASSERT_EQUAL_UINT32(0u, g_xcpCal.ctrlMode);
+
+    arm();
+    /* shadow + unusable request: nothing to release, no trip */
+    TEST_ASSERT_FALSE(Motor_ctrlTrip(FALSE, s_state));
+
+    /* driving, request usable: untouched */
+    g_xcpCal.ctrlMode        = MOTOR_CTRL_DRIVE;
+    g_xcpCal.ctrlThrustN     = 6.0f;
+    g_xcpCal.ctrlAttSpDeg[0] = 5.0f;
+    TEST_ASSERT_FALSE(Motor_ctrlTrip(TRUE, s_state));
+    (void)Motor_task(rqst, cmd, &s_state);
+    TEST_ASSERT_EQUAL_UINT16(800u, cmd[0]);
+    TEST_ASSERT_EQUAL_FLOAT(6.0f, g_xcpCal.ctrlThrustN);
+
+    /* driving, request unusable: trip, and the SAME tick's Motor_task already stops the motors */
+    TEST_ASSERT_TRUE(Motor_ctrlTrip(FALSE, s_state));
+    TEST_ASSERT_EQUAL_UINT32(0u,  g_xcpCal.ctrlMode);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, g_xcpCal.ctrlThrustN);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, g_xcpCal.ctrlAttSpDeg[0]);
+    for (uint32 i = 0u; i < DSHOT_MEND; i++) { cmd[i] = 0u; }
+    (void)Motor_task(rqst, cmd, &s_state);
+    TEST_ASSERT_EQUAL_INT(MOTOR_ARMED, s_state);             /* a trip does not disarm */
+    for (uint32 i = 0u; i < DSHOT_MEND; i++) { TEST_ASSERT_EQUAL_UINT16(0u, cmd[i]); }
+
+    /* only once: the next tick has nothing left to release */
+    TEST_ASSERT_FALSE(Motor_ctrlTrip(FALSE, s_state));
+}
+
+/* ctrlMode can only be 1 while ARMED: a value written before arming does not survive
+ * DISARMED or the beep phase, and every exit from ARMED clears it. */
+void test_ctrl_mode_only_while_armed(void)
+{
+    static const uint16 rqst[DSHOT_MEND] = {4929u, 4929u, 4929u, 4929u};
+    uint16 cmd[DSHOT_MEND];
+
+    g_xcpCal.ctrlMode = MOTOR_CTRL_DRIVE;                    /* preset while disarmed */
+    step(cmd);
+    TEST_ASSERT_EQUAL_UINT32(0u, g_xcpCal.ctrlMode);
+
+    g_xcpCal.motorCmd = MOTOR_CMD_ARM;
+    step(cmd);
+    TEST_ASSERT_EQUAL_INT(MOTOR_INIT, s_state);
+    g_xcpCal.ctrlMode = MOTOR_CTRL_DRIVE;                    /* written during the beeps */
+    step(cmd);
+    TEST_ASSERT_EQUAL_UINT32(0u, g_xcpCal.ctrlMode);
+    arm();
+    for (uint32 i = 0u; i < DSHOT_MEND; i++) { cmd[i] = 0u; }
+    (void)Motor_task(rqst, cmd, &s_state);
+    TEST_ASSERT_EQUAL_UINT16(0u, cmd[0]);                    /* armed, but still shadow */
+
+    g_xcpCal.ctrlMode = MOTOR_CTRL_DRIVE;                    /* engaged after arming */
+    (void)Motor_task(rqst, cmd, &s_state);
+    TEST_ASSERT_EQUAL_UINT16(800u, cmd[0]);
+
+    g_xcpCal.motorCmd = 0u;                                  /* operator disarm */
+    step(cmd);
+    TEST_ASSERT_EQUAL_INT(MOTOR_DISARMED, s_state);
+    TEST_ASSERT_EQUAL_UINT32(0u, g_xcpCal.ctrlMode);
+
+    arm();
+    g_xcpCal.ctrlMode = MOTOR_CTRL_DRIVE;
+    s_linkAlive = FALSE;                                     /* link loss */
+    step(cmd);
+    TEST_ASSERT_EQUAL_INT(MOTOR_FAILSAFE, s_state);
+    step(cmd);
+    TEST_ASSERT_EQUAL_UINT32(0u, g_xcpCal.ctrlMode);
+    TEST_ASSERT_EQUAL_UINT32(0u, g_xcpCal.motorCmd);
+}
+
+/* The attitude setpoints live only while ARMED too: every other state puts them back
+ * to level / keep heading, so an old setpoint can never be waiting at the next engage. */
+void test_attitude_setpoints_reset_outside_armed(void)
+{
+    uint16 cmd[DSHOT_MEND];
+
+    g_xcpCal.ctrlAttSpDeg[0] = 10.0f;
+    g_xcpCal.ctrlAttSpDeg[1] = -5.0f;
+    g_xcpCal.ctrlAttSpDeg[2] = 90.0f;
+    g_xcpCal.ctrlThrustN     = 8.0f;
+    step(cmd);                                               /* DISARMED */
+    TEST_ASSERT_EQUAL_FLOAT(0.0f,  g_xcpCal.ctrlThrustN);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f,  g_xcpCal.ctrlAttSpDeg[0]);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f,  g_xcpCal.ctrlAttSpDeg[1]);
+    TEST_ASSERT_EQUAL_FLOAT(-1.0f, g_xcpCal.ctrlAttSpDeg[2]);
+
+    arm();
+    g_xcpCal.ctrlAttSpDeg[0] = 10.0f;
+    g_xcpCal.ctrlAttSpDeg[2] = 90.0f;
+    step(cmd);                                               /* ARMED: kept */
+    TEST_ASSERT_EQUAL_FLOAT(10.0f, g_xcpCal.ctrlAttSpDeg[0]);
+    TEST_ASSERT_EQUAL_FLOAT(90.0f, g_xcpCal.ctrlAttSpDeg[2]);
+
+    g_xcpCal.motorCmd = 0u;
+    step(cmd);                                               /* disarm */
+    TEST_ASSERT_EQUAL_FLOAT(0.0f,  g_xcpCal.ctrlAttSpDeg[0]);
+    TEST_ASSERT_EQUAL_FLOAT(-1.0f, g_xcpCal.ctrlAttSpDeg[2]);
+
+    arm();
+    g_xcpCal.ctrlAttSpDeg[1] = 7.0f;
+    g_xcpCal.ctrlThrustN     = 8.0f;
+    step(cmd);                                               /* ARMED: kept */
+    TEST_ASSERT_EQUAL_FLOAT(8.0f, g_xcpCal.ctrlThrustN);
+    Motor_ctrlRelease();                                     /* what Task_Dshot does on a trip */
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, g_xcpCal.ctrlThrustN);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, g_xcpCal.ctrlAttSpDeg[1]);
+    TEST_ASSERT_EQUAL_INT(MOTOR_ARMED, s_state);
 }
 
 int main(void)
@@ -263,5 +428,10 @@ int main(void)
     RUN_TEST(test_disarm_zeroes_everything);
     RUN_TEST(test_speed_mode_lut);
     RUN_TEST(test_controller_path_is_rpm);
+    RUN_TEST(test_controller_request_ignored_in_shadow);
+    RUN_TEST(test_manual_wins_over_controller);
+    RUN_TEST(test_ctrl_trip);
+    RUN_TEST(test_ctrl_mode_only_while_armed);
+    RUN_TEST(test_attitude_setpoints_reset_outside_armed);
     return UNITY_END();
 }
